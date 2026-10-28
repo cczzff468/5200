@@ -19,12 +19,19 @@ import type { CSSProperties } from 'react';
 
 export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'liquid';
 
+/** App 级界面主题（第四十二轮）：default = 现状原生；liquid = 液态玻璃主题（参考图）。
+ *  主题与气泡样式相互独立：主题只接管页面铭件（导航/TabBar/列表卡/输入栏），
+ *  气泡仍由 kind 管；聊天背景层不受主题影响（用户指定）。仅 wx / qq 提供主题切换。 */
+export type BubbleTheme = 'default' | 'liquid';
+
 /** 装扮宿主 App 标识（微信 / QQ / 信息） */
 export type BubbleAppId = 'wx' | 'qq' | 'sms';
 
-/** 单个 App 的装扮：样式（不分侧） + 两侧独立自定义色 */
+/** 单个 App 的装扮：样式（不分侧） + 两侧独立自定义色 + 界面主题 */
 export interface BubbleAppStyle {
   kind: BubbleStyleKind;
+  /** 界面主题（仅 wx/qq 生效；缺省 = default） */
+  theme?: BubbleTheme;
   /** 我的气泡自定义基色（#RRGGBB）；undefined = 跟随默认 */
   mineColor?: string;
   /** TA 的气泡自定义基色（#RRGGBB）；undefined = 跟随默认 */
@@ -65,6 +72,20 @@ export const RAINBOW_COLORS = [
 ] as const;
 
 export const BUBBLE_KINDS: readonly BubbleStyleKind[] = ['default', 'rainbow', 'frosted', 'liquid'];
+
+/** 主题列表（设置页用） */
+export const BUBBLE_THEMES: readonly BubbleTheme[] = ['default', 'liquid'];
+
+/** 主题中文名（设置页展示用） */
+export const BUBBLE_THEME_LABEL: Record<BubbleTheme, string> = {
+  default: '默认主题',
+  liquid: '液态玻璃',
+};
+
+/** 该 App 是否启用了液态玻璃主题（页面铭件读此值切换玻璃视觉；旧档无 theme 字段 = false） */
+export function isLiquidTheme(cfg: BubbleStyleConfig | undefined, app: BubbleAppId): boolean {
+  return cfg?.[app]?.theme === 'liquid';
+}
 
 /** 各 App 原生默认气泡底色（kind=default 且未自定义色时还原成它）
  *  （theirs 灰色系仅作为设置页滑条元生位置的参考，聊天页原生仍走 bg-muted 类） */
@@ -195,6 +216,7 @@ function normalizeAppStyle(v: unknown): BubbleAppStyle {
   const o = (v ?? {}) as Partial<BubbleAppStyle>;
   return {
     kind: normKind(o.kind),
+    theme: o.theme === 'liquid' ? 'liquid' : 'default',
     mineColor: normColor(o.mineColor),
     theirsColor: normColor(o.theirsColor),
   };
@@ -218,6 +240,7 @@ export function normalizeBubbleStyle(v: unknown): BubbleStyleConfig {
   const oldTheirs = (o.theirs ?? {}) as { kind?: unknown; color?: unknown };
   const migrated: BubbleAppStyle = {
     kind: normKind(oldMine.kind ?? oldTheirs.kind),
+    theme: 'default',
     mineColor: normColor(oldMine.color),
     theirsColor: normColor(oldTheirs.color),
   };
@@ -260,11 +283,101 @@ export function normalizeBubbleSchemes(v: unknown): BubbleScheme[] {
   return out;
 }
 
-/** 是否仍是原生默认（该 App 没有任何装扮）——聊天页可借此完全零开销直通 */
+/** 是否仍是原生默认（该 App 没有任何装扮）——聊天页可借此完全零开销直通。
+ *  注意：主题（theme）不参与此项判断——主题接管的是页面铭件，不是气泡本身 */
 export function isNativeBubbleStyle(cfg: BubbleStyleConfig | undefined, app: BubbleAppId): boolean {
   if (!cfg) return true;
   const a = cfg[app];
   return a?.kind === 'default' && !a?.mineColor && !a?.theirsColor;
+}
+
+// ---------------- 转文字面板视觉（跟随气泡装扮） ----------------
+
+/** 语音转文字面板跟随气泡装扮后的视觉描述 */
+export interface TranscriptVisual {
+  /** true = 面板需要装扮覆盖（玻璃/染色）；false = 保持原生白面板 */
+  override: boolean;
+  /** 附加类（毛玻璃 bub-frosted / 液态 bub-liquid） */
+  className: string;
+  /** 内联样式（染色时的 backgroundColor 等） */
+  style: CSSProperties;
+  /** 面板文字色类（原生时为空，用调用方默认） */
+  textClass: string;
+}
+
+const NO_TRANSCRIPT: TranscriptVisual = { override: false, className: '', style: {}, textClass: '' };
+
+/** 计算语音转文字面板视觉：与所属语音气泡同一装扮语言。
+ *  - 默认无色：原生白面板（微信大字白面板/两端小面板，不变）
+ *  - 默认自定义色：同色染色面板（同背景色 α0.9，文字 yiq 自适应）
+ *  - 七彩：取该消息的循环色染面板（与气泡同色）
+ *  - 毛玻璃：奶白磨砂玻璃面板（bub-frosted）
+ *  - 液态：清透玻璃胶囊（bub-liquid）
+ *  @param side     语音消息归属（决定取 mine/theirs 色）
+ *  @param cfg      全量装扮配置
+ *  @param msgIndex 消息序号（七彩循环取色与气泡一致）
+ *  @param app      宿主 App
+ */
+export function transcriptVisual(
+  side: 'mine' | 'theirs',
+  cfg: BubbleStyleConfig | undefined,
+  msgIndex: number,
+  app: BubbleAppId,
+): TranscriptVisual {
+  const a = cfg?.[app];
+  if (!a) return NO_TRANSCRIPT;
+  const kind = normKind(a.kind);
+  const color = normColor(side === 'mine' ? a.mineColor : a.theirsColor);
+
+  if (kind === 'default' && !color) return NO_TRANSCRIPT;
+
+  if (kind === 'rainbow') {
+    const idx = ((msgIndex % RAINBOW_COLORS.length) + RAINBOW_COLORS.length) % RAINBOW_COLORS.length;
+    const c = RAINBOW_COLORS[idx];
+    return {
+      override: true,
+      className: '',
+      style: { backgroundColor: withAlpha(c, 0.92), color: yiqTextOn(c) },
+      textClass: '',
+    };
+  }
+
+  if (kind === 'frosted') {
+    // 毛玻璃面板：与气泡同语言（奶白磨砂；自定义色 = 彩色磨砂 α0.55）
+    const base = color;
+    return {
+      override: true,
+      className: 'bub-frosted',
+      style: base
+        ? { backgroundColor: withAlpha(base, 0.55), color: yiqTextOn(base) }
+        : {},
+      textClass: '',
+    };
+  }
+
+  if (kind === 'liquid') {
+    // 液态面板：清透玻璃（与气泡同语言；自定义色 = 极淡渐变）
+    const base = color;
+    return {
+      override: true,
+      className: 'bub-liquid',
+      style: base
+        ? {
+            background: `linear-gradient(165deg, ${withAlpha(base, 0.12)} 0%, ${withAlpha(base, 0.04)} 45%, ${withAlpha(base, 0.07)} 75%, ${withAlpha(base, 0.10)} 100%)`,
+          }
+        : {},
+      textClass: '',
+    };
+  }
+
+  // default + 自定义色：染色面板（与气泡同色系，略深于气泡底不透明）
+  const c = color as string;
+  return {
+    override: true,
+    className: '',
+    style: { backgroundColor: withAlpha(c, 0.92), color: yiqTextOn(c) },
+    textClass: '',
+  };
 }
 
 // ---------------- 气泡视觉计算（聊天页渲染核心） ----------------

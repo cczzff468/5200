@@ -830,3 +830,100 @@
   backdrop-filter: blur(22px) saturate(140%);
   box-shadow: 0 5px 16px rgba(31, 35, 41, 0.10);
 }
+
+/* ---------------------------------------------------------------------------
+ * 液态玻璃主题（第四十二轮）——App 级界面主题（微信 / QQ）
+ * ---------------------------------------------------------------------------
+ * 参考图（用户上传 5 张 iOS Liquid Glass 微信截图）提炼的视觉语言：
+ *  - 页面底：极浅灰（#F2F2F7 系）纯色/微渐变，深色近黑蓝；
+ *  - 内容卡：半透玻璃卡（白 62% + blur-xl + 发丝白描边 + 柔和浮投影），
+ *    列表分组独立成卡、四周留白漂浮；
+ *  - 底部 TabBar：悬浮胶囊（左右留边 + 大圆角 26px + 高透玻璃 + 环境投影）；
+ *  - 聊天页顶栏/输入栏：玻璃胶囊条（背景与聊天背景透出）；
+ *  - 强调色沿用各 App 品牌色（微信绿 #07C160 / QQ 蓝 #1E6FFF）。
+ * 主题只接管页面铭件；聊天气泡仍由气泡装扮系统（kind）管，
+ *  聊天背景层完全不受主题影响（用户指定）。
+ * ------------------------------------------------------------------------- */
+
+/* 主题页面底：浅色极浅灰微渐变（上浅下深一档，玻璃卡在下方更深底上更明显） */
+.lg-root {
+  background: linear-gradient(180deg, #F4F4F8 0%, #ECECF1 100%);
+}
+.dark .lg-root {
+  background: linear-gradient(180deg, #101014 0%, #0C0C10 100%);
+}
+
+/* 玻璃内容卡（列表分组卡/功能入口卡）：白 62% + 强 blur + 发丝描边 + 浮投影 */
+.lg-card {
+  background: rgba(255, 255, 255, 0.62);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.75),
+    0 8px 28px rgba(31, 38, 135, 0.07);
+}
+.dark .lg-card {
+  background: rgba(28, 28, 34, 0.62);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.12),
+    0 8px 28px rgba(0, 0, 0, 0.38);
+}
+
+/* 悬浮胶囊 TabBar：左右留边 + 26px 圆角 + 高透玻璃 + 环境投影 */
+.lg-tabbar {
+  background: rgba(255, 255, 255, 0.72);
+  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  backdrop-filter: blur(24px) saturate(200%);
+  border-radius: 26px;
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.85),
+    inset 0 1px 1px rgba(255, 255, 255, 0.9),
+    0 10px 36px rgba(31, 38, 135, 0.12);
+}
+.dark .lg-tabbar {
+  background: rgba(30, 30, 36, 0.72);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.14),
+    0 10px 36px rgba(0, 0, 0, 0.45);
+}
+
+/* 聊天页玻璃胶囊条（顶栏/输入栏共用语言） */
+.lg-bar {
+  background: rgba(255, 255, 255, 0.62);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.75),
+    0 6px 24px rgba(31, 38, 135, 0.08);
+}
+.dark .lg-bar {
+  background: rgba(28, 28, 34, 0.60);
+  box-shadow:
+    inset 0 0  0 0.5px rgba(255, 255, 255, 0.12),
+    0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* 玻璃内嵌输入胶囊（聊天输入框本体：白 55% 透 + blur） */
+.lg-input {
+  background: rgba(255, 255, 255, 0.55);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.7);
+}
+.dark .lg-input {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.10);
+}
+
+/* 玻璃搜索胶囊（列表页搜索框） */
+.lg-search {
+  background: rgba(255, 255, 255, 0.5);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.65);
+}
+.dark .lg-search {
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.09);
+}

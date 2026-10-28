@@ -5,8 +5,10 @@ import {
   DEFAULT_BUBBLE_STYLE,
   normalizeBubbleSchemes,
   normalizeBubbleStyle,
+  type BubbleAppId,
   type BubbleScheme,
   type BubbleStyleConfig,
+  type BubbleTheme,
 } from './bubble-style';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
@@ -373,6 +375,8 @@ interface SettingsState {
   setGoodsImgStyle: (s: GoodsImgStyle) => void;
   /** 设置聊天气泡装扮（立即持久化；微信/QQ 聊天气泡实时响应） */
   setBubbleStyle: (cfg: BubbleStyleConfig) => void;
+  /** 设置 App 界面主题（第四十二轮：默认/液态玻璃；立即持久化，微信/QQ 页面铭件实时响应） */
+  setBubbleTheme: (app: BubbleAppId, theme: BubbleTheme) => void;
   /** 替换「我的气泡」收藏夹列表（立即持久化） */
   setBubbleSchemes: (list: BubbleScheme[]) => void;
 
@@ -837,6 +841,16 @@ export const useSettings = create<SettingsState>((set, get) => ({
     const safe = normalizeBubbleStyle(cfg);
     set({ bubbleStyle: safe });
     void localDB.put('settings', { key: 'bubbleStyle', value: safe });
+  },
+
+  setBubbleTheme: (app, theme) => {
+    const cur = get().bubbleStyle;
+    const next = normalizeBubbleStyle({
+      ...cur,
+      [app]: { ...cur[app], theme },
+    });
+    set({ bubbleStyle: next });
+    void localDB.put('settings', { key: 'bubbleStyle', value: next });
   },
 
   setBubbleSchemes: (list) => {

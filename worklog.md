@@ -1268,3 +1268,90 @@ Stage Summary:
 - 服务拓扑：3000 dev server（next-keeper 守护）/ 3010 netease-api（ncm-keeper 守护）/ Caddy 网关
 - git 就绪：origin=cczzff468/5200（PAT 内嵌），可直接 commit + push origin main（已知 github.com 直连推送可能超时但实际成功，用 api.github.com 验证远程 SHA）
 - 环境就绪，等待用户指定要修改/新增的功能
+
+---
+Task ID: 2-a
+Agent: 微信液态玻璃主题子代理
+Task: 微信 App 液态玻璃主题落地（MainScreen 四 tab + ChatPage 铬件）
+
+Work Log:
+- 开工前读 worklog 最近数节（Task 41 部署记录：环境/服务拓扑/基线）+ 核对已有基础设施：bubble-style.ts 的 isLiquidTheme/BubbleTheme、store.ts 的 bubbleStyle.wx.theme、globals.css 的 .lg-root/.lg-card/.lg-tabbar/.lg-bar/.lg-input/.lg-search、bubble-style-settings.tsx 主题切换 UI —— 全部直接使用未改动
+- [wechat.tsx 导入] bubble-style 导入补 isLiquidTheme
+- [ChatPage] 订阅 bubbleStyle 已有（4871 行），紧随其后计算 `const liquid = isLiquidTheme(bubbleStyle, 'wx')`
+- [ChatPage 根部] `bg-[#EDEDED] dark:bg-[#111111]` → liquid 时换 `lg-root`（微渐变页面底）；**chatBgLayerStyle 聊天背景层一行未动**（背景层 z-0 覆盖在 lg-root 之上，自定义背景照常透出）；根元素加 data-liquid-theme 供 E2E 验证
+- [ChatPage 顶栏] 外层 `bg-[#EDEDED] pt-[42px] dark:bg-[#111111]` → liquid 时 `bg-transparent pt-[42px]`；正常态那一行（返回/名字/···）→ liquid 时 `lg-bar mx-2.5 rounded-full px-2` 悬浮玻璃胶囊条；多选模式两套顶栏保持原样
+- [ChatPage 输入区] 外层 `border-t border-black/[0.07] bg-[#EDEDED]…` → liquid 时 `bg-transparent`（去 border-t）；正常态输入行 `px-2.5 pb-[18px] pt-1` 外层 → liquid `px-0 pb-2 pt-1`，`flex items-center gap-2` 行本身 → liquid `lg-bar mx-2.5 mb-3 rounded-[24px] px-2 py-1.5` 玻璃胶囊（含语音切换钮/输入框/表情/发送）
+- [ChatPage 输入框本体] ChatRichInput className 改模板字符串：liquid 时 `lg-input rounded-full`（半透玻璃内嵌胶囊，pl-3/pr-11/字号/光标色保持 → placeholder 对齐不变）；「按住说话」VoiceHoldBar 加 glass={liquid}
+- [ChatPage 细节] 待发图片预览条 liquid 时补 px-2.5（外层 px-0 后防贴边）；引用条/拉黑条/加号面板/表情面板/多选操作栏/长按菜单/Toast 全部保持现状
+- [MainScreen] 新增订阅 `const bubbleStyle = useSettings((s) => s.bubbleStyle)` + liquid 计算（apiConfig 订阅之后、全部早退 return 之前，无 hooks 顺序问题）
+- [MainScreen 根部] `bg-[#EDEDED] dark:bg-[#111111]` → liquid 时 `lg-root` + data-liquid-theme；顶栏本就透明不动
+- [MainScreen 微信 tab] 整张会话列表 `min-h-full bg-white dark:bg-[#1A1A1A]` → liquid 时 `mx-2.5 min-h-full lg-card`（合并大玻璃卡，行间细分隔线原样保留）；内容区滚动容器 liquid 时加 `pb-[88px]`（内容从悬浮 TabBar 玻璃底下穿过）
+- [MainScreen 通讯录 tab] 功能入口卡/我名片卡 → `mx-2.5 lg-card`（名片卡 mt-2→mt-2.5）；各字母分组列表 → `mx-2.5 lg-card`；字母 sticky 头 → liquid 时 `bg-[#F4F4F8]/85 backdrop-blur-md dark:bg-[#101014]/85`（玻璃卡上滚动的半透底）
+- [MainScreen 发现 tab] 父容器 space-y-2→liquid space-y-2.5；六组入口（朋友圈/视频号/扫一扫+听一听/看一看+搜一搜/游戏/小程序）每组独立 `mx-2.5 lg-card`
+- [MainScreen 我 tab] 父容器同步 space-y-2.5；名片卡/服务卡/收藏组卡/设置卡 → `mx-2.5 lg-card`
+- [MainScreen TabBar] `shrink-0 border-t … pb-[16px]` → liquid 时 `lg-tabbar absolute inset-x-3 bottom-[12px] z-30` 悬浮胶囊（去安全区占位，胶囊下方留 12px）；内层 h-[46px]→liquid h-[50px] px-1；tab 按钮结构/图标/选中绿 #07C160/全部 data-testid（wx-tab-*）不动；两个未读角标 ring → liquid 时 `ring-white/80 dark:ring-white/20`
+- [voice-input.tsx] VoiceHoldBar 加可选 `glass` prop（默认 false）：常态白底 → glass 时 `lg-input rounded-full`；取消红/转文字绿反馈色不变；wx-group/chat(sms)/qq 三处既有调用不传参不受影响
+- [默认主题保真] 所有改动均为三元条件分支，liquid=false 时类串与改前逐字一致（已逐条 diff 复核）
+- [验证] `bunx tsc --noEmit`：仅 1 处既有基线错误（proactive-msg.ts 1404 'active'），0 新增；`bunx eslint src/components/apps/wechat.tsx` exit 0 零输出（voice-input.tsx 同，需 NODE_OPTIONS 加堆内存跑单文件）；dev.log ✓ Compiled + GET / 200，仅既有 instrumentation Edge Runtime 良性警告
+
+Stage Summary:
+- 微信液态玻璃主题落地完成：MainScreen 四 tab（lg-root 页面底 + 列表玻璃卡 + 字母半透 sticky 头 + 悬浮胶囊 TabBar + 内容 pb-[88px] 穿透滚动）+ ChatPage 铬件（lg-root 底 + 顶栏玻璃胶囊条 + 输入区玻璃胶囊 + lg-input 输入框/语音胶囊），全部走 `liquid ? 玻璃类 : 原类` 条件分支
+- 改动文件：src/components/apps/wechat.tsx（ChatPage/MainScreen 共 24 处条件分支）、src/components/apps/voice-input.tsx（VoiceHoldBar 可选 glass prop）
+- 不动项：chatBgLayerStyle 聊天背景层（一行未改）、聊天气泡（bubbleVisual/bvis 装扮系统）、加号/表情浮层面板、引用/拉黑条、多选模式、长按菜单、Toast、全部 data-testid；默认主题像素级保持现状
+- 遗留/建议：① 未做浏览器截图级视觉验收（本代理无浏览器工具），建议主控用 Agent Browser 开液态主题跑一遍四 tab + 聊天页（根元素 data-liquid-theme="true" 可直接断言）；② 置顶会话行的 bg-[#ECECEC] 实底在玻璃卡内略实（非缺陷，如需更融合可后续降透明度）；③ 群聊页（wx-group.tsx）与朋友圈等子页未接主题（任务范围仅 MainScreen+ChatPage）
+
+---
+Task ID: 2-b
+Agent: QQ液态玻璃主题子代理
+Task: QQ App 液态玻璃主题落地（tabs 三页 + ChatPage 铬件）
+
+Work Log:
+- 开工前读 worklog 最近数节（Task 41 第四次部署记录：3000 dev server / 3010 netease-api / 基线 1 个 tsc 既有错误）+ 核对基础设施全部就绪未改动：bubble-style.ts isLiquidTheme、store.ts bubbleStyle.qq.theme（IndexedDB 持久化）、globals.css 末尾 .lg-root/.lg-card/.lg-tabbar/.lg-bar/.lg-input/.lg-search（未分层声明恒胜 Tailwind 分层工具类——liquid 分支里必须去掉冲突的 bg/border 工具类，本次全部遵守）、bubble-style-settings.tsx 主题切换 UI
+- 参考图采证：跑 VLM describe（analyze-imgs.tmp2.mjs）复核 5 张 iOS Liquid Glass 微信截图——图1 聊天列表=多行合一张大玻璃卡、图2 发现页=每行独立小玻璃卡、图4 通讯录=分组玻璃容器+搜索玻璃条、图5 聊天页=顶栏/输入栏玻璃胶囊浮于壁纸、TabBar=悬浮胶囊；QQ 三个 tab 页结构与之逐一对位（QQ 列表本为无卡平铺 → 消息页一张大卡、动态页逐行小卡、联系人页分组卡）
+- [qq.tsx 导入] bubble-style 导入补 isLiquidTheme
+- [ChatPage] bubbleStyle 订阅已有（3103 行），紧随其后计算 `const liquid = isLiquidTheme(bubbleStyle, 'qq')`
+- [ChatPage 根部] `bg-[#F5F6F7] dark:bg-[#111214]` → liquid 时换 `lg-root`；**chatBgLayerStyle 聊天背景层一行未动**（bg.mode!=='default' 时背景层 z-0 全页覆盖在 lg-root 之上照常透出）
+- [ChatPage 顶栏] 外层 `bg-[#F5F6F7] pt-[54px] dark:bg-[#111214]` → liquid 时 `bg-transparent`（自定义聊天壁纸透出状态栏区域，图5 同款）；正常态顶栏行（返回+名字+在线+菜单 h-12）→ liquid 时加 `lg-bar mx-2.5 rounded-full` 整行玻璃胶囊条；多选/转发勾选两套顶栏保持原样
+- [ChatPage 输入区] 外层 `bg-white dark:bg-[#1B1C1F]` → liquid 时 `bg-transparent`；输入行（textarea+发送）→ liquid 时 `lg-bar mx-2.5 rounded-[24px] px-2 py-1.5` 玻璃胶囊；输入框本体 ChatRichInput className 改三元：liquid 时 `lg-input`（去 border/bg 工具类，保留 rounded-[10px]/pl-3.5/pr-10/字号/行高/placeholder 对齐）；下方六图标工具栏保持透明底、引用条/拉黑条/待发图预览/加号面板/表情面板/语音面板/@浮层/多选操作栏全部保持现状
+- [QqSearch 组件] 加可选 `liquid` prop（默认 false）：搜索胶囊 → liquid 时 `lg-search`；三处调用中仅 tabs 两页（联系人/动态）传 liquid，设置页（14376）不传保持原样
+- [MessagesPage] 加 `liquid` prop（MainScreen 下发）：搜索入口按钮 → liquid 时 `lg-search`；滚动容器 liquid 时加 `pb-[88px]`；全部会话行包进 `lg-card mx-2.5 overflow-hidden` 合成一张大玻璃卡（图1 同款；空会话态不渲染卡避免空玻璃盒；默认主题包裹层为无类 div 零视觉变化）
+- [ContactsPage] 加 `liquid` prop：新朋友/群通知两行 → `lg-card mx-2.5 mt-2.5 overflow-hidden` 一张玻璃卡；分组 tab sticky 头 `bg-[#FAFAFC]/95 backdrop-blur` → liquid 时 `bg-[#F4F4F8]/85 backdrop-blur-md dark:bg-[#101014]/85`（滚动时列表从半透磨砂底下穿过）；分组/好友/群聊三个 tab 内容各自 → `lg-card mx-2.5 mt-2.5 overflow-hidden` 玻璃卡；滚动容器 pb-[88px]
+- [DiscoverPage] 加 `liquid` prop：七个功能入口逐行 → `lg-card mx-2.5 mt-2.5 overflow-hidden` 独立小玻璃卡（图2 发现页同款），原 `h-2` 灰分隔条 liquid 时不渲染（卡片 mt-2.5 间距接替）；滚动容器 pb-4 → liquid 时 pb-[88px]
+- [MainScreen] 新增订阅 `const bubbleStyle = useSettings((s) => s.bubbleStyle)` + liquid 计算；根元素 `bg-[#FAFAFC] dark:bg-[#16171A]` → liquid 时 `lg-root`，并加 `data-liquid-theme` 供 E2E 断言；liquid 以 prop 下发三个 tab 页（MessagesPage/ContactsPage/DiscoverPage，单源订阅免三重 store 订阅）；QqHeader 本就透明不动
+- [MainScreen TabBar] 外层 `shrink-0 border-t bg-white pb-[12px]…` → liquid 时 `lg-tabbar absolute inset-x-3 bottom-[12px] z-30` 悬浮胶囊（脱流，内容从玻璃底下穿过）；nav `h-[44px]` → liquid 时 `h-[50px] px-1`；tab 按钮结构/图标/文字/选中蓝 TAB_ACTIVE（#1E6FFF/#4AA3FF）/全部 data-testid（qq-tab-*）不动；消息/动态两个未读角标 ring → liquid 时 `ring-white/80 dark:ring-white/20`
+- [默认主题保真] 所有改动均为三元条件分支，liquid=false 时类串与改前逐字一致（git diff 逐条复核；QqSearch/三个 tab 页包裹 div 默认为无类/原类 div，DOM 多一层但零视觉变化）
+- [验证] `bunx tsc --noEmit`：仅 1 处既有基线错误（proactive-msg.ts 1404 'active'），0 新增；`bunx eslint src/components/apps/qq.tsx` exit 0 零输出；dev.log 多轮 ✓ Compiled（Turbopack 热更）+ GET / 200，仅既有 instrumentation Edge Runtime 良性警告
+- [排查插曲] Bash 输出管道会把 `[m` 当 ANSI 转义吞掉导致 rg/git diff 显示 `const sgs, setMsgs]` 假象，od -c 字节级核实为 `const [msgs, setMsgs]` 文件完好（tsc/eslint/Turbopack 三重验证均通过）
+
+Stage Summary:
+- QQ 液态玻璃主题落地完成：MainScreen tabs 三页（lg-root 页面底 + 消息列表一张大玻璃卡 + 联系人分组玻璃卡+半透磨砂 sticky 头 + 动态逐行小玻璃卡 + lg-search 搜索胶囊 + 悬浮胶囊 TabBar + 滚动 pb-[88px] 穿透滚动）+ ChatPage 铬件（lg-root 底 + 顶栏 lg-bar 玻璃胶囊条 + 输入区 lg-bar 胶囊 + lg-input 输入框本体），全部走 `liquid ? 玻璃类 : 原类` 条件分支，与微信侧（Task 2-a）同一套视觉语言（pb-[88px]/TabBar 悬浮/角标 ring/sticky 半透底完全同规格）
+- 改动文件：src/components/apps/qq.tsx（导入 + QqSearch + ChatPage 6 处 + 三个 tab 页 + MainScreen 共约 30 处条件分支）
+- 不动项：chatBgLayerStyle 聊天背景层（一行未改）、聊天气泡（bubbleVisual/bvis 装扮系统）、加号/表情/语音面板浮层、引用条/拉黑条、多选模式、长按菜单、Toast、全部 data-testid；默认主题像素级保持现状
+- 遗留/建议：① 未做浏览器截图级视觉验收（本代理无浏览器工具），建议主控用 Agent Browser 开液态主题跑 QQ 三 tab + 聊天页（根元素 data-liquid-theme="true" 可直接断言，与微信侧同钩子）；② 置顶会话行 bg-[#F0F1F5] 实底在玻璃卡内略实（与微信侧同观察，非缺陷）；③ 群聊页（QqGroupChatPage）与设置/资料/空间等子页未接主题（任务范围仅 MainScreen tabs + ChatPage，与微信侧 2-a 同口径）；④ QQ 子页里 QqSearch 三处调用中设置页未传 liquid（保持默认，符合范围）
+
+---
+Task ID: 3
+Agent: 主控 Agent（Z.ai Code）
+Task: 第四十二轮总控 —— 转文字面板/正在输入跟随装扮 + QQ/微信「界面主题」（默认/液态玻璃）+ E2E 全链路验证
+
+Work Log:
+- [需求解析] 用户 5 张参考图为 iOS Liquid Glass 微信截图（VLM 两轮分析：纯浅灰底+白玻璃卡+悬浮胶囊 TabBar+聊天页玻璃顶栏/输入栏+壁纸不动）；「聊天背景不需要」= 聊天背景层不接主题
+- [1-a 核心库] bubble-style.ts：BubbleTheme/BUBBLE_THEMES/BUBBLE_THEME_LABEL/isLiquidTheme；BubbleAppStyle 增 theme 字段（normalize 兼容旧档）；transcriptVisual() 新函数（转文字面板视觉：默认色=原生白/自定义色=染色 α0.92/七彩=循环色/毛玻璃=bub-frosted/液态=bub-liquid）；store.ts：setBubbleTheme(app, theme) + 导入类型
+- [1-b 转文字跟随] voice-bubble.tsx：VoiceMsgBubble 新增 decorApp/msgIndex props，组件内订阅 bubbleStyle 计算 tvis；transcript 面板 override 时用装扮视觉（玻璃面板圆角 12px）；5 个调用点（chat.tsx sms / wechat.tsx / qq.tsx 单聊）传 decorApp+msgIndex（群聊无装扮系统不接，与既有口径一致）
+- [1-c 其他跟随] wechat.tsx / qq.tsx 独立「正在输入」流式指示气泡：改用 bubbleVisual('theirs', bubbleStyle, msgs.length, app)（七彩接续循环；微信尾巴随色、QQ 弯钩、胶囊无尾；三点 bg-current）
+- [1-d 主题 UI] bubble-style-settings.tsx：新增「主题」区块（仅 wx/qq，sms 隐藏）——默认主题/液态玻璃两格 + ThemeThumb 迷你拟态缩略图（默认=纯白卡+贴底 TabBar；液态=lg-card+lg-tabbar 同材质）+ accent 选中描边 + data-testid=bubble-theme-{default|liquid}
+- [1-e CSS] globals.css：.lg-root/.lg-card/.lg-tabbar/.lg-bar/.lg-input/.lg-search 六类液态玻璃语言（含 .dark 变体）
+- [2-a/2-b] 并行子代理落地微信/QQ 液态主题（详见各自 worklog 节）
+- [验证] tsc 仅基线 1 错（proactive-msg.ts 1404）；eslint 七个改动文件 exit 0；dev.log 仅既有 instrumentation 良性警告
+- [E2E Agent Browser 390×844 全链路]（浏览器 IndexedDB 种子机主+好友联系人）：
+  * 信息 App：TTS 发消息 → 语音气泡+转文字面板；原生默认=白面板 rgb(255,255,255)/8px ✓；切毛玻璃 → 面板 bub-frosted 0.62 白+blur(22px) ✓、语音气泡 34px 胶囊；切液态 → 面板 bub-liquid 渐变+blur(8px) ✓
+  * 微信登录（13800001234/123456 种子联系人）→ 发现→看一看→聊天气泡装扮：主题区块两格 ✓；切液态玻璃 → 主屏 data-liquid-theme=true、6 张 lg-card、1 个悬浮 lg-tabbar、lg-root ✓；四 tab 截图（发现/通讯录/我/微信）；进小玻璃聊天 → lg-root+lg-bar×2（顶栏胶囊+输入胶囊）+lg-input ✓；发消息→已送达→AI 回复文字+表情+1″语音 ✓；console error 0
+  * QQ 登录（10001/123456）→ 右滑抽屉→个性装扮：主题区块 ✓；切液态 → 消息页 liquid=true+大玻璃卡+悬浮 TabBar+lg-search ✓；联系人/动态 tab 截图；进聊天 → lg-bar×2+lg-input ✓；发消息→AI 回复语音 ✓；console error 0
+  * 还原性：QQ 切回默认主题 → liquid=false、0 个 lg-* 类 ✓；微信切回默认 → 同 ✓；IndexedDB bubbleStyle 重置为全默认
+- [VLM 截图评审] 9 张液态主题截图（微信 5+QQ 4）：总分 8.1/10（单张 7.0-9.0），无错位/溢出/不可读/遮挡缺陷；建议项（玻璃卡噪点纹理、聊天页背景层次）为可选打磨非缺陷
+- 测试临时文件清理（analyze-imgs.tmp*.mjs）；db/custom.db git checkout 还原
+
+Stage Summary:
+- 三大需求全部落地：① 语音转文字面板+微信/QQ 独立正在输入指示气泡跟随气泡装扮（染色/七彩/磨砂/液态四态）② QQ/微信气泡样式设置新增「界面主题」（默认=现状像素级保真 / 液态玻璃=参考图复刻）③ 液态玻璃主题覆盖微信四 tab+聊天铬件、QQ 三 tab+聊天铬件（玻璃卡/悬浮胶囊 TabBar/玻璃顶栏输入栏/lg-input），聊天背景层与气泡装扮系统零影响，IndexedDB 持久化、切换实时生效
+- 关键文件：src/lib/ios/bubble-style.ts、src/lib/ios/store.ts、src/components/apps/voice-bubble.tsx、bubble-style-settings.tsx、wechat.tsx、qq.tsx、chat.tsx、voice-input.tsx、globals.css
+- 群聊页/朋友圈/空间等子页未接主题（与需求范围一致：微信/通讯录/发现/我+聊天界面）

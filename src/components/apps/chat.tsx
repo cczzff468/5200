@@ -3311,6 +3311,8 @@ function ChatView({
                         decorated={bvis.override}
                         hideTail={bvis.override && bvis.tail === 'none'}
                         style={bvis.override ? bvis.style : mine ? { backgroundColor: SELF_BLUE } : undefined}
+                        decorApp="sms"
+                        msgIndex={i}
                       />
                     </div>
                     {/* iMessage：已送达挂在最后一条己方消息下沿（与文本气泡同规则） */}

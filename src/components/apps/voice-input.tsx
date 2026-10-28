@@ -508,9 +508,13 @@ function useHoldGesture(rec: VoiceRecorder, applyZone: (p: VoiceHoldPoint) => vo
 export function VoiceHoldBar({
   rec,
   testId = 'voice-hold-bar',
+  glass = false,
 }: {
   rec: VoiceRecorder;
   testId?: string;
+  /** 液态玻璃主题（微信 2-a）：常态底改半透玻璃胶囊（lg-input）；取消/转文字反馈色不变。
+   *  默认 false —— 其他端（信息/QQ/群聊）不受影响，默认视觉像素级不变 */
+  glass?: boolean;
 }) {
   const holding = rec.phase !== 'idle';
   // 分区判定（优先级从高到低）：
@@ -550,12 +554,14 @@ export function VoiceHoldBar({
       onPointerUp={g.onPointerUp}
       onPointerCancel={g.onPointerCancel}
       onContextMenu={(e) => e.preventDefault()}
-      className={`h-[36px] min-w-0 flex-1 touch-none select-none rounded-[5px] text-center text-[16px] leading-[36px] transition-colors ${
+      className={`h-[36px] min-w-0 flex-1 touch-none select-none text-center text-[16px] leading-[36px] transition-colors ${
         rec.zone === 'cancel'
-          ? 'bg-[#FA5151] text-white'
+          ? 'rounded-[5px] bg-[#FA5151] text-white'
           : rec.zone === 'stt'
-            ? 'bg-[#07C160] text-white'
-            : 'bg-white text-black active:bg-black/[0.04] dark:bg-[#232323] dark:text-white dark:active:bg-white/[0.06]'
+            ? 'rounded-[5px] bg-[#07C160] text-white'
+            : glass
+              ? 'lg-input rounded-full text-black active:bg-black/[0.04] dark:text-white dark:active:bg-white/[0.06]'
+              : 'rounded-[5px] bg-white text-black active:bg-black/[0.04] dark:bg-[#232323] dark:text-white dark:active:bg-white/[0.06]'
       }`}
     >
       {rec.phase === 'starting' ? '准备中…' : holding ? '松开 发送' : '按住 说话'}

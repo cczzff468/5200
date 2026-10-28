@@ -28,6 +28,8 @@ import { BubbleTail } from '@/components/apps/bubble-tail';
 import { useSettings } from '@/lib/ios/store';
 import {
   BUBBLE_KIND_LABEL,
+  BUBBLE_THEME_LABEL,
+  BUBBLE_THEMES,
   NATIVE_BUBBLE,
   PRESET_SWATCHES,
   bubbleVisual,
@@ -40,6 +42,7 @@ import {
   type BubbleScheme,
   type BubbleStyleConfig,
   type BubbleStyleKind,
+  type BubbleTheme,
 } from '@/lib/ios/bubble-style';
 
 export interface BubbleStylePageProps {
@@ -174,6 +177,53 @@ const PREVIEW_MESSAGES: { side: 'mine' | 'theirs'; text: string }[] = [
   { side: 'mine', text: '这就发你，等我' },
 ];
 
+// ---------------- 主题缩略图（第四十二轮：界面主题两格的迷你拟态图） ----------------
+
+/** 主题缩略图：拟态两种主题的页面质感——
+ *  默认 = 现状（纯白实心卡 + 全宽贴底 TabBar）；
+ *  液态 = 玻璃半透卡 + 悬浮胶囊 TabBar（复用 .lg-* 全局类，与真实主题同材质） */
+function ThemeThumb({ theme, accent }: { theme: BubbleTheme; accent: string }) {
+  const liquid = theme === 'liquid';
+  return (
+    <div
+      className={`relative h-[86px] overflow-hidden rounded-[17px] ${
+        liquid ? 'lg-root' : 'bg-[#EDEDED] dark:bg-[#111111]'
+      }`}
+    >
+      {/* mini 顶栏（标题居中） */}
+      <div className="flex items-center gap-1 px-2 pt-2">
+        <span className="h-[3px] w-[10px] rounded-full bg-black/20 dark:bg-white/25" />
+        <span className="mx-auto h-[3px] w-[22px] rounded-full bg-black/15 dark:bg-white/20" />
+        <span className="h-[3px] w-[10px] rounded-full bg-black/20 dark:bg-white/25" />
+      </div>
+      {/* mini 内容卡：默认 = 纯白实心；液态 = 玻璃半透 + 发丝描边 */}
+      <div
+        className={`mx-1.5 mt-1.5 flex flex-col gap-[5px] p-[7px] ${
+          liquid ? 'lg-card' : 'rounded-[6px] bg-white dark:bg-[#1A1A1A]'
+        }`}
+      >
+        <span className="h-[4px] w-[70%] rounded-full bg-black/25 dark:bg-white/30" />
+        <span className="h-[4px] w-[45%] rounded-full bg-black/15 dark:bg-white/20" />
+        <span className="h-[4px] w-[58%] rounded-full bg-black/15 dark:bg-white/20" />
+      </div>
+      {/* mini TabBar：默认 = 全宽贴底+上边框；液态 = 悬浮胶囊（发丝描边 + 高透玻璃） */}
+      {liquid ? (
+        <div className="lg-tabbar absolute inset-x-[9px] bottom-[7px] flex h-[15px] items-center justify-around">
+          {[0, 1, 2].map((d) => (
+            <span key={d} className="h-[5px] w-[5px] rounded-full" style={{ background: d === 0 ? accent : 'rgba(0,0,0,0.35)' }} />
+          ))}
+        </div>
+      ) : (
+        <div className="absolute inset-x-0 bottom-0 flex h-[17px] items-center justify-around border-t border-black/10 bg-[#F7F7F7] dark:border-white/10 dark:bg-[#1A1A1A]">
+          {[0, 1, 2].map((d) => (
+            <span key={d} className="h-[5px] w-[5px] rounded-full bg-black/35 dark:bg-white/40" style={d === 0 ? { background: accent } : undefined} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------- HSL 滑条（胶囊轨道） ----------------
 
 let hslSliderSeq = 0;
@@ -229,6 +279,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
   const schemes = useSettings((s) => s.bubbleSchemes);
   const setBubbleStyle = useSettings((s) => s.setBubbleStyle);
   const setBubbleSchemes = useSettings((s) => s.setBubbleSchemes);
+  const setBubbleTheme = useSettings((s) => s.setBubbleTheme);
 
   /** 自定义颜色编辑目标：both=两侧一起改 / mine=我的 / theirs=TA的（仅颜色分侧；样式对两侧同时生效） */
   const [side, setSide] = useState<'both' | 'mine' | 'theirs'>('mine');
@@ -318,6 +369,46 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
       />
 
       <div className="no-scrollbar relative flex-1 space-y-7 overflow-y-auto px-4 pb-12">
+        {/* ---------- 0. 界面主题（第四十二轮：仅微信/QQ——默认现状 / 液态玻璃） ---------- */}
+        {app !== 'sms' && (
+          <section aria-label="界面主题">
+            <SectionLabel>主题</SectionLabel>
+            <div className="mt-2.5 grid grid-cols-2 gap-2.5">
+              {BUBBLE_THEMES.map((theme) => {
+                const selected = (appStyle.theme ?? 'default') === theme;
+                return (
+                  <button
+                    key={theme}
+                    type="button"
+                    data-testid={`bubble-theme-${theme}`}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      if (!selected) {
+                        setBubbleTheme(app, theme);
+                        onToast(theme === 'liquid' ? '已切换液态玻璃主题' : '已恢复默认主题');
+                      }
+                    }}
+                    className={`relative flex flex-col items-stretch rounded-[22px] bg-white/60 p-1.5 backdrop-blur-xl transition-transform active:scale-[0.98] dark:bg-white/[0.06] ${
+                      selected ? 'ring-2' : 'ring-1 ring-white/70 dark:ring-white/[0.14]'
+                    }`}
+                    style={selected ? { '--tw-ring-color': meta.accent, boxShadow: `0 0 0 2px ${withAlpha(meta.accent, 0.35)}` } as React.CSSProperties : undefined}
+                  >
+                    {/* 迷你主题缩略图：拟态对应主题的页面质感 */}
+                    <ThemeThumb theme={theme} accent={meta.accent} />
+                    <div className="flex items-center justify-between px-2 pb-1 pt-2">
+                      <span className="text-[12.5px] font-medium text-black/75 dark:text-white/80">{BUBBLE_THEME_LABEL[theme]}</span>
+                      {selected && <Check className="h-[15px] w-[15px]" strokeWidth={2.6} style={{ color: meta.accent }} />}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 px-2 text-[11.5px] leading-relaxed text-black/35 dark:text-white/35">
+              液态玻璃：{meta.name}首页/列表与聊天界面铭件换为玻璃质感；气泡样式与聊天背景不受影响
+            </p>
+          </section>
+        )}
+
         {/* ---------- 1. 实时预览：玻璃相框裱着聊天幕布 ---------- */}
         <section aria-label="实时预览" className={`${GLASS_CARD} p-1.5`}>
           <div className="relative overflow-hidden rounded-[17px]">

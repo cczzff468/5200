@@ -27,6 +27,8 @@
 import { Pause, Play } from 'lucide-react';
 import { useVoicePlayback, voicePlayer } from '@/lib/ios/voice-player';
 import { voiceDurationLabel } from '@/lib/ios/audio-utils';
+import { useSettings } from '@/lib/ios/store';
+import { transcriptVisual, type BubbleAppId } from '@/lib/ios/bubble-style';
 
 /** 语音消息数据（各端消息结构统一挂 m.voice） */
 export interface VoiceMsgData {
@@ -189,6 +191,8 @@ export function VoiceMsgBubble({
   decorated,
   hideTail,
   style,
+  decorApp,
+  msgIndex,
 }: {
   msgId: string;
   voice: VoiceMsgData;
@@ -203,11 +207,19 @@ export function VoiceMsgBubble({
   hideTail?: boolean;
   /** QQ/信息 我方气泡的底色等自定义样式（由调用方传 backgroundColor） */
   style?: React.CSSProperties;
+  /** 气泡装扮宿主 App（第四十二轮：转文字面板跟随气泡装扮——传入即启用；与气泡同语言染色/玻璃） */
+  decorApp?: BubbleAppId;
+  /** 消息序号（七彩循环取色与气泡一致；decorApp 启用时必传） */
+  msgIndex?: number;
 }) {
   const { activeId, playing, progress } = useVoicePlayback();
   const mine = side === 'me';
   const t = THEME[theme];
   const isWx = theme === 'wx';
+  // 第四十二轮：转文字面板跟随气泡装扮（与所属语音气泡同一装扮语言：染色/七彩/磨砂/液态）。
+  // 装扮配置由组件内部订阅（调用方只需传 decorApp + msgIndex，与 bvis 同源同步）
+  const bubbleStyle = useSettings((s) => s.bubbleStyle);
+  const tvis = decorApp ? transcriptVisual(mine ? 'mine' : 'theirs', bubbleStyle, msgIndex ?? 0, decorApp) : null;
   const isActive = activeId === msgId;
   const isPlaying = isActive && playing;
   const label = voiceDurationLabel(voice.duration);
@@ -307,7 +319,12 @@ export function VoiceMsgBubble({
         <span
           data-testid="voice-transcript"
           className={
-            isWx
+            tvis?.override
+              ? /* 装扮接管：与气泡同语言（染色面板/磨砂玻璃/液态玻璃）；玻璃面板圆角 12px */
+                `mt-[5px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[12px] px-3.5 py-2.5 text-[13px] leading-[1.55] ${
+                    isWx ? 'text-[15px]' : ''
+                  } ${tvis.className}`
+              : isWx
               ? `mt-[8px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[4px] bg-white px-[14px] py-[10px] text-[16px] leading-[1.55] dark:bg-[#2C2C2C] ${
                   mine ? t.ownTranscript : t.peerTranscript
                 }`
@@ -315,6 +332,7 @@ export function VoiceMsgBubble({
                   mine ? t.ownTranscript : t.peerTranscript
                 }`
           }
+          style={tvis?.override ? tvis.style : undefined}
         >
           {voice.transcript}
         </span>
