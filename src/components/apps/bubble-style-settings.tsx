@@ -13,13 +13,11 @@
  *  4. 【保存当前设置】→ 命名弹窗 → 存入收藏夹（方案归属当前 App）
  *  5. 收藏夹：胶囊行点击应用
  *
- * 排版规范（第二十一轮 · 用户指定「删除重做：简约美观 + 毛玻璃胶囊」）：
- *  - 全页只允许三种视觉元素：玻璃卡（rounded-[22px] 半透白 + backdrop-blur-xl +
- *    发丝白描边）、胶囊控件（rounded-full）、弱文字小标题——chip/图标底/选中光晕
- *    等装饰一律不加；
- *  - 圆角仅两档：卡片 22px、控件 full（唯一例外：预览相框内层幕布 17px，隐喻聊天窗口）；
- *  - 节奏统一：区块间 space-y-7、卡内 space-y-4、栅格 gap-2.5，杜绝 mt-4/5/6 混用；
- *  - 页面底铺柔彩光斑（AmbientBackdrop 柔化档），为毛玻璃提供可模糊的底色；
+ * 排版规范（第二十一轮删除重做 · 第二十二轮删底层光斑）：仅玻璃卡/胶囊/弱标题
+ *  三元素，圆角两档（卡 22px / 控件 full）、区块 space-y-7 统一节奏；
+ *  - 页面底为纯色（用户指定删除底层柔彩大光斑）：玻璃卡在纯色底上保留半透白 +
+ *    模糊 + 发丝描边的克制玻璃质感；
+ *  - 预览幕布/示意条内的功能性光斑（AuraLayer）保留——磨砂/液态泡效果必需；
  *  - 选中态只靠 accent 描边 + 勾选符号表达，无阴影无发光。
  */
 import { useMemo, useState } from 'react';
@@ -75,20 +73,6 @@ const GLASS_CARD =
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <p className="px-2 text-[12.5px] font-semibold tracking-wide text-black/40 dark:text-white/40">{children}</p>
-  );
-}
-
-// ---------------- 页面级柔彩光斑（毛玻璃的「底」） ----------------
-
-/** 四枚低饱和大光斑：淡青 / 淡粉紫 / 淡绿 / 淡杏，铺在页面最底层 */
-function AmbientBackdrop() {
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-      <span className="absolute -left-24 -top-24 h-80 w-80 rounded-full bg-[#9BC8FF]/30 blur-3xl dark:bg-[#5B8DEF]/16" />
-      <span className="absolute -right-28 top-1/4 h-88 w-88 rounded-full bg-[#F5B8E4]/25 blur-3xl dark:bg-[#B46BD1]/12" />
-      <span className="absolute -left-20 top-[52%] h-72 w-72 rounded-full bg-[#A7F3D0]/22 blur-3xl dark:bg-[#4FC08D]/10" />
-      <span className="absolute -bottom-28 left-1/3 h-80 w-80 rounded-full bg-[#FDE68A]/22 blur-3xl dark:bg-[#E8C46B]/10" />
-    </div>
   );
 }
 
@@ -325,15 +309,12 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
 
   return (
     <IOSScreen className="bg-[#ECEFF4] dark:bg-[#0D0F13]">
-      {/* 页面底光斑：玻璃卡将其晕开成柔彩 */}
-      <AmbientBackdrop />
-
-      {/* 顶部玻璃条（透明底 + blur）；信息 App 页题与入口「主题」一致 */}
+      {/* 顶部玻璃条（同色半透 + blur，滚动时内容从底下晕开）；信息 App 页题与入口「主题」一致 */}
       <IOSNavBar
         title={app === 'sms' ? '主题' : '气泡样式'}
         large={false}
         left={<IOSBackButton onClick={onBack} label="" />}
-        className="bg-transparent! dark:bg-transparent!"
+        className="bg-[#ECEFF4]/75! dark:bg-[#0D0F13]/75!"
       />
 
       <div className="no-scrollbar relative flex-1 space-y-7 overflow-y-auto px-4 pb-12">

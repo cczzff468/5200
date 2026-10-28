@@ -13266,18 +13266,21 @@ type Page =
 
 // ---------------- 看一看页（发现页 › 看一看：顶部「聊天气泡装扮」入口 + 轻量内容流） ----------------
 
-/** 看一看轻量内容流（占位卡：标题 + 来源 + 摘要灰条） */
-const LOOK_FEED: { title: string; source: string }[] = [
-  { title: '两个人最舒服的相处方式，是「分享欲」一直在', source: '情感研究所' },
-  { title: '把日常拍成电影感：手机光影小技巧合集', source: '摄影日记' },
-  { title: '今天也要好好吃饭：一周家常菜单灵感', source: '下厨房生活家' },
-  { title: '那些藏在聊天记录里的小心动', source: '夜谈心' },
+/** 看一看轻量内容流（标题 + 来源 + 阅读量） */
+const LOOK_FEED: { title: string; source: string; reads: string }[] = [
+  { title: '两个人最舒服的相处方式，是「分享欲」一直在', source: '情感研究所', reads: '12.6万' },
+  { title: '把日常拍成电影感：手机光影小技巧合集', source: '摄影日记', reads: '8.3万' },
+  { title: '今天也要好好吃饭：一周家常菜单灵感', source: '下厨房生活家', reads: '23.1万' },
+  { title: '那些藏在聊天记录里的小心动', source: '夜谈心', reads: '5.7万' },
 ];
 
+/** 看一看页（第二十二轮美化）：与气泡装扮页同一套排版规范——玻璃卡 22px +
+ *  胶囊控件 + 弱标题，区块 space-y-7 统一节奏；纯色底（无底层光斑）。 */
 function WxLookPage({ onBack, onOpenDress, onToast }: { onBack: () => void; onOpenDress: () => void; onToast: (m: string) => void }) {
   return (
     <div className="absolute inset-0 z-20 flex flex-col bg-[#F6F7F9] text-black dark:bg-[#111214] dark:text-white" data-testid="wx-look-page">
-      <div className="shrink-0 bg-[#F6F7F9] pt-[54px] dark:bg-[#111214]">
+      {/* 顶部玻璃条：同色半透 + blur，滚动时内容从底下晕开 */}
+      <div className="shrink-0 bg-[#F6F7F9]/75 pt-[54px] backdrop-blur-xl dark:bg-[#111214]/75">
         <div className="relative flex h-11 items-center px-2">
           <button type="button" aria-label="返回" data-testid="wx-look-back" onClick={onBack} className="active:opacity-60">
             <ChevronLeft className="h-7 w-7" strokeWidth={2} />
@@ -13285,16 +13288,16 @@ function WxLookPage({ onBack, onOpenDress, onToast }: { onBack: () => void; onOp
           <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-semibold">看一看</div>
         </div>
       </div>
-      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-2">
-        {/* 聊天气泡装扮入口（第十八轮再修订 · 扁平简约）：白卡 + 柔绿图标 + 迷你七彩示意 */}
+      <div className="no-scrollbar min-h-0 flex-1 space-y-7 overflow-y-auto px-4 pb-10 pt-3">
+        {/* 聊天气泡装扮入口（玻璃卡 + 柔绿图标 + 迷你七彩胶囊示意） */}
         <button
           type="button"
           data-testid="wx-look-dress-entry"
           onClick={onOpenDress}
-          className="w-full rounded-[16px] bg-white p-4 text-left ring-1 ring-black/[0.05] transition-transform active:scale-[0.98] dark:bg-[#1B1D21] dark:ring-white/[0.07]"
+          className="w-full rounded-[22px] bg-white/60 p-4 text-left backdrop-blur-xl ring-1 ring-white/70 transition-transform active:scale-[0.98] dark:bg-white/[0.06] dark:ring-white/[0.12]"
         >
           <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#07C160]/12 dark:bg-[#07C160]/18">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#07C160]/12 dark:bg-[#07C160]/18">
               <Palette className="h-5 w-5 text-[#07C160]" strokeWidth={2} />
             </span>
             <div className="min-w-0 flex-1">
@@ -13303,8 +13306,8 @@ function WxLookPage({ onBack, onOpenDress, onToast }: { onBack: () => void; onOp
             </div>
             <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
           </div>
-          {/* 五枚迷你气泡示意（七彩参考图色板 · 扁平小胶囊） */}
-          <div className="mt-3 flex items-center gap-1.5 pl-[52px]">
+          {/* 五枚迷你气泡示意（七彩参考图色板 · 胶囊） */}
+          <div className="mt-3.5 flex items-center gap-1.5 pl-[58px]">
             <span className="rounded-full bg-[#FFEB00] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">早</span>
             <span className="rounded-full bg-[#B9F000] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">上</span>
             <span className="rounded-full bg-[#46EAEB] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">好</span>
@@ -13313,26 +13316,29 @@ function WxLookPage({ onBack, onOpenDress, onToast }: { onBack: () => void; onOp
           </div>
         </button>
 
-        {/* 轻量内容流（简约列表：标题 + 来源） */}
-        <p className="mb-2 mt-6 px-1 text-[12.5px] font-medium text-black/40 dark:text-white/40">大家都在看</p>
-        <div className="overflow-hidden rounded-[16px] bg-white ring-1 ring-black/[0.05] dark:bg-[#1B1D21] dark:ring-white/[0.07]">
-          {LOOK_FEED.map((f, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => onToast('内容即将上线')}
-              className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors active:bg-black/[0.03] dark:active:bg-white/[0.04] ${
-                i > 0 ? 'border-t border-black/[0.04] dark:border-white/[0.06]' : ''
-              }`}
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[14.5px] font-medium leading-snug">{f.title}</span>
-                <span className="mt-1 block truncate text-[11.5px] text-black/35 dark:text-white/35">{f.source}</span>
-              </span>
-              <ChevronRight className="h-4 w-4 shrink-0 text-black/20 dark:text-white/20" aria-hidden="true" />
-            </button>
-          ))}
-        </div>
+        {/* 轻量内容流：独立玻璃卡 · 标题 + 来源胶囊 + 阅读量 */}
+        <section aria-label="大家都在看">
+          <p className="px-2 text-[12.5px] font-semibold tracking-wide text-black/40 dark:text-white/40">大家都在看</p>
+          <div className="mt-2.5 space-y-2.5">
+            {LOOK_FEED.map((f, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => onToast('内容即将上线')}
+                className="flex w-full items-center gap-3 rounded-[22px] bg-white/60 px-4 py-3.5 text-left backdrop-blur-xl ring-1 ring-white/70 transition-transform active:scale-[0.98] dark:bg-white/[0.06] dark:ring-white/[0.12]"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[14.5px] font-medium leading-snug">{f.title}</span>
+                  <span className="mt-1.5 flex items-center gap-2">
+                    <span className="rounded-full bg-black/[0.05] px-2 py-[2px] text-[10.5px] font-medium text-black/50 dark:bg-white/[0.08] dark:text-white/50">{f.source}</span>
+                    <span className="text-[10.5px] text-black/35 dark:text-white/35">{f.reads}阅读</span>
+                  </span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-black/20 dark:text-white/20" aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   );
