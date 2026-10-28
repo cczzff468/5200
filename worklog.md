@@ -1240,3 +1240,31 @@ Stage Summary:
 - 气泡样式页完成"去光斑"：纯色底 + 克制玻璃卡（描边保持层次），符合用户对底层光斑的删除要求
 - 微信看一看完成毛玻璃美化：入口玻璃卡 + 独立玻璃卡内容流（来源胶囊+阅读量）+ 玻璃导航条，与气泡装扮页视觉规范统一
 - 未动任何功能逻辑（登录/装扮/收藏），仅视觉层
+
+---
+Task ID: 41
+Agent: 主控 Agent（Z.ai Code）
+Task: 环境重置后第四次完整部署 —— 用户再次从 GitHub 拉取 5200 仓库准备提修改/新增需求
+
+Work Log:
+- git clone https://github.com/cczzff468/5200.git → /home/z/repo-5200（直连成功，main 最新 4fcb552：微信看一看毛玻璃美化）
+- 同步全部内容到 /home/z/my-project：src/（15M）、public/（103M）、prisma/、db/custom.db（1MB 含数据）、mini-services/（netease-api 等 3 个）、scripts/、tools/、deploy/、download/、upload/（53 项，挂载点用 rsync --no-g --no-o 覆盖内容）、agent-ctx/、.data/、.e2e-16a/、worklog.md
+- 同步根配置：package.json、next.config.ts、tailwind.config.ts、tsconfig.json、components.json、postcss.config.mjs、eslint.config.mjs、bun.lock、.gitignore、.env（DATABASE_URL + VAPID 密钥对）
+- .git 整体替换为仓库完整历史（4fcb552）；origin 已内嵌 PAT（github_pat_11B4TNZS...TC01yvsH4），user.name=cczzff468
+- bun install 401 包（11.8s）；prisma generate + db push（already in sync）
+- 先 kill 默认模板 dev server（1192/1196/1198），再 daemon-spawn（double-fork）拉起 next-keeper.sh → bun run dev(3000) + ncm-keeper → netease-api(3010 ✓ 200)
+- dev.log 仅既有良性警告：instrumentation.ts Edge Runtime 静态分析误报（运行时 nodejs 分支正常）
+- Agent Browser E2E（390×844）验证：
+  * 锁屏渲染✓（时间/农历/天气 9°C 晴北京/手电筒相机快捷），pointer 事件合成上滑解锁✓
+  * 主屏 3 页 App 网格✓（第 3 页：微信/App Store/QQ/记忆库/世界书/美团/恋人空间/拾光小屋/淘宝 + 音乐 widget）
+  * 信息 App → AI 小助手对话✓：发送「你好，测试一下」→ 已送达 → AI 回复 6″ TTS 语音气泡
+  * 微信 App 打开✓（手机号登录页，新浏览器 IndexedDB 空的预期态）
+  * 拾光小屋 3D 场景✓（canvas 494×1107 + HUD：返回/拍照/TA的心/团子宠物面板/装修/更多；couple-home API 读写 200）
+  * 浏览器 console 仅 THREE 库内部 deprecation 警告（THREE.Clock/PCFSoftShadowMap），0 error
+- 测试产生的 db/custom.db 变更已 git checkout 还原，工作区干净
+
+Stage Summary:
+- AI Phone（Next.js 16.4.3 Turbopack + TS + Tailwind 4 + Prisma/SQLite + three/r3f 3D + z-ai-web-dev-sdk）完整恢复运行
+- 服务拓扑：3000 dev server（next-keeper 守护）/ 3010 netease-api（ncm-keeper 守护）/ Caddy 网关
+- git 就绪：origin=cczzff468/5200（PAT 内嵌），可直接 commit + push origin main（已知 github.com 直连推送可能超时但实际成功，用 api.github.com 验证远程 SHA）
+- 环境就绪，等待用户指定要修改/新增的功能
