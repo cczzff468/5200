@@ -392,7 +392,7 @@ import { decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoic
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
-import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
+import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, computeBubbleMenuPosLiquid, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { LocalToast, useLocalToast } from './page-toast';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import { QqGroupChatPage, QqGroupCreatePage, QqGroupInfoPage, QqGroupAvatar, qqGroupRowId } from './qq-group';
@@ -6048,7 +6048,7 @@ function ChatPage({
     if (!msg || !isSelectable(msg)) return;
     const items = buildMsgMenuItems(msg);
     if (items.length === 0) return;
-    setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
+    setMsgMenu({ msg, pos: (liquid ? computeBubbleMenuPosLiquid : computeBubbleMenuPos)(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
   }, !selectMode);
 
   // ---------------- 拍一拍（Task 30：双击聊天里两侧头像触发；AI 侧由 [拍一拍:文案] 标记发起） ----------------
@@ -8418,7 +8418,7 @@ function ChatPage({
         );
       })()}
 
-      {/* 气泡长按横向菜单（横向深色卡片；点菜单项执行动作，点空白处关闭） */}
+      {/* 气泡长按菜单（默认：横向深色卡片；液态：竖排列表乳白玻璃浮层；点菜单项执行动作，点空白处关闭） */}
       {msgMenu && (
         <BubbleActionMenu
           pos={msgMenu.pos}
@@ -8426,6 +8426,7 @@ function ChatPage({
           onSelect={handleMenuAction}
           onClose={() => setMsgMenu(null)}
           testPrefix="qq-menu"
+          liquid={liquid}
         />
       )}
 

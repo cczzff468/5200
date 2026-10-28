@@ -18,6 +18,8 @@ import {
   BellOff,
   Camera,
   Check,
+  CheckCheck,
+  AppWindow,
   CirclePlus,
   Clock,
   Compass,
@@ -82,7 +84,7 @@ import { stopVoicePlayback, VOICE_PLAY_ERROR_EVENT } from '@/lib/ios/voice-playe
 import { groupPreview, getGroup, listGroups, loadGroupMsgs, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, quitGroup as quitGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
 import { WxGroupChatPage, WxGroupCreatePage, WxGroupInfoPage, WxGroupListPage, GroupAvatar, groupRowId } from './wx-group';
 import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
-import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
+import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, computeBubbleMenuPosLiquid, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem } from './photo-stack';
 import { LocalToast, useLocalToast } from './page-toast';
 // Task 40 错误提示优化 + 草稿箱：错误分类与连续失败冷却、会话草稿持久化、失败灰字提示行组件
@@ -7716,7 +7718,7 @@ function ChatPage({
     if (!msg || !isSelectable(msg)) return;
     const items = buildMsgMenuItems(msg);
     if (items.length === 0) return;
-    setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
+    setMsgMenu({ msg, pos: (liquid ? computeBubbleMenuPosLiquid : computeBubbleMenuPos)(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
   }, !selectMode);
 
   // ---------------- 拍一拍（Task 30：双击聊天里两侧头像触发；AI 侧由 [拍一拍:文案] 标记发起） ----------------
@@ -8662,40 +8664,61 @@ function ChatPage({
           </div>
           )
         ) : (
-        <div className={liquid ? 'lg-bar mx-2.5 flex h-11 items-center rounded-full px-2' : 'flex h-11 items-center px-2'}>
+        <div className={liquid ? 'flex h-11 items-center gap-2 px-2.5' : 'flex h-11 items-center px-2'}>
+          {/* 液态主题顶栏（参考图）：三个独立玻璃件——返回圆钮 / 标题胶囊 / 更多圆钮，背景透出 */}
           <button
             type="button"
             aria-label="返回"
             data-testid="wx-chat-back"
             onClick={onBack}
-            className="flex items-center px-1 active:opacity-50"
+            className={
+              liquid
+                ? 'lg-chip flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full active:opacity-60'
+                : 'flex items-center px-1 active:opacity-50'
+            }
           >
-            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
+            <ChevronLeft className={liquid ? 'h-[22px] w-[22px]' : 'h-7 w-7'} strokeWidth={2} />
           </button>
           {otherUnread > 0 && (
             <span
               data-testid="wx-chat-back-badge"
               aria-label={`${otherUnread} 条未读`}
-              className="-ml-0.5 flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-black/[0.08] px-[5px] text-[12px] font-medium leading-none text-black/75 dark:bg-white/[0.16] dark:text-white/85"
+              className={
+                liquid
+                  ? 'lg-chip -ml-1 flex h-[20px] min-w-[20px] items-center justify-center rounded-full px-[5px] text-[11px] font-medium leading-none text-black/75 dark:text-white/85'
+                  : '-ml-0.5 flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-black/[0.08] px-[5px] text-[12px] font-medium leading-none text-black/75 dark:bg-white/[0.16] dark:text-white/85'
+              }
             >
               {otherUnread > 99 ? '99+' : otherUnread}
             </span>
           )}
-          <div className="flex flex-1 items-center justify-center gap-1.5" data-testid="wx-chat-peer-name">
-            <span className="truncate text-[17px] font-medium">{streaming || delivering ? '正在输入中…' : peer.name}</span>
-            {flags.muted === true && (
-              <BellOff
-                className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
-                strokeWidth={2}
-                aria-label="消息免打扰"
-              />
-            )}
+          <div className="flex min-w-0 flex-1 items-center justify-center" data-testid="wx-chat-peer-name">
+            <span
+              className={
+                liquid
+                  ? 'lg-title flex max-w-full items-center gap-1.5 truncate rounded-[18px] px-3.5 py-[5px] text-[15.5px] font-medium'
+                  : 'flex items-center gap-1.5 truncate text-[17px] font-medium'
+              }
+            >
+              <span className="truncate">{streaming || delivering ? '正在输入中…' : peer.name}</span>
+              {flags.muted === true && (
+                <BellOff
+                  className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                  strokeWidth={2}
+                  aria-label="消息免打扰"
+                />
+              )}
+            </span>
           </div>
           <button
             type="button"
             aria-label="聊天信息"
             data-testid="wx-chat-settings-entry"
-            className="px-2 active:opacity-50"
+            className={
+              liquid
+                ? 'lg-chip flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full active:opacity-60'
+                : 'px-2 active:opacity-50'
+            }
             onClick={() => setSettingsOpen(true)}
           >
             <EllipsisGlyph />
@@ -8750,10 +8773,18 @@ function ChatPage({
               highlightId === m.id ? 'bg-[#07C160]/15 ring-1 ring-[#07C160]/50' : ''
             }`}
           >
-            {/* 时间分隔（截图样式：居中半透明胶囊） */}
+            {/* 时间分隔（截图样式：居中半透明胶囊；液态主题 = 参考图纯文字浮层） */}
             {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && (
               <div className="py-2 text-center">
-                <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
+                <span
+                  className={
+                    liquid
+                      ? 'text-[11.5px] font-medium leading-[1.4] text-black/45 dark:text-white/50'
+                      : 'inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60'
+                  }
+                >
+                  {fmtChatTime(m.time)}
+                </span>
               </div>
             )}
             {lineOnly ? (
@@ -9442,8 +9473,9 @@ function ChatPage({
         )}
         {/* 第三十三轮：pt-2→pt-1（顶部上移一点）；items-end→items-center（图标和输入框对齐）
             第三十四轮：gap-2.5→gap-2（输入框往右延伸） */}
-        <div className={liquid ? 'px-0 pb-2 pt-1' : 'px-2.5 pb-[18px] pt-1'}>
-          <div className={liquid ? 'lg-bar mx-2.5 mb-3 flex items-center gap-2 rounded-[24px] px-2 py-1.5' : 'flex items-center gap-2'}>
+        <div className={liquid ? 'px-2.5 pb-2 pt-1' : 'px-2.5 pb-[18px] pt-1'}>
+          {/* 液态输入栏（参考图）：大圆角玻璃工具面板 + 内部圆形玻璃钮（语音/表情/加号）+ 内凹输入胶囊 */}
+          <div className={liquid ? 'lg-bar mb-3 flex items-center gap-2 rounded-[28px] px-[7px] py-[7px]' : 'flex items-center gap-2'}>
             <button
               type="button"
               aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
@@ -9457,7 +9489,11 @@ function ChatPage({
               className="shrink-0 active:opacity-70"
             >
               <span
-                className="flex h-[30px] w-[30px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 transition-colors active:bg-black/[0.05] dark:border-white/70 dark:text-white/90 dark:active:bg-white/10"
+                className={
+                  liquid
+                    ? /* 液态：圆形玻璃浮钮 */ 'lg-chip flex h-[34px] w-[34px] items-center justify-center rounded-full text-black/85 transition-transform active:scale-95 dark:text-white/90'
+                    : 'flex h-[30px] w-[30px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 transition-colors active:bg-black/[0.05] dark:border-white/70 dark:text-white/90 dark:active:bg-white/10'
+                }
               >
                 {/* 键盘模式 → 声波图标（点按进语音）；语音模式 → 键盘图标（点按切回键盘） */}
                 {voiceMode ? <KeyboardGlyph size={17} /> : <VoiceWaveGlyph size={19} />}
@@ -9496,10 +9532,10 @@ function ChatPage({
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
                   placeholderClass="pl-1 pt-[6px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
                   testId="wx-chat-input"
-                  className={`block max-h-[132px] min-h-[34px] w-full overflow-y-auto py-[6px] pl-3 pr-11 text-[16px] leading-[22px] caret-[#07C160] outline-none transition-all duration-200 selection:bg-[#07C160]/20 ${
+                  className={`block max-h-[132px] w-full overflow-y-auto py-[8px] pl-3.5 pr-11 text-[16px] leading-[22px] caret-[#07C160] outline-none transition-all duration-200 selection:bg-[#07C160]/20 ${
                     liquid
-                      ? 'lg-input rounded-full'
-                      : 'rounded-[4px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] dark:bg-[#232323] dark:shadow-none'
+                      ? /* 液态：内凹输入胶囊（比外框稍深一档 + 内阴影下陷感） */ 'lg-input min-h-[36px] rounded-[19px] shadow-[inset_0_1px_3px_rgba(31,38,135,0.10)]'
+                      : 'min-h-[34px] rounded-[4px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] dark:bg-[#232323] dark:shadow-none'
                   }`}
                 />
                 {/* 文字转语音开关（第三十二轮：图标改麦克风——与微信参考图一致的输入框内右侧灰麦克风；
@@ -9530,9 +9566,16 @@ function ChatPage({
                 setPlusOpen(false);
                 setStickerOpen((v) => !v);
               }}
-              className={`flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
+              className={
+                liquid
+                  ? 'lg-chip flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full transition-transform active:scale-95'
+                  : 'flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60'
+              }
             >
-              <Smile className="h-[25px] w-[25px]" strokeWidth={2} />
+              <Smile
+                className={liquid ? `h-[21px] w-[21px] ${stickerOpen ? 'text-[#07C160]' : 'text-black/85 dark:text-white/85'}` : 'h-[25px] w-[25px]'}
+                strokeWidth={2}
+              />
             </button>
             {(input.trim() || canDispatch || pendingImgs.length > 0) ? (
               <button
@@ -9545,7 +9588,11 @@ function ChatPage({
                   if (input.trim() || pendingImgs.length) void send();
                   else dispatchBatch();
                 }}
-                className="flex h-9 shrink-0 items-center justify-center rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
+                className={
+                  liquid
+                    ? 'flex h-[34px] shrink-0 items-center justify-center rounded-full bg-[#07C160] px-[18px] text-[14px] font-medium text-white shadow-[0_3px_10px_rgba(7,193,96,0.35)] transition-transform active:scale-95 active:bg-[#06AD56] disabled:opacity-50'
+                    : 'flex h-9 shrink-0 items-center justify-center rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50'
+                }
               >
                 发送
               </button>
@@ -9558,9 +9605,16 @@ function ChatPage({
                   setStickerOpen(false);
                   setPlusOpen((v) => !v);
                 }}
-                className="-ml-1 flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60"
+                className={
+                  liquid
+                    ? 'lg-chip flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full transition-transform active:scale-95'
+                    : '-ml-1 flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60'
+                }
               >
-                <CirclePlus className={`h-[28px] w-[28px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.8} />
+                <CirclePlus
+                  className={`${liquid ? 'h-[23px] w-[23px] text-black/85 dark:text-white/85' : 'h-[28px] w-[28px]'} transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`}
+                  strokeWidth={1.8}
+                />
               </button>
             )}
           </div>
@@ -10339,7 +10393,7 @@ function ChatPage({
         );
       })()}
 
-      {/* 气泡长按横向菜单（微信/QQ 同款深色卡片；点菜单项执行动作，点空白处关闭） */}
+      {/* 气泡长按菜单（默认：微信/QQ 同款深色横向卡片；液态：竖排列表乳白玻璃浮层；点菜单项执行动作，点空白处关闭） */}
       {msgMenu && (
         <BubbleActionMenu
           pos={msgMenu.pos}
@@ -10347,6 +10401,7 @@ function ChatPage({
           onSelect={handleMenuAction}
           onClose={() => setMsgMenu(null)}
           testPrefix="wx-menu"
+          liquid={liquid}
         />
       )}
 
@@ -14086,6 +14141,42 @@ function MainScreen({
     // chatPeer 入依赖：从聊天返回（或进入聊天）时重算预览，红包/转账/新消息即时反映到列表；msgTick：好友来信时重算；groups：群数据变更时重算
   }, [contacts, friends, me, chatPeer, pinSet, hidden, msgTick, wxGroups]);
 
+  /** 液态主题分类标签栏（第四十三轮，参考图）：全部/好友/工作/家人/群聊/服务号 过滤会话列表（默认主题不渲染该栏） */
+  const [cat, setCat] = useState<'all' | 'friends' | 'work' | 'family' | 'groups' | 'officials'>('all');
+  /** 分类过滤后的会话（仅液态主题使用；all = 不过滤） */
+  const visibleSessions = useMemo(() => {
+    if (!liquid || cat === 'all') return sessions;
+    if (cat === 'groups') return sessions.filter((s) => s.group);
+    if (cat === 'officials') return sessions.filter((s) => !s.group && s.contact && s.contact.id === me.id);
+    // 好友 / 工作 / 家人：非群会话
+    return sessions.filter((s) => {
+      if (s.group || !s.contact) return false;
+      if (s.contact.id === me.id) return false; // 自己的会话归「服务号」
+      if (cat === 'friends') return true;
+      if (cat === 'work') return Boolean(s.contact.occupation || s.contact.company);
+      if (cat === 'family') return /家人|父母|父亲|母亲|爸爸|妈妈|哥哥|姐姐|弟弟|妹妹|亲戚|儿子|女儿/.test(s.contact.relation ?? '');
+      return false;
+    });
+  }, [sessions, liquid, cat, me.id]);
+
+  /** 液态列表分组（参考图）：置顶 / 好友会话 / 群聊 / 服务号各成一张玻璃大卡（组内细分割线，卡间圆角间隙）。
+   *  注意：必须挂在所有早退 return 之前（hooks 顺序不可随 page 变化） */
+  const liquidGroups = useMemo(() => {
+    const pinned: typeof sessions = [];
+    const friendsG: typeof sessions = [];
+    const groupsG: typeof sessions = [];
+    const officials: typeof sessions = [];
+    for (const r of visibleSessions) {
+      if (pinSet.has(r.key)) pinned.push(r);
+      else if (r.group) groupsG.push(r);
+      else if (r.contact && r.contact.id === me.id) officials.push(r);
+      else friendsG.push(r);
+    }
+    const out: Array<typeof sessions> = [];
+    for (const g of [pinned, friendsG, groupsG, officials]) if (g.length) out.push(g);
+    return out;
+  }, [visibleSessions, pinSet, me.id]);
+
   /** 幽灵未读清理：只保留当前可见会话的未读（不显示该聊天/已删联系人的残留计数没有行可清，
    *  会让底部 tab 与主屏图标角标卡死；prune 无变化时不写入，可安全随 sessions 重算触发） */
   useEffect(() => {
@@ -15105,6 +15196,143 @@ function MainScreen({
 
   const TITLES: Record<Tab, string> = { chats: '微信', contacts: '通讯录', discover: '发现', me: '我' };
 
+  /** 会话行渲染（chats tab：群会话分支 + 好友会话分支；divider = 行底细分割线——液态组内非末行 / 默认主题恒有） */
+  const renderSessionRow = (
+    row: { key: string; contact: ContactRecord | null; group: ChatGroup | null; preview: string; time: number },
+    divider: boolean,
+  ) => {
+    const pinned = pinSet.has(row.key);
+    const unreadCount = unreads[row.key] ?? 0;
+    if (row.group) {
+      // 群会话行（无长按菜单；点开进群聊页）
+      const g = row.group;
+      const gid = groupRowId(g.id);
+      return (
+        <button
+          key={g.id}
+          type="button"
+          data-testid={`wx-chat-item-group-${g.id}`}
+          onClick={() => {
+            if (suppressClickRef.current) {
+              suppressClickRef.current = false;
+              return;
+            }
+            markRead(gid);
+            setGroupPeer(g);
+          }}
+          className={
+            liquid
+              ? `flex w-full select-none items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
+                  divider ? 'border-b border-black/[0.06] dark:border-white/[0.08]' : ''
+                } ${pinned ? 'bg-[#07C160]/[0.05]' : ''}`
+              : `flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
+                  pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
+                }`
+          }
+        >
+          <span className="relative shrink-0">
+            <GroupAvatar group={g} contacts={contacts} size={44} />
+            {unreadCount > 0 && (
+              <span
+                data-testid={`wx-unread-badge-${gid}`}
+                aria-label={`${unreadCount} 条未读`}
+                className={
+                  flagsMap[gid]?.muted === true
+                    ? 'absolute -right-[3px] -top-[3px] block h-[9px] w-[9px] rounded-full bg-[#FA5151] ring-2 ring-white dark:ring-[#1A1A1A]'
+                    : 'absolute -right-[7px] -top-[7px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[11px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.25)] ring-2 ring-white dark:ring-[#1A1A1A]'
+                }
+              >
+                {flagsMap[gid]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="truncate text-[16px]">{g.remark?.trim() || g.name}</span>
+              <span className="flex shrink-0 items-center gap-1">
+                {flagsMap[gid]?.muted === true && (
+                  <BellOff className="h-3.5 w-3.5 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
+                )}
+                <span className="text-[12px] text-black/35 dark:text-white/35">{fmtListTime(row.time)}</span>
+              </span>
+            </div>
+            <p className="mt-0.5 truncate text-[13px] text-black/40 dark:text-white/40">{row.preview || '群聊已创建'}</p>
+          </div>
+        </button>
+      );
+    }
+    const contact = row.contact;
+    if (!contact) return null;
+    return (
+      <button
+        key={contact.id}
+        type="button"
+        data-testid={`wx-chat-item-${contact.name}`}
+        onClick={() => {
+          if (suppressClickRef.current) {
+            suppressClickRef.current = false;
+            return;
+          }
+          markRead(contact.id);
+          setChatPeer(contact);
+        }}
+        onPointerDown={(e) => onSessionPointerDown(e, contact)}
+        onPointerMove={onSessionPointerMove}
+        onPointerUp={clearPress}
+        onPointerCancel={clearPress}
+        onPointerLeave={clearPress}
+        className={
+          liquid
+            ? `flex w-full select-none items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
+                divider ? 'border-b border-black/[0.06] dark:border-white/[0.08]' : ''
+              } ${pinned ? 'bg-[#07C160]/[0.05]' : ''}`
+            : `flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
+                pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
+              }`
+        }
+      >
+        <span className="relative shrink-0">
+          <WxAvatar src={contact.avatar} alt={contact.name} size={44} />
+          {unreadCount > 0 && (
+            <span
+              data-testid={`wx-unread-badge-${contact.id}`}
+              aria-label={`${unreadCount} 条未读`}
+              className={
+                flagsMap[contact.id]?.muted === true
+                  ? /* 免打扰：不显示数字，只显示小红点（原生微信同款） */
+                    'absolute -right-[3px] -top-[3px] block h-[9px] w-[9px] rounded-full bg-[#FA5151] ring-2 ring-white dark:ring-[#1A1A1A]'
+                  : 'absolute -right-[7px] -top-[7px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[11px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.25)] ring-2 ring-white dark:ring-[#1A1A1A]'
+              }
+            >
+              {flagsMap[contact.id]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="truncate text-[16px]">
+              {contact.name}
+              {getBranchMeta(contact.id) && (
+                <span className="ml-1.5 inline-block translate-y-[-1px] rounded-[3px] bg-black/[0.06] px-[4px] py-px align-middle text-[10px] font-normal leading-[14px] text-black/40 dark:bg-white/10 dark:text-white/40">
+                  分支
+                </span>
+              )}
+            </span>
+            <span className="flex shrink-0 items-center gap-1">
+              {flagsMap[contact.id]?.muted === true && (
+                <BellOff className="h-3.5 w-3.5 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
+              )}
+              <span className="text-[12px] text-black/35 dark:text-white/35">{fmtListTime(row.time)}</span>
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-[13px] text-black/40 dark:text-white/40">
+            {row.preview || '开始聊天吧'}
+          </p>
+        </div>
+      </button>
+    );
+  };
+
   return (
     <div
       ref={rootRef}
@@ -15115,8 +15343,52 @@ function MainScreen({
           : 'relative flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white'
       }
     >
-      {/* 顶栏（微信：返回+搜索+＋；通讯录：＋；发现/我：无图标；左侧返回键退出微信回主屏） */}
+      {/* 顶栏：默认 =（微信：返回+搜索+＋；通讯录：＋；发现/我：无图标；左侧返回键退出微信回主屏）
+          液态 = 参考图（左：头像+名字+在线绿点胶囊 | 中：标题胶囊 | 右：圆形玻璃＋钮；搜索移到下方搜索胶囊） */}
       <div className="shrink-0 pt-[54px]">
+        {liquid ? (
+        <div className="relative flex h-12 items-center gap-2 px-2.5">
+          <button
+            type="button"
+            aria-label="返回主屏幕"
+            data-testid="wx-exit"
+            onClick={onExit}
+            className="lg-title flex min-w-0 max-w-[46%] flex-1 items-center gap-2.5 rounded-[20px] px-2 py-1.5 active:opacity-60"
+          >
+            <WxAvatar src={me.avatar} alt={me.name} size={34} />
+            <span className="min-w-0 flex-1 text-left">
+              <span className="block truncate text-[14.5px] font-semibold leading-tight">{me.name}</span>
+              <span className="mt-[3px] flex items-center gap-1 text-[10.5px] leading-none">
+                <span className="h-[6.5px] w-[6.5px] rounded-full bg-[#07C160]" aria-hidden="true" />
+                <span className="font-medium text-[#07C160]">在线</span>
+              </span>
+            </span>
+          </button>
+          {/* 右侧配重占位：与左侧头像胶囊等分剩余空间，标题真正居中（参考图三段式） */}
+          <div className="flex flex-1 justify-end">
+            {(tab === 'chats' || tab === 'contacts') ? (
+              <button
+                type="button"
+                aria-label={tab === 'chats' ? '更多功能' : '添加朋友'}
+                data-testid="wx-plus"
+                onClick={() => {
+                  if (tab === 'contacts') {
+                    setPage('addFriend');
+                    return;
+                  }
+                  setMenuOpen(true);
+                }}
+                className="lg-chip flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full active:opacity-60"
+              >
+                <Plus className="h-[22px] w-[22px]" strokeWidth={2} />
+              </button>
+            ) : null}
+          </div>
+          <div className="lg-title absolute left-1/2 top-1/2 flex h-[42px] max-w-[42%] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[18px] px-4 text-[15.5px] font-semibold">
+            {TITLES[tab]}
+          </div>
+        </div>
+        ) : (
         <div className="flex h-11 items-center px-4">
           <div className="flex flex-1 items-center justify-start">
             <button
@@ -15161,12 +15433,43 @@ function MainScreen({
             )}
           </div>
         </div>
+        )}
       </div>
 
-      {/* 右上角 + 菜单 */}
+      {/* 右上角 + 菜单：默认 = 深色下拉；液态 = 参考图乳白玻璃竖列面板（发起群聊/添加朋友/扫一扫/收付款/小程序/一键已读） */}
       {menuOpen && (
         <>
           <div className="absolute inset-0 z-30" onClick={() => setMenuOpen(false)} aria-hidden="true" />
+          {liquid ? (
+            <div
+              data-testid="wx-plus-menu"
+              className="lg-sheet absolute right-2.5 top-[104px] z-40 w-[min(85%,292px)] overflow-hidden rounded-[28px] py-[5px]"
+              role="menu"
+            >
+              {(
+                [
+                  ['group', '发起群聊', <Users key="i" className="h-[23px] w-[23px]" strokeWidth={2} />, () => { setMenuOpen(false); setGroupPage('create'); }],
+                  ['addfriend', '添加朋友', <UserPlus key="i" className="h-[23px] w-[23px]" strokeWidth={2} />, () => { setMenuOpen(false); setPage('addFriend'); }],
+                  ['scan', '扫一扫', <ScanLine key="i" className="h-[23px] w-[23px]" strokeWidth={2} />, () => { setMenuOpen(false); openScan('wechat'); }],
+                  ['pay', '收付款', <Banknote key="i" className="h-[23px] w-[23px]" strokeWidth={2} />, () => { setMenuOpen(false); showToast('「收付款」暂未开放'); }],
+                  ['mini', '小程序', <AppWindow key="i" className="h-[23px] w-[23px]" strokeWidth={2} />, () => { setMenuOpen(false); showToast('「小程序」暂未开放'); }],
+                  ['readall', '一键已读', <CheckCheck key="i" className="h-[23px] w-[23px]" strokeWidth={2} />, () => { setMenuOpen(false); sessions.forEach((s) => wxUnreads.clear(s.key)); showToast('已一键清除全部未读'); }],
+                ] as Array<[string, string, React.ReactNode, () => void]>
+              ).map(([key, label, icon, act]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="menuitem"
+                  data-testid={`wx-menu-${key}`}
+                  onClick={act}
+                  className="lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16.5px] font-semibold text-[#1C1C1E] dark:text-white/90"
+                >
+                  {icon}
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : (
           <div className="absolute right-3 top-[94px] z-40 w-[152px] overflow-hidden rounded-[8px] bg-[#4C4C4C] text-white shadow-xl dark:bg-[#383838]">
             <button
               type="button"
@@ -15217,140 +15520,95 @@ function MainScreen({
               收付款
             </button>
           </div>
+          )}
         </>
       )}
 
       {/* 内容区（液态主题：底部多留 88px——悬浮胶囊 TabBar 覆盖在滚动流上，内容从玻璃底下穿过） */}
       <div className={liquid ? 'min-h-0 flex-1 overflow-y-auto pb-[88px]' : 'min-h-0 flex-1 overflow-y-auto'}>
         {tab === 'chats' && (
-          <div className={liquid ? 'mx-2.5 min-h-full lg-card' : 'min-h-full bg-white dark:bg-[#1A1A1A]'}>
-            {sessions.length === 0 && (
-              <div className="py-16 text-center">
-                <p className="text-[14px] text-black/35 dark:text-white/35">还没有会话</p>
-                <p className="mt-1 text-[12.5px] text-black/30 dark:text-white/30">添加好友后，在这里和 TA 聊天</p>
+          <>
+            {liquid && (
+              /* 液态（参考图）：搜索胶囊 + 分类标签栏（分段控件）；搜索点按进搜索页，分类过滤下方会话卡片 */
+              <div className="px-2.5 pt-1">
+                <button
+                  type="button"
+                  data-testid="wx-search-capsule"
+                  onClick={() => setPage('search')}
+                  className="lg-search mb-2.5 flex h-[40px] w-full items-center justify-center gap-1.5 rounded-full text-black/40 active:opacity-60 dark:text-white/40"
+                >
+                  <Search className="h-[16px] w-[16px]" strokeWidth={2.1} aria-hidden="true" />
+                  <span className="text-[14px]">搜索</span>
+                </button>
+                <div
+                  className="lg-seg mb-2.5 flex items-center gap-1 overflow-x-auto rounded-[17px] p-[3px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  role="tablist"
+                  aria-label="会话分类"
+                >
+                  {(
+                    [
+                      ['all', '全部'],
+                      ['friends', '好友'],
+                      ['work', '工作'],
+                      ['family', '家人'],
+                      ['groups', '群聊'],
+                      ['officials', '服务号'],
+                    ] as Array<['all' | 'friends' | 'work' | 'family' | 'groups' | 'officials', string]>
+                  ).map(([id, label]) => {
+                    const active = cat === id;
+                    /* 分类标签红点角标（参考图）：全部 = 总未读数；好友 = 非群会话未读数 */
+                    const catUnread =
+                      id === 'all' ? totalUnread : id === 'friends'
+                        ? sessions.reduce((acc, s) => (s.group ? acc : acc + (unreads[s.key] ?? 0)), 0)
+                        : 0;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        data-testid={`wx-cat-${id}`}
+                        onClick={() => setCat(id)}
+                        className={`relative flex h-[32px] shrink-0 items-center justify-center rounded-[13px] px-3.5 text-[13.5px] font-medium transition-colors ${
+                          active
+                            ? 'lg-seg-on text-[#07C160] dark:text-[#3DDC84]'
+                            : 'text-black/55 active:opacity-60 dark:text-white/55'
+                        }`}
+                      >
+                        {label}
+                        {!active && catUnread > 0 && (
+                          <span
+                            className="absolute right-[7px] top-[3px] flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[9.5px] font-semibold leading-none text-white"
+                            aria-label={`${catUnread} 条未读`}
+                          >
+                            {catUnread > 99 ? '99+' : catUnread}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
-            {sessions.map((row) => {
-              const pinned = pinSet.has(row.key);
-              const unreadCount = unreads[row.key] ?? 0;
-              if (row.group) {
-                // 群会话行（无长按菜单；点开进群聊页）
-                const g = row.group;
-                const gid = groupRowId(g.id);
-                return (
-                  <button
-                    key={g.id}
-                    type="button"
-                    data-testid={`wx-chat-item-group-${g.id}`}
-                    onClick={() => {
-                      if (suppressClickRef.current) {
-                        suppressClickRef.current = false;
-                        return;
-                      }
-                      markRead(gid);
-                      setGroupPeer(g);
-                    }}
-                    className={`flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
-                      pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
-                    }`}
-                  >
-                    <span className="relative shrink-0">
-                      <GroupAvatar group={g} contacts={contacts} size={44} />
-                      {unreadCount > 0 && (
-                        <span
-                          data-testid={`wx-unread-badge-${gid}`}
-                          aria-label={`${unreadCount} 条未读`}
-                          className={
-                            flagsMap[gid]?.muted === true
-                              ? 'absolute -right-[3px] -top-[3px] block h-[9px] w-[9px] rounded-full bg-[#FA5151] ring-2 ring-white dark:ring-[#1A1A1A]'
-                              : 'absolute -right-[7px] -top-[7px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[11px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.25)] ring-2 ring-white dark:ring-[#1A1A1A]'
-                          }
-                        >
-                          {flagsMap[gid]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
-                        </span>
-                      )}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className="truncate text-[16px]">{g.remark?.trim() || g.name}</span>
-                        <span className="flex shrink-0 items-center gap-1">
-                          {flagsMap[gid]?.muted === true && (
-                            <BellOff className="h-3.5 w-3.5 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
-                          )}
-                          <span className="text-[12px] text-black/35 dark:text-white/35">{fmtListTime(row.time)}</span>
-                        </span>
-                      </div>
-                      <p className="mt-0.5 truncate text-[13px] text-black/40 dark:text-white/40">{row.preview || '群聊已创建'}</p>
-                    </div>
-                  </button>
-                );
-              }
-              const contact = row.contact;
-              if (!contact) return null;
-              return (
-                <button
-                  key={contact.id}
-                  type="button"
-                  data-testid={`wx-chat-item-${contact.name}`}
-                    onClick={() => {
-                      if (suppressClickRef.current) {
-                        suppressClickRef.current = false;
-                        return;
-                      }
-                      markRead(contact.id);
-                      setChatPeer(contact);
-                    }}
-                    onPointerDown={(e) => onSessionPointerDown(e, contact)}
-                    onPointerMove={onSessionPointerMove}
-                    onPointerUp={clearPress}
-                    onPointerCancel={clearPress}
-                    onPointerLeave={clearPress}
-                    className={`flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
-                      pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
-                    }`}
-                  >
-                    <span className="relative shrink-0">
-                      <WxAvatar src={contact.avatar} alt={contact.name} size={44} />
-                      {unreadCount > 0 && (
-                        <span
-                          data-testid={`wx-unread-badge-${contact.id}`}
-                          aria-label={`${unreadCount} 条未读`}
-                          className={
-                            flagsMap[contact.id]?.muted === true
-                              ? /* 免打扰：不显示数字，只显示小红点（原生微信同款） */
-                                'absolute -right-[3px] -top-[3px] block h-[9px] w-[9px] rounded-full bg-[#FA5151] ring-2 ring-white dark:ring-[#1A1A1A]'
-                              : 'absolute -right-[7px] -top-[7px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#FA5151] px-[5px] text-[11px] font-semibold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.25)] ring-2 ring-white dark:ring-[#1A1A1A]'
-                          }
-                        >
-                          {flagsMap[contact.id]?.muted === true ? null : unreadCount > 99 ? '99+' : unreadCount}
-                        </span>
-                      )}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className="truncate text-[16px]">
-                          {contact.name}
-                          {getBranchMeta(contact.id) && (
-                            <span className="ml-1.5 inline-block translate-y-[-1px] rounded-[3px] bg-black/[0.06] px-[4px] py-px align-middle text-[10px] font-normal leading-[14px] text-black/40 dark:bg-white/10 dark:text-white/40">
-                              分支
-                            </span>
-                          )}
-                        </span>
-                        <span className="flex shrink-0 items-center gap-1">
-                          {flagsMap[contact.id]?.muted === true && (
-                            <BellOff className="h-3.5 w-3.5 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
-                          )}
-                          <span className="text-[12px] text-black/35 dark:text-white/35">{fmtListTime(row.time)}</span>
-                        </span>
-                      </div>
-                      <p className="mt-0.5 truncate text-[13px] text-black/40 dark:text-white/40">
-                        {row.preview || '开始聊天吧'}
-                      </p>
-                    </div>
-                  </button>
-              );
-            })}
-          </div>
+            <div className={liquid ? 'px-2.5 pb-2' : 'min-h-full bg-white dark:bg-[#1A1A1A]'}>
+              {(liquid ? visibleSessions : sessions).length === 0 && (
+                <div className="py-16 text-center">
+                  <p className="text-[14px] text-black/35 dark:text-white/35">{liquid && cat !== 'all' ? '该分类下暂无会话' : '还没有会话'}</p>
+                  <p className="mt-1 text-[12.5px] text-black/30 dark:text-white/30">{liquid && cat !== 'all' ? '换个分类看看吧' : '添加好友后，在这里和 TA 聊天'}</p>
+                </div>
+              )}
+            {liquid ? (
+              /* 液态（参考图）：分组玻璃大卡——置顶/好友/群聊/服务号各一张卡，组内细分割线，卡间圆角间隙 */
+              liquidGroups.map((g, gi) => (
+                <div key={gi} className="lg-card mb-2.5 overflow-hidden">
+                  {g.map((row, ri) => renderSessionRow(row, ri < g.length - 1))}
+                </div>
+              ))
+            ) : (
+              sessions.map((row) => renderSessionRow(row, true))
+            )}
+            </div>
+          </>
         )}
 
         {tab === 'contacts' && (
@@ -15544,8 +15802,37 @@ function MainScreen({
 
         {tab === 'me' && (
           <div className={liquid ? 'space-y-2.5 pb-6' : 'space-y-2 pb-6'}>
-            {/* 名片：头像 + 名字 + 微信号（微信原生白底样式，点击进个人信息页） */}
+            {/* 名片：默认 = 头像+名字+微信号左对齐（微信原生白底样式，点击进个人信息页）；
+                液态 = 参考图居中名片（大头像居中 + 名字下方 + 「+ 状态 / N 个朋友」胶囊标签） */}
             <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+              {liquid ? (
+                <button
+                  type="button"
+                  data-testid="wx-me-profile"
+                  onClick={() => setPage('profile')}
+                  className="flex w-full flex-col items-center px-4 pb-5 pt-6 text-center active:opacity-70"
+                >
+                  <span className="block shrink-0">
+                    <WxAvatar src={me.avatar} alt={me.name} size={72} />
+                  </span>
+                  <span className="mt-3 block max-w-full truncate text-[21px] font-semibold leading-tight">{me.name}</span>
+                  <span
+                    data-testid="wx-me-wxid"
+                    className="mt-1 block max-w-full truncate text-[12.5px] text-black/40 dark:text-white/40"
+                  >
+                    微信号：{me.wechatId || me.phone || '未设置'}
+                  </span>
+                  <span className="mt-3.5 flex items-center gap-2">
+                    <span className="lg-search flex h-[30px] items-center gap-1 rounded-full px-3.5 text-[12.5px] font-medium text-black/60 dark:text-white/60">
+                      <Plus className="h-[13px] w-[13px]" strokeWidth={2.2} aria-hidden="true" />
+                      状态
+                    </span>
+                    <span className="lg-search flex h-[30px] items-center rounded-full px-3.5 text-[12.5px] font-medium text-black/60 dark:text-white/60">
+                      {friends.length} 个朋友
+                    </span>
+                  </span>
+                </button>
+              ) : (
               <button
                 type="button"
                 data-testid="wx-me-profile"
@@ -15567,6 +15854,7 @@ function MainScreen({
                 <QrCode className="h-5 w-5 shrink-0 text-black/50 dark:text-white/50" strokeWidth={1.8} />
                 <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
               </button>
+              )}
             </div>
 
             <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
@@ -15631,7 +15919,7 @@ function MainScreen({
       </div>
 
       {/* 底部 TabBar（上移预留底部横杠安全区）；第三十四轮：上下变小 h-52→46、图标 26→23
-          液态玻璃主题：悬浮胶囊（lg-tabbar，左右留边 + 底部 12px + 环境投影），内容从胶囊底下穿过 */}
+          液态玻璃主题（参考图）：悬浮胶囊 Dock——纯图标（无文字标签），选中图标包裹微信绿液态玻璃圆泡 */}
       <div
         className={
           liquid
@@ -15639,13 +15927,13 @@ function MainScreen({
             : 'shrink-0 border-t border-black/10 bg-[#F7F7F7] pb-[16px] dark:border-white/10 dark:bg-[#1A1A1A]'
         }
       >
-        <div className={liquid ? 'flex h-[50px] items-stretch px-1' : 'flex h-[46px] items-stretch'}>
+        <div className={liquid ? 'flex h-[54px] items-stretch px-1' : 'flex h-[46px] items-stretch'}>
           {(
             [
-              ['chats', '微信', <MessageCircle key="i" className="h-[23px] w-[23px]" strokeWidth={1.8} />, true],
-              ['contacts', '通讯录', <Users key="i" className="h-[23px] w-[23px]" strokeWidth={1.8} />, false],
-              ['discover', '发现', <Compass key="i" className="h-[23px] w-[23px]" strokeWidth={1.8} />, false],
-              ['me', '我', <User key="i" className="h-[23px] w-[23px]" strokeWidth={1.8} />, false],
+              ['chats', '微信', <MessageCircle key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, true],
+              ['contacts', '通讯录', <Users key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
+              ['discover', '发现', <Compass key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
+              ['me', '我', <User key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
             ] as Array<[Tab, string, React.ReactNode, boolean]>
           ).map(([id, label, icon, fillActive]) => {
             const active = tab === id;
@@ -15660,6 +15948,36 @@ function MainScreen({
                 }`}
                 aria-label={label}
               >
+                {liquid ? (
+                  /* 液态（参考图）：纯图标模式；选中 = 微信绿玻璃圆泡包裹白图标 */
+                  <span className={`relative flex h-full w-full items-center justify-center ${active ? 'text-white' : ''}`}>
+                    {active ? (
+                      <span className={`lg-tab-bubble flex h-[36px] w-[36px] items-center justify-center rounded-full ${fillActive ? '[&>svg]:fill-current' : ''}`}>
+                        {icon}
+                      </span>
+                    ) : (
+                      <span className="flex h-[36px] w-[36px] items-center justify-center">{icon}</span>
+                    )}
+                    {id === 'chats' && totalUnread > 0 && (
+                      <span
+                        data-testid="wx-tab-badge-chats"
+                        aria-label={`${totalUnread} 条未读`}
+                        className="absolute right-[26%] -top-[1px] flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ring-white/85 dark:ring-white/25"
+                      >
+                        {totalUnread > 99 ? '99+' : totalUnread}
+                      </span>
+                    )}
+                    {id === 'discover' && wxNoticeBadge.count > 0 && (
+                      <span
+                        data-testid="wx-tab-badge-discover"
+                        aria-label={`朋友圈 ${wxNoticeBadge.count} 条新消息`}
+                        className="absolute right-[26%] -top-[1px] flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ring-white/85 dark:ring-white/25"
+                      >
+                        {wxNoticeBadge.count > 99 ? '99+' : wxNoticeBadge.count}
+                      </span>
+                    )}
+                  </span>
+                ) : (
                 <span className={`relative ${active && fillActive ? '[&>svg]:fill-current' : ''}`}>
                   {icon}
                   {id === 'chats' && totalUnread > 0 && (
@@ -15685,14 +16003,15 @@ function MainScreen({
                     </span>
                   )}
                 </span>
-                <span className="text-[10px]">{label}</span>
+                )}
+                {!liquid && <span className="text-[10px]">{label}</span>}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* 长按会话菜单（QQ 同款竖向卡片：标为未读/置顶该聊天/不显示该聊天/删除该聊天；浅色白底黑字，点空白处关闭） */}
+      {/* 长按会话菜单（标为未读/置顶/不显示/删除；默认 = 浅色白底卡片，液态 = 乳白玻璃浮层无分割线，点空白处关闭） */}
       {ctx && (
         <div
           className="absolute inset-0 z-40"
@@ -15704,7 +16023,11 @@ function MainScreen({
             role="menu"
             aria-label="会话操作"
             data-testid="wx-session-ctx"
-            className="absolute z-50 min-w-[176px] overflow-hidden rounded-[12px] border border-black/[0.08] bg-white/95 text-black shadow-[0_12px_36px_rgba(0,0,0,0.18)] backdrop-blur-md dark:border-white/[0.08] dark:bg-[#4C4C4C]/95 dark:text-white dark:shadow-[0_12px_36px_rgba(0,0,0,0.35)]"
+            className={
+              liquid
+                ? 'lg-sheet absolute z-50 w-[min(70%,248px)] overflow-hidden rounded-[26px] py-[5px] text-[#1C1C1E] dark:text-white/90'
+                : 'absolute z-50 min-w-[176px] overflow-hidden rounded-[12px] border border-black/[0.08] bg-white/95 text-black shadow-[0_12px_36px_rgba(0,0,0,0.18)] backdrop-blur-md dark:border-white/[0.08] dark:bg-[#4C4C4C]/95 dark:text-white dark:shadow-[0_12px_36px_rgba(0,0,0,0.35)]'
+            }
             style={{ left: ctx.x, top: ctx.y }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -15716,9 +16039,13 @@ function MainScreen({
                 toggleUnread(ctx.contact.id);
                 closeCtx();
               }}
-              className="flex h-[46px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.05] dark:border-white/10 dark:active:bg-white/10"
+              className={
+                liquid
+                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold'
+                  : 'flex h-[46px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.05] dark:border-white/10 dark:active:bg-white/10'
+              }
             >
-              <MailOpen className="h-4 w-4 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+              <MailOpen className={liquid ? 'h-[21px] w-[21px] shrink-0' : 'h-4 w-4 shrink-0'} strokeWidth={2} aria-hidden="true" />
               {unreads[ctx.contact.id] ? '标为已读' : '标为未读'}
             </button>
             <button
@@ -15729,12 +16056,16 @@ function MainScreen({
                 togglePin(ctx.contact.id);
                 closeCtx();
               }}
-              className="flex h-[46px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.05] dark:border-white/10 dark:active:bg-white/10"
+              className={
+                liquid
+                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold'
+                  : 'flex h-[46px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.05] dark:border-white/10 dark:active:bg-white/10'
+              }
             >
               {pinSet.has(ctx.contact.id) ? (
-                <PinOff className="h-4 w-4 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+                <PinOff className={liquid ? 'h-[21px] w-[21px] shrink-0' : 'h-4 w-4 shrink-0'} strokeWidth={2} aria-hidden="true" />
               ) : (
-                <Pin className="h-4 w-4 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+                <Pin className={liquid ? 'h-[21px] w-[21px] shrink-0' : 'h-4 w-4 shrink-0'} strokeWidth={2} aria-hidden="true" />
               )}
               {pinSet.has(ctx.contact.id) ? '取消置顶' : '置顶该聊天'}
             </button>
@@ -15746,9 +16077,13 @@ function MainScreen({
                 hideSession(ctx.contact.id);
                 closeCtx();
               }}
-              className="flex h-[46px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.05] dark:border-white/10 dark:active:bg-white/10"
+              className={
+                liquid
+                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold'
+                  : 'flex h-[46px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.05] dark:border-white/10 dark:active:bg-white/10'
+              }
             >
-              <EyeOff className="h-4 w-4 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+              <EyeOff className={liquid ? 'h-[21px] w-[21px] shrink-0' : 'h-4 w-4 shrink-0'} strokeWidth={2} aria-hidden="true" />
               不显示该聊天
             </button>
             <button
@@ -15759,9 +16094,13 @@ function MainScreen({
                 deleteSession(ctx.contact.id);
                 closeCtx();
               }}
-              className="flex h-[46px] w-full items-center gap-2.5 px-4 text-left text-[15px] text-[#FA5151] active:bg-black/[0.05] dark:text-[#FF9A97] dark:active:bg-white/10"
+              className={
+                liquid
+                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold text-[#E5484D]'
+                  : 'flex h-[46px] w-full items-center gap-2.5 px-4 text-left text-[15px] text-[#FA5151] active:bg-black/[0.05] dark:text-[#FF9A97] dark:active:bg-white/10'
+              }
             >
-              <Trash2 className="h-4 w-4 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+              <Trash2 className={liquid ? 'h-[21px] w-[21px] shrink-0' : 'h-4 w-4 shrink-0'} strokeWidth={2} aria-hidden="true" />
               删除该聊天
             </button>
           </div>

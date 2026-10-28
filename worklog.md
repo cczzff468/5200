@@ -1372,3 +1372,28 @@ Work Log:
 
 Stage Summary:
 - 加号面板（微信/QQ 聊天页）在液态玻璃主题下升级为玻璃浮层 + 玻璃图标砖，与参考图第 6 张一致；默认主题零变化
+
+---
+Task ID: 44
+Agent: Z.ai Code (main)
+Task: 液态玻璃主题参考图精确复刻（第四十三轮）——用户反馈：微信聊天界面/主界面/「我」界面与参考图仍有差异，长按菜单、加号面板、点击头像的状态面板也要液态化
+
+Work Log:
+- [参考图分析] z-ai-web-dev-sdk createVision（glm-4.5v）逐张解析用户上传 5 张参考图：105318=聊天界面（三件分离玻璃顶栏+玻璃气泡+大圆角输入工具面板）、1793155743330=聊天列表主界面（头像+名字+在线左/标题中/圆玻璃+右；搜索胶囊；分类标签分段控件；分组玻璃大卡；悬浮 icon-only TabBar+选中绿泡）、1793155772752=「我」页（居中资料卡+状态/朋友数胶囊）、121317=加号菜单（乳白玻璃竖列 6 项：发起群聊/添加朋友/扫一扫/收付款/小程序/一键已读）、121245=长按菜单（乳白玻璃竖排宽幅列表）
+- [E2E 基建] agent-browser set viewport 390×844；IndexedDB 直种方案（u-e2e-owner 小柚+凡凡/墨墨/林阿姨 4 联系人+3 会话消息+未读+wx theme=liquid+登录态）；锁屏 pointer 序列解锁；发现并关闭 Next.js dev 悬浮指示器（next.config.ts devIndicators:false——黑色 N 圆钮遮挡 TabBar 验收）
+- [CSS] globals.css 新增第四十三轮类：lg-chip（圆形玻璃浮钮 白70%+blur20+发丝白描边+顶高光）、lg-title（标题胶囊）、lg-sheet（弹出面板 乳白78%+blur40+顶缘1.5px高光带+大柔影）、lg-menu-row（按下浅绿荧光）、lg-seg/lg-seg-on（分段控件+选中白底绿字）、lg-row、lg-tab-bubble（TabBar 选中微信绿玻璃圆泡）
+- [聊天页] 顶栏拆三件：返回 34px 圆钮/对方名 rounded-18 胶囊/更多 34px 圆钮（默认主题原样）；时间戳液态=纯文字浮层（默认=灰胶囊不变）；输入栏=lg-bar rounded-28 大圆角玻璃面板+语音/表情/加号 34px lg-chip 圆钮+输入胶囊 rounded-19 内凹（inset 阴影）+发送绿胶囊
+- [长按菜单] bubble-menu.tsx 新增 liquid 变体：竖排列表（图标左+文字右，行高 58px、宽 292px、rounded-28、黑图标 strokeWidth2+黑字 16.5 semibold、无分割线、按下浅绿荧光、无指向箭头）+ computeBubbleMenuPosLiquid 定位；wx/qq 传 liquid={liquid}（sms 无主题恒默认）
+- [状态卡] peer-status-card.tsx 液态化：lg-sheet rounded-24 玻璃卡+头部在线绿点 ping 动画+关闭钮 lg-chip+心声 lg-input 玻璃胶囊+换一换 lg-chip 玻璃胶囊+存入记忆深色玻璃主钮；useSettings 无条件调用修 hooks 规则（app==='sms' 短路了 useSettings 导致 conditional hook lint error）
+- [主界面] 顶栏液态=头像+名字+在线绿点胶囊（左，点击退出）+标题绝对居中胶囊+42px 圆玻璃+钮（右）；新增搜索胶囊（点进搜索页）+分类标签栏（全部/好友/工作/家人/群聊/服务号 分段控件过滤：好友=非群、工作=occupation/company、家人=relation 关键词、群聊、服务号=自聊）；全部/好友带未读数角标；会话列表=分组玻璃大卡（置顶/好友/群聊/服务号各一卡，组内 border-b 细分割线——参考图实为分组大卡而非每行一卡，VLM 裁剪分析确认）；liquidGroups useMemo 移到早退 return 之前修 "Rendered fewer hooks" 崩溃
+- [加号菜单] 液态=lg-sheet rounded-28 宽幅竖列 6 项（发起群聊/添加朋友/扫一扫/收付款/小程序/一键已读——新增后两项，一键已读=清全部未读+toast）；默认=原 #4C4C4C 深色下拉不变
+- [「我」页] 液态=居中资料卡（72px 头像居中+名字+微信号+「+状态」「N 个朋友」lg-search 胶囊标签）；默认=原左对齐名片不变
+- [TabBar] 液态=悬浮胶囊纯图标模式（去文字标签）+选中图标 36px lg-tab-bubble 微信绿玻璃圆泡包裹白图标+红点角标 ring-white/85；默认=原带文字标签不变
+- [会话长按菜单] 液态=lg-sheet rounded-26 玻璃浮层+lg-menu-row 无分割线+危险项红
+- [验收] tsc 仅 proactive-msg.ts 既有基线；eslint 改动小文件仅 peer-status-card 既有 set-state-in-effect 基线（generate() 在 HEAD 已存在）；agent-browser 全新会话 E2E：解锁→微信→分类过滤（家人=林阿姨/工作=凡凡+墨墨/全部=3 行）✓ 一键已读（角标清零）✓ 长按菜单 292px 玻璃列表 ✓ 头像状态卡生成 ✓ 加号菜单 6 项 ✓ 默认主题回归（tab 标签/深色下拉/左对齐名片/无搜索胶囊全部原样）✓ 浏览器 console 零错误；玻璃件计算样式抽查：lg-sheet backdrop=blur(40px) saturate(1.9) bg=rgba(255,255,255,0.78) ✓
+- [方法论] ①VLM 双图对比在小屏截图上会误判（标题居中实际 195=195 像素精确验证 vs VLM 说偏右）——关键结论必须 DOM/像素级复核；②参考图「每行独立卡」vs「分组大卡」歧义用裁剪放大+定向提问解决（实为分组大卡+组内细分割线）；③hooks 不能挂在条件早退之后（liquidGroups 初版放 TITLES 处导致 page 切换崩溃）
+
+Stage Summary:
+- 液态玻璃主题按 5 张参考图精确复刻完成：聊天页三件分离玻璃顶栏/纯文字时间戳/大圆角玻璃输入工具面板/竖排宽幅乳白玻璃长按菜单（292px）/玻璃状态卡/主界面头像胶囊三段顶栏+搜索胶囊+六分类分段控件（带过滤与未读角标）+分组玻璃大卡/加号菜单 6 项乳白玻璃竖列（新增小程序+一键已读）/「我」页居中资料卡+双胶囊标签/icon-only 悬浮 TabBar+微信绿玻璃选中泡；默认主题全部零变化（条件渲染隔离）
+- 关键文件：src/app/globals.css（lg-chip/lg-title/lg-sheet/lg-menu-row/lg-seg(-on)/lg-row/lg-tab-bubble）、wechat.tsx（顶栏/搜索/分类/分组列表/加号菜单/我页/TabBar/会话长按菜单）、bubble-menu.tsx（liquid 竖排变体+computeBubbleMenuPosLiquid）、peer-status-card.tsx（液态玻璃化）、qq.tsx（长按菜单 liquid 接线）、next.config.ts（devIndicators:false）
+- E2E 种子方案沉淀在 /home/z/tmp-analysis/seed-eval.js（4 联系人+3 会话+未读+液态主题+登录态）；玻璃材质=blur(40px)+白78%+顶缘高光带+大柔影，全部计算样式验证通过

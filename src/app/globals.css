@@ -927,3 +927,143 @@
   background: rgba(255, 255, 255, 0.07);
   box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.09);
 }
+
+/* ---------------------------------------------------------------------------
+ * 液态玻璃主题（第四十三轮）——参考图精确复刻补件
+ * ---------------------------------------------------------------------------
+ *  - 圆形玻璃浮钮（lg-chip）：返回/更多/加号/语音/表情等独立圆钮——
+ *    白 70% + blur20 + 发丝白描边 + 顶部高光 + 柔和冷灰投影；
+ *  - 标题胶囊（lg-title）：圆角矩形玻璃容器（居中标题）；
+ *  - 弹出面板（lg-sheet）：长按菜单/加号菜单等浮层——强模糊（blur40+）、
+ *    乳白 78%、超大圆角 24px、顶缘 1.5px 高光带、大面积柔影；
+ *  - 分段控件（lg-seg / lg-seg-on）：分类标签栏胶囊容器 + 选中态白底品牌色字；
+ *  - 行卡片（lg-row）：会话列表每行独立玻璃卡（去分割线，四周留白漂浮）；
+ *  - TabBar 选中泡（lg-tab-bubble）：选中图标背后的微信绿液态玻璃圆泡。
+ * ------------------------------------------------------------------------- */
+
+/* 圆形玻璃浮钮（正圆；px-圆角由调用方 rounded-full 提供） */
+.lg-chip {
+  background: rgba(255, 255, 255, 0.7);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.85),
+    inset 0 1px 1px rgba(255, 255, 255, 0.9),
+    0 3px 12px rgba(31, 38, 135, 0.1);
+}
+.dark .lg-chip {
+  background: rgba(32, 32, 38, 0.72);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.14),
+    inset 0 1px 1px rgba(255, 255, 255, 0.08),
+    0 3px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* 标题胶囊（圆角矩形玻璃容器，rounded-[18px] 由调用方提供） */
+.lg-title {
+  background: rgba(255, 255, 255, 0.66);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.8),
+    inset 0 1px 1px rgba(255, 255, 255, 0.85),
+    0 3px 14px rgba(31, 38, 135, 0.09);
+}
+.dark .lg-title {
+  background: rgba(32, 32, 38, 0.68);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.13),
+    0 3px 14px rgba(0, 0, 0, 0.42);
+}
+
+/* 弹出面板（菜单浮层）：强模糊乳白 + 超大圆角 + 顶缘高光带 + 大面积柔影 */
+.lg-sheet {
+  background: rgba(255, 255, 255, 0.78);
+  -webkit-backdrop-filter: blur(40px) saturate(190%);
+  backdrop-filter: blur(40px) saturate(190%);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.7),
+    0 8px 32px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(31, 38, 135, 0.06);
+}
+.dark .lg-sheet {
+  background: rgba(30, 30, 36, 0.86);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.16),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.12),
+    0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+/* 弹出面板菜单行（按下态：融入玻璃的浅绿荧光高亮） */
+.lg-menu-row {
+  transition: background-color 0.12s ease;
+}
+.lg-menu-row:active {
+  background-color: rgba(0, 200, 100, 0.15);
+}
+.dark .lg-menu-row:active {
+  background-color: rgba(46, 230, 125, 0.2);
+}
+
+/* 分段控件容器（分类标签栏胶囊） */
+.lg-seg {
+  background: rgba(255, 255, 255, 0.5);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  backdrop-filter: blur(18px) saturate(170%);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.7),
+    0 2px 10px rgba(31, 38, 135, 0.06);
+}
+.dark .lg-seg {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+}
+
+/* 分段控件选中态（白底实心小胶囊 + 品牌色文字 + 立体投影） */
+.lg-seg-on {
+  background: #ffffff;
+  box-shadow:
+    0 2px 6px rgba(31, 38, 135, 0.16),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.9);
+}
+.dark .lg-seg-on {
+  background: rgba(252, 252, 253, 0.22);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.16);
+}
+
+/* 会话列表行卡片（每行独立漂浮玻璃卡） */
+.lg-row {
+  background: rgba(255, 255, 255, 0.65);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.75),
+    0 4px 18px rgba(31, 38, 135, 0.06);
+}
+.dark .lg-row {
+  background: rgba(28, 28, 34, 0.62);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.1),
+    0 4px 18px rgba(0, 0, 0, 0.34);
+}
+
+/* TabBar 选中图标背后的品牌色液态玻璃圆泡 */
+.lg-tab-bubble {
+  background: linear-gradient(180deg, rgba(56, 214, 125, 0.92) 0%, rgba(7, 193, 96, 0.88) 100%);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.55),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.35),
+    0 3px 10px rgba(7, 193, 96, 0.38);
+}
+.dark .lg-tab-bubble {
+  background: linear-gradient(180deg, rgba(56, 214, 125, 0.88) 0%, rgba(7, 193, 96, 0.82) 100%);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.4),
+    0 3px 10px rgba(0, 0, 0, 0.5);
+}

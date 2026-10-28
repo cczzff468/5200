@@ -27,6 +27,7 @@ import {
 
 import { addressNameOf, type ContactRecord } from '@/lib/contacts';
 import { useSettings } from '@/lib/ios/store';
+import { isLiquidTheme } from '@/lib/ios/bubble-style';
 import { getActiveAccountIdFor } from '@/lib/ios/accounts';
 import { listContacts, ownerProfileFor } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
@@ -222,6 +223,10 @@ export default function PeerStatusCard({
 
   const peerName = contact ? contact.nickname || contact.name : '';
   const avatarShape = app === 'sms' ? 'rounded-full' : 'rounded-[10px]';
+  /** 液态玻璃主题（第四十三轮，参考图）：乳白强模糊玻璃卡 + 玻璃按钮（仅 wx/qq 有主题；sms 恒原生）。
+   *  useSettings 必须无条件调用（hooks 规则），主题判定只在使用处分流 */
+  const bubbleStyle = useSettings((s) => s.bubbleStyle);
+  const liquid = app !== 'sms' && isLiquidTheme(bubbleStyle, app);
 
   return (
     <AnimatePresence>
@@ -241,7 +246,11 @@ export default function PeerStatusCard({
             animate={{ scale: 1, opacity: 1, y: 0 }}
             exit={{ scale: 0.95, opacity: 0, y: 8 }}
             transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-            className="w-full max-w-[320px] overflow-hidden rounded-[20px] border border-border/60 bg-background/95 shadow-2xl backdrop-blur-xl"
+            className={
+              liquid
+                ? /* 液态：乳白强模糊玻璃卡（顶缘高光带 + 超大圆角） */ 'lg-sheet w-full max-w-[320px] overflow-hidden rounded-[24px]'
+                : 'w-full max-w-[320px] overflow-hidden rounded-[20px] border border-border/60 bg-background/95 shadow-2xl backdrop-blur-xl'
+            }
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-label={`${peerName}的状态卡`}
@@ -257,8 +266,14 @@ export default function PeerStatusCard({
               )}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[15px] font-semibold leading-tight">{peerName}</div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  {APP_LABEL[app]} · 此刻状态
+                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  {liquid && (
+                    <span aria-hidden="true" className="relative flex h-[7px] w-[7px]">
+                      <span className="absolute inline-flex h-full w-full rounded-full bg-[#07C160] opacity-40 animate-ping" />
+                      <span className="relative inline-flex h-[7px] w-[7px] rounded-full bg-[#07C160]" />
+                    </span>
+                  )}
+                  <span>{APP_LABEL[app]} · 此刻状态</span>
                 </div>
               </div>
               <button
@@ -266,7 +281,11 @@ export default function PeerStatusCard({
                 aria-label="关闭"
                 data-testid="peer-status-close"
                 onClick={onClose}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted/70 text-muted-foreground active:opacity-70"
+                className={
+                  liquid
+                    ? 'lg-chip flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-black/70 active:opacity-60 dark:text-white/70'
+                    : 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted/70 text-muted-foreground active:opacity-70'
+                }
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -319,8 +338,11 @@ export default function PeerStatusCard({
                       />
                     </div>
                   </div>
-                  {/* 心声 */}
-                  <div className="mt-4 rounded-xl bg-muted/50 p-3" data-testid="peer-status-inner-voice">
+                  {/* 心声（液态 = 内嵌玻璃胶囊） */}
+                  <div
+                    className={liquid ? 'lg-input mt-4 rounded-[16px] p-3' : 'mt-4 rounded-xl bg-muted/50 p-3'}
+                    data-testid="peer-status-inner-voice"
+                  >
                     <div className="text-[11px] font-medium text-muted-foreground">心声</div>
                     <p className="mt-1 text-[13px] leading-relaxed">{data.innerVoice}</p>
                   </div>
@@ -332,13 +354,17 @@ export default function PeerStatusCard({
                     {openedAt && <StatusRow icon={Clock} label="时间" value={fmtDate(openedAt)} />}
                   </div>
                 </div>
-                {/* 底部操作：换一换（重新生成）/ 存入记忆（用户主动才写入） */}
-                <div className="flex items-center gap-2 border-t border-border/60 px-4 py-3">
+                {/* 底部操作：换一换（重新生成）/ 存入记忆（用户主动才写入）；液态 = 玻璃胶囊 + 深色玻璃主钮 */}
+                <div className={liquid ? 'flex items-center gap-2.5 px-4 pb-4 pt-1' : 'flex items-center gap-2 border-t border-border/60 px-4 py-3'}>
                   <button
                     type="button"
                     data-testid="peer-status-refresh"
                     onClick={() => setNonce((n) => n + 1)}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-full bg-muted py-2 text-[13px] font-medium active:opacity-70"
+                    className={
+                      liquid
+                        ? 'lg-chip flex flex-1 items-center justify-center gap-1.5 rounded-full py-2.5 text-[13px] font-medium text-black/85 transition-transform active:scale-[0.97] dark:text-white/85'
+                        : 'flex flex-1 items-center justify-center gap-1.5 rounded-full bg-muted py-2 text-[13px] font-medium active:opacity-70'
+                    }
                   >
                     <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                     换一换
@@ -348,8 +374,14 @@ export default function PeerStatusCard({
                     data-testid="peer-status-save"
                     disabled={saved}
                     onClick={saveToMemory}
-                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-[13px] font-medium active:opacity-70 ${
-                      saved ? 'bg-muted/60 text-muted-foreground' : 'bg-foreground text-background'
+                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-full py-2.5 text-[13px] font-medium active:opacity-70 ${
+                      liquid
+                        ? saved
+                          ? 'bg-black/10 text-black/45 dark:bg-white/10 dark:text-white/45'
+                          : 'bg-black/85 text-white shadow-[0_4px_14px_rgba(0,0,0,0.25)] dark:bg-white/90 dark:text-black'
+                        : saved
+                          ? 'bg-muted/60 text-muted-foreground'
+                          : 'bg-foreground text-background'
                     }`}
                   >
                     {saved ? (
