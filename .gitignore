@@ -54,3 +54,8 @@ server.log
 /skills/
 # subagent temp tool results
 tool-results/
+
+# environment & database (do not commit)
+.env
+db/*.db
+db/*.db-journal
