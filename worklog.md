@@ -1567,3 +1567,39 @@ Stage Summary:
 - 灰色当前选中胶囊：58×32 → 68×38（实测 68×38，bg black/7%）
 - 转写面板圆角跟随气泡：六格矩阵实测通过——wx 默认+色/七彩/原生=4px、毛玻璃/液态=999px、QQ 七彩=14px，逐格与气泡一致
 - 关键文件：wx-icons.tsx、wechat.tsx、bubble-style.ts、voice-bubble.tsx；截图证据 tmp-analysis/e2e49/
+
+---
+Task ID: 50 (主控)
+Agent: 主控 Agent（Z.ai Code）
+Task: 第50轮修正——QQ装扮气泡圆角18px+弯钩尾巴更细；信息App新增「新版」主题（聊天界面按用户参考图1:1复刻）
+
+Work Log:
+- [需求解析] ①QQ装扮（自定义色/七彩）气泡圆角再圆一点 ②QQ小尾巴再细一点 ③信息App主题界面添加「新版」主题——气泡/顶栏头像/底部输入框完全按参考图 IMG_20261028_174850.jpg（iOS 26 iMessage 截图），只改聊天界面
+- [参考图采证] 1076×2336 逐像素采样：我方气泡亮蓝 #45B6FC（多点一致，比 #007AFF 更亮更透）、对方 #E9E9E9、背景纯白、输入行白胶囊+白圆加号带柔影、麦克风 #8E8E93 在胶囊右内、顶栏居中大头像(~52px)+粗黑名字+灰箭头+「iMessage 信息」副标+返回键旁黑底白字未读徽标、时间戳「今天 HH:MM」、文字约17px
+- [bubble-style.ts] QQ装扮圆角 14→18px（rainbow 与 default+色两分支同改）+ DECOR_BUBBLE_RADIUS.qq 18px（转写面板跟随）；BubbleTheme 增加 'new'；BUBBLE_THEMES 权威清单 + THEMES_OF_APP 分 App 子集（wx/qq=默认+液态、sms=默认+新版）；BUBBLE_THEME_LABEL.new=「新版」；normalizeAppStyle 接受 new；新增 isNewImTheme()
+- [bubble-tail.tsx] 弯钩小尾巴横向压扁 78%（path transform scale(0.78 1) + 偏移 -8→-6.6 保根部 ~2px 搭接；我方合成 scaleX(-0.78)）——整体变细、尖端突出量同步缩短，高度不变
+- [bubble-style-settings.tsx] 主题区对所有 App 显示（信息 App 新增）；THEMES_OF_APP 取子集；ThemeThumb 新增 'new' 分支（纯白聊天幕布+居中头像点+粗名字条+iMessage 副标线+左灰右亮蓝迷你气泡+底部灰加号圆+白胶囊）；toast 三态文案；信息 App 脚注改「切换主题只改聊天界面」
+- [chat.tsx] ChatView 全面接线 newIm（bubbleStyle.sms.theme==='new'）：
+  * selfBlue = newIm ? #45B6FC : #007AFF（语音气泡/发送钮/tts高亮共用）
+  * 根容器白底；顶栏条件渲染：新版 = 纯白实底 + 居中52px头像 + 17px粗体名字+灰箭头 + 「iMessage 信息」副标 + 左侧返回+黑底未读徽标（新 prop headerUnread，ChatApp 传小助手 unreadN）+ 右侧摄像机；默认栏原样保留
+  * 文本气泡：新版我方 #45B6FC 白字 / 对方 #E9E9EB 黑字（暗色 #2C2C2E），字号 15→17px，组尾 5px 小圆角与弯钩尾巴随色；气泡列上限 76%→70%（4 处）
+  * 语音气泡：装扮透传扩展——新版对方底 bg-[#E9E9EB]! dark:bg-[#2C2C2E]!（类方式带暗色变体）
+  * 输入中指示器/瞬时条（blockreq/引用/多选）：新版纯白底
+  * DaySeparator：newIm 单行「今天 HH:MM」（fmtNewStamp），默认态 iMessage 双行不变
+  * 输入栏：新版 = 白底无边线 + 加号白圆(黑+号+0.14柔影) + 胶囊 rounded-full 白底(0.1柔影) + 麦克风 #8E8E93 + 发送钮亮蓝；tts/语音模式高亮随 selfBlue
+- [静态检查] bunx tsc 仅 proactive-msg.ts 既有基线；eslint chat.tsx 15 错全为 HEAD 既有（git stash 对照验证）；其余三文件 exit 0
+- [E2E Agent Browser 500×701]（seed50.js：爸比联系人 + ios-chat-msgs:c:c-fanfan 五条消息含语音转写 + qq七彩 + sms新版主题）：
+  * QQ七彩：文本气泡/语音气泡/转写面板全部 18px ✓ 彩虹循环色 ✓ 弯钩尾巴 path scale(0.78 1) + left-6.6px + 宽10 ✓
+  * 信息新版顶栏：白底 + 头像 52×52 + 「爸比|iMessage 信息」 + 黑底徽标「1」(bg rgb(0,0,0)) ✓
+  * 新版气泡：我方 rgb(69,182,252)=#45B6FC、对方 rgb(233,233,235)=#E9E9EB、radius 18px+组尾5px、17px 字号 ✓；语音气泡对方 #E9E9EB ✓
+  * 新版输入栏：加号白圆 shadow 0.14、胶囊白底 full 圆角 shadow 0.1、麦克风 #8E8E93 ✓；时间戳「今天 04:33」✓
+  * 主题页：信息 App 两格（默认主题/新版），新版选中 aria-pressed=true，ThemeThumb 缩略图含 #45B6FC 迷你气泡（像素复核 72 点）✓
+  * 双向切换：新版→默认（气泡回 #007AFF、顶栏回手机号+毛玻璃）→再切新版（#45B6FC+副标题）全部即时生效 ✓
+  * 像素复核：渲染截图我方气泡 #5EC0FC（采样点 AA 混合）/对方 #E1E1E1（DOM 计算值精确 #45B6FC/#E9E9EB）
+  * VLM 视觉复核因账号级 429 限流不可用（多次等待重试均失败）——以 DOM 计算样式+像素采样双重证据替代，数值全部精确命中
+- [环境] agent-browser 独立会话 IndexedDB（用户预览面板为另一浏览器实例，不受种子数据影响）
+
+Stage Summary:
+- QQ装扮气泡（自定义色+七彩）圆角 14→18px，转写面板同步 18px；弯钩尾巴横向 78% 更细
+- 信息App主题界面新增「新版」主题（与默认二选一）：聊天界面 1:1 复刻用户参考图——居中52px头像顶栏+粗名字+「iMessage 信息」副标+黑底未读徽标、#45B6FC/#E9E9EB 气泡(18px+组尾5px+弯钩尾巴+17px字)、白底输入栏(白圆加号+全圆角白胶囊+灰麦克风)、「今天 HH:MM」时间戳；会话列表等其他页面不变；主题双向切换即时生效
+- 关键文件：bubble-style.ts、bubble-tail.tsx、bubble-style-settings.tsx、chat.tsx；截图证据 tmp-analysis/e2e50/

@@ -672,7 +672,22 @@ function useLongPress(onFire: (pos: LongPressPos) => void, ms = 500) {
 
 // ---------------- 日期分隔行（iMessage 风格） ----------------
 
-function DaySeparator({ time }: { time: number }) {
+/** 新版主题时间戳（第五十轮，参考图同款）：单行「今天 HH:MM」样式（今天带前缀；昨天/周内/更早回退既有文案） */
+function fmtNewStamp(t: number): string {
+  const d = new Date(t);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return `今天 ${fmtTime(t)}`;
+  return fmtChatStamp(t);
+}
+
+function DaySeparator({ time, newIm }: { time: number; newIm?: boolean }) {
+  if (newIm) {
+    return (
+      <div className="my-3 flex justify-center">
+        <span className="text-[11px] leading-none text-black/45 dark:text-white/50">{fmtNewStamp(time)}</span>
+      </div>
+    );
+  }
   return (
     <div className="my-3.5 flex flex-col items-center gap-[3px]">
       <span className="text-[11px] font-semibold tracking-wide text-muted-foreground">iMessage</span>
@@ -1054,6 +1069,8 @@ function ChatView({
   onSaveRelation: onSaveRelationProp,
   /** 打开角色状态卡（点击顶栏对方头像时回调；仅联系人会话传入，小助手会话不弹） */
   onOpenPeerStatus,
+  /** 其他会话未读数（第五十轮新版主题：顶栏返回键旁的黑底未读徽标，参考图同款；不传 = 不显示） */
+  headerUnread,
 }: {
   /** 会话存储键：'assistant' | 'c:<contactId>'（key 变化 = 组件重挂载，互不串扰） */
   storageKey: string;
@@ -1079,6 +1096,8 @@ function ChatView({
   onSaveRelation?: (v: string) => void;
   /** 打开角色状态卡（仅联系人会话传入；小助手会话不传 → 顶栏头像不可点） */
   onOpenPeerStatus?: () => void;
+  /** 其他会话未读数（第五十轮新版主题：顶栏返回键旁的黑底未读徽标；不传 = 不显示） */
+  headerUnread?: number;
 }) {
   // Task 40 草稿箱：惰性初始化恢复本会话未发送草稿（ChatView 按 storageKey keyed 重挂载，
   // 小助手 assistant 与各联系人会话键天然隔离互不干扰）
@@ -1119,6 +1138,13 @@ function ChatView({
   const [themeOpen, setThemeOpen] = useState(false);
   /** 聊天气泡装扮配置（信息 App 独立槽位，与微信/QQ 隔离）：全部气泡（文本/语音/输入中指示器+尾巴）实时跟随 */
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
+  /* 第五十轮（用户指定）：信息 App 新版主题（用户参考图 IMG_20261028_174850.jpg 同款）——
+     只接管聊天界面：顶栏（居中大头像+粗名字+iMessage 副标+未读徽标）、气泡（亮蓝 #45B6FC/浅灰 #E9E9EB）、
+     输入栏（白底+白圆加号+白胶囊）、背景纯白、时间戳「今天 HH:MM」；会话列表等其他页面不变。
+     装扮（kind/自定义色）仍由气泡装扮系统管——新版主题下若有装扮照常叠加（参考微信液态主题口径） */
+  const newIm = bubbleStyle.sms?.theme === 'new';
+  /** 新版主题我方蓝（参考图实测像素 #45B6FC，比原生 #007AFF 更亮更清透）；语音气泡/发送钮/尾巴共用 */
+  const selfBlue = newIm ? '#45B6FC' : SELF_BLUE;
   /** 关系本地显示值（多账号关系感知）：保存后乐观更新（重进会话/切号后重读） */
   const [relationLocal, setRelationLocal] = useState<string | null>(null);
   /** 图片全屏预览（点图片气泡打开；自动生图/历史图片共用；点任意处关闭） */
@@ -3113,8 +3139,67 @@ function ChatView({
   const lastUserIdx = msgs.reduce((acc, m, idx) => (m.role === 'user' ? idx : acc), -1);
 
   return (
-    <div ref={pageRef} className="relative flex h-full min-h-0 flex-col">
-      {/* 顶栏：返回箭头 + 居中头像/手机号（不显示名字）+ 摄像机图标（聊天设置入口） */}
+    <div
+      ref={pageRef}
+      className={`relative flex h-full min-h-0 flex-col ${newIm ? 'bg-white dark:bg-[#1C1C1E]' : ''}`}
+    >
+      {newIm ? (
+        /* 第五十轮新版主题顶栏（用户参考图同款）：纯白实底（无毛玻无分割线）+
+           居中大头像（52px）+ 粗黑名字右随灰箭头 + 「iMessage 信息」灰副标；
+           左侧返回键 + 黑底未读徽标（其他会话未读数）；右侧摄像机（聊天设置入口）——
+           侧栏元素垂直对齐头像中心（参考图布局） */
+        <div className="z-20 shrink-0 bg-white pt-[54px] dark:bg-[#1C1C1E]">
+          <div className="relative flex flex-col items-center px-14 pb-2.5 pt-1">
+            {/* 左：返回 + 未读徽标（黑底白字，参考图同款；无未读不显示） */}
+            <div className="absolute left-1 top-0 flex h-[56px] items-center">
+              <IOSBackButton label="" onClick={onBack} />
+              {!!headerUnread && headerUnread > 0 && (
+                <span
+                  data-testid="sms-header-unread"
+                  aria-label={`其他会话 ${headerUnread} 条未读`}
+                  className="-ml-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-black px-[5px] text-[11px] font-semibold leading-none text-white dark:bg-white dark:text-black"
+                >
+                  {headerUnread > 99 ? '99+' : headerUnread}
+                </span>
+              )}
+            </div>
+            {/* 居中：大头像 + 粗名字随灰箭头 + iMessage 副标（点击头像/名字打开角色状态卡，与默认顶栏同行为） */}
+            <div
+              className={`flex flex-col items-center ${
+                onOpenPeerStatus ? 'cursor-pointer transition-opacity active:opacity-60' : ''
+              }`}
+              onClick={onOpenPeerStatus}
+              role={onOpenPeerStatus ? 'button' : undefined}
+              aria-label={onOpenPeerStatus ? '查看对方状态' : undefined}
+              data-testid="sms-peer-avatar"
+            >
+              {peerAvatarSrc ? (
+                <img src={peerAvatarSrc} alt="" className="h-[52px] w-[52px] rounded-full object-cover" />
+              ) : (
+                <DefaultAvatar size={52} />
+              )}
+              <div className="mt-1 flex items-center gap-0.5 leading-none">
+                <span className="text-[17px] font-bold tracking-tight text-black dark:text-white">{peerLabel}</span>
+                <ChevronRight className="h-3.5 w-3.5 text-black/40 dark:text-white/40" strokeWidth={2.5} aria-hidden="true" />
+              </div>
+              <span className="mt-[3px] text-[12px] leading-none text-black/45 dark:text-white/50">iMessage 信息</span>
+            </div>
+            {/* 右：摄像机（聊天设置入口） */}
+            <div className="absolute right-1 top-0 flex h-[56px] items-center">
+              <button
+                type="button"
+                aria-label="聊天设置"
+                data-testid="sms-chat-settings-entry"
+                onClick={() => setSettingsOpen(true)}
+                className="flex h-9 w-9 items-center justify-center rounded-full text-black/85 active:bg-black/5 dark:text-white/85 dark:active:bg-white/10"
+              >
+                <Video className="h-[22px] w-[22px]" strokeWidth={1.8} />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+      /* 默认顶栏：返回箭头 + 居中头像/手机号（不显示名字）+ 摄像机图标（聊天设置入口） */
       <div className="z-20 shrink-0 border-b border-white/60 bg-white/60 pt-[54px] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]">
         <div className="relative flex h-[64px] items-center px-3">
           <IOSBackButton label="" onClick={onBack} />
@@ -3150,6 +3235,7 @@ function ChatView({
           </div>
         </div>
       </div>
+      )}
 
       {/* 消息流 */}
       <div
@@ -3205,7 +3291,7 @@ function ChatView({
                   : undefined
               }
             >
-              {newDay && <DaySeparator time={m.time} />}
+              {newDay && <DaySeparator time={m.time} newIm={newIm} />}
               {lineOnly ? (
                 /* 整条只有动作描写（或关闭态过滤后无正文 / 空白脏数据）：渲染为居中灰字行；多选模式给勾选圈行保证可勾选 */
                 selectMode && !m.recalled && !m.sys && !m.blkreq ? (
@@ -3292,7 +3378,7 @@ function ChatView({
                     </span>
                   )}
                   {mine && (m.replyFail ? failBadgeOf(m) : blockedIconOf(m))}
-                  <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                  <div className={`flex ${newIm ? 'max-w-[70%]' : 'max-w-[76%]'} flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div {...bubblePress}>
                       <VoiceMsgBubble
                         msgId={m.id}
@@ -3307,10 +3393,17 @@ function ChatView({
                         theme="im"
                         // 聊天气泡装扮：语音气泡与文本气泡同一视觉（纯色/七彩换底色随尾巴色、
                         // 毛玻璃/液态胶囊收窄 34px 无尾巴）；无装扮时保持原生（我方 iOS 蓝底）
-                        bubbleClassName={bvis.override ? bvis.className : undefined}
+                        bubbleClassName={
+                          bvis.override
+                            ? bvis.className
+                            : /* 新版主题：语音气泡与文本气泡同配色（我方亮蓝经 style；对方浅灰用类以带暗色变体） */
+                              newIm && !mine
+                              ? 'bg-[#E9E9EB]! dark:bg-[#2C2C2E]!'
+                              : undefined
+                        }
                         decorated={bvis.override}
                         hideTail={bvis.override && bvis.tail === 'none'}
-                        style={bvis.override ? bvis.style : mine ? { backgroundColor: SELF_BLUE } : undefined}
+                        style={bvis.override ? bvis.style : mine ? { backgroundColor: selfBlue } : undefined}
                         decorApp="sms"
                         msgIndex={i}
                       />
@@ -3354,7 +3447,7 @@ function ChatView({
                     </span>
                   )}
                   {mine && (m.replyFail ? failBadgeOf(m) : blockedIconOf(m))}
-                  <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                  <div className={`flex ${newIm ? 'max-w-[70%]' : 'max-w-[76%]'} flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div {...bubblePress}>
                       <button
                         type="button"
@@ -3411,7 +3504,7 @@ function ChatView({
                     </span>
                   )}
                   {mine && (m.replyFail ? failBadgeOf(m) : blockedIconOf(m))}
-                  <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                  <div className={`flex ${newIm ? 'max-w-[70%]' : 'max-w-[76%]'} flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div {...bubblePress}>
                       <TextCardBubble
                         text={m.card.text}
@@ -3461,7 +3554,7 @@ function ChatView({
                 {/* 拉黑图标（红色 !）：我的消息在气泡左侧 */}
                 {mine && (m.replyFail ? failBadgeOf(m) : blockedIconOf(m))}
                 {/* 内层收缩为气泡宽度（上限76%），让「已送达」能对齐气泡左缘 */}
-                <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                <div className={`flex ${newIm ? 'max-w-[70%]' : 'max-w-[76%]'} flex-col ${mine ? 'items-end' : 'items-start'}`}>
                   {/* 引用块（与微信/QQ 同款：气泡上方独立的半透明圆角胶囊，小圆角 + 细黑边框） */}
                   {m.quote && (
                     <div
@@ -3476,15 +3569,20 @@ function ChatView({
                   <div
                       {...bubblePress}
                       data-testid="sms-text-bubble"
-                      className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-2 text-[15px] leading-[1.45] ${
+                      className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-2 ${newIm ? 'text-[17px] leading-[1.42]' : 'text-[15px] leading-[1.45]'} ${
                         bvis.override
                           ? `${bvis.className} ${
                               // 纯色/七彩装扮：保留原生气泡圆角与组尾小圆角（信息端 18px 不覆盖——与原生完全一致）
                               lastOfGroup ? (mine ? 'rounded-br-[5px]' : 'rounded-bl-[5px]') : ''
                             }`
-                          : mine
-                            ? `bg-[#007AFF] text-white ${lastOfGroup ? 'rounded-br-[5px]' : ''}`
-                            : `bg-muted text-foreground ${lastOfGroup ? 'rounded-bl-[5px]' : ''}`
+                          : newIm
+                            ? /* 新版主题原生气泡（参考图实测）：我方亮蓝 #45B6FC 白字 / 对方浅灰 #E9E9EB 黑字 */
+                              mine
+                              ? `bg-[#45B6FC] text-white ${lastOfGroup ? 'rounded-br-[5px]' : ''}`
+                              : `bg-[#E9E9EB] text-black dark:bg-[#2C2C2E] dark:text-white ${lastOfGroup ? 'rounded-bl-[5px]' : ''}`
+                            : mine
+                              ? `bg-[#007AFF] text-white ${lastOfGroup ? 'rounded-br-[5px]' : ''}`
+                              : `bg-muted text-foreground ${lastOfGroup ? 'rounded-bl-[5px]' : ''}`
                       }`}
                       style={bvis.override ? bvis.style : undefined}
                     >
@@ -3494,7 +3592,11 @@ function ChatView({
                         <span
                           aria-hidden="true"
                           className={`absolute -left-[6px] bottom-0 h-[18px] w-[14px] ${
-                            bvis.override && bvis.tailColor ? '' : 'bg-muted'
+                            bvis.override && bvis.tailColor
+                              ? ''
+                              : newIm
+                                ? 'bg-[#E9E9EB] dark:bg-[#2C2C2E]'
+                                : 'bg-muted'
                           }`}
                           style={{ clipPath: TAIL_CLIP_LEFT, ...(bvis.override && bvis.tailColor ? { backgroundColor: bvis.tailColor } : {}) }}
                         />
@@ -3503,7 +3605,7 @@ function ChatView({
                         <span
                           aria-hidden="true"
                           className={`absolute -right-[6px] bottom-0 h-[18px] w-[14px] ${
-                            bvis.override && bvis.tailColor ? '' : 'bg-[#007AFF]'
+                            bvis.override && bvis.tailColor ? '' : newIm ? 'bg-[#45B6FC]' : 'bg-[#007AFF]'
                           }`}
                           style={{ clipPath: TAIL_CLIP_RIGHT, ...(bvis.override && bvis.tailColor ? { backgroundColor: bvis.tailColor } : {}) }}
                         />
@@ -3571,14 +3673,16 @@ function ChatView({
           >
             <div
               className={`relative rounded-[18px] px-4 py-3.5 ${
-                tvis.override ? tvis.className : 'bg-muted'
+                tvis.override ? tvis.className : newIm ? 'bg-[#E9E9EB] dark:bg-[#2C2C2E]' : 'bg-muted'
               } ${tvis.override ? '' : 'rounded-bl-[5px]'}`}
               style={tvis.override ? tvis.style : undefined}
             >
               {tvis.tail !== 'none' && (
               <span
                 aria-hidden="true"
-                className={`absolute -left-[6px] bottom-0 h-[18px] w-[14px] ${tvis.override && tvis.tailColor ? '' : 'bg-muted'}`}
+                className={`absolute -left-[6px] bottom-0 h-[18px] w-[14px] ${
+                  tvis.override && tvis.tailColor ? '' : newIm ? 'bg-[#E9E9EB] dark:bg-[#2C2C2E]' : 'bg-muted'
+                }`}
                 style={{ clipPath: TAIL_CLIP_LEFT, ...(tvis.override && tvis.tailColor ? { backgroundColor: tvis.tailColor } : {}) }}
               />
               )}
@@ -3601,7 +3705,7 @@ function ChatView({
       {/* 输入栏（多选模式下变为批量删除操作栏）：引用条 + 圆钮 / iMessage输入框（麦克风↔发送） */}
       {selectMode ? (
         <div
-          className="z-20 flex shrink-0 items-center justify-between border-t border-white/60 bg-white/60 px-6 pb-[30px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
+          className={`z-20 flex shrink-0 items-center justify-between ${newIm ? 'border-t border-black/[0.06] bg-white dark:border-white/[0.08] dark:bg-[#1C1C1E]' : 'border-t border-white/60 bg-white/60 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]'} px-6 pb-[30px] pt-2`}
           data-testid="sms-select-bar"
         >
           <button type="button" data-testid="sms-select-cancel" onClick={exitSelect} className="text-[15px] text-muted-foreground">
@@ -3661,7 +3765,7 @@ function ChatView({
           </div>
         ) : (
           <div
-            className="z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-3 py-1.5 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
+            className={`z-20 flex shrink-0 items-center gap-2 ${newIm ? 'border-t border-black/[0.06] bg-white dark:border-white/[0.08] dark:bg-[#1C1C1E]' : 'border-t border-white/60 bg-white/60 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]'} px-3 py-1.5`}
             data-testid="sms-user-blockreq-bar"
           >
             <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-muted-foreground">你已被「{peerLabel}」拉黑，无法发送消息</p>
@@ -3679,7 +3783,7 @@ function ChatView({
       {/* 引用条（长按菜单「引用」后显示在输入栏上方；发送时挂到新消息上） */}
       {quote && (
         <div
-          className="z-20 flex shrink-0 items-start gap-2 border-t border-white/60 bg-white/60 px-3 py-1.5 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
+          className={`z-20 flex shrink-0 items-start gap-2 ${newIm ? 'border-t border-black/[0.06] bg-white dark:border-white/[0.08] dark:bg-[#1C1C1E]' : 'border-t border-white/60 bg-white/60 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]'} px-3 py-1.5`}
           data-testid="sms-quote-bar"
         >
           <p className="min-w-0 flex-1 truncate text-[12px] leading-[1.4] text-muted-foreground">
@@ -3703,7 +3807,12 @@ function ChatView({
           else if (pendingImgs.length > 0) sendPendingImages();
           else dispatchBatch();
         }}
-        className="z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-2.5 pb-[30px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
+        className={
+          newIm
+            ? /* 第五十轮新版主题输入栏（参考图同款）：纯白实底无边框线（无毛玻璃），胶囊与加号钮自带投影分层 */
+              'z-20 flex shrink-0 items-center gap-2 bg-white px-2.5 pb-[30px] pt-2 dark:bg-[#1C1C1E]'
+            : 'z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-2.5 pb-[30px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]'
+        }
       >
         {/* 加号（更多功能）：相机/图片/文字图片面板；iOS 同款灰色圆圈内加号，展开时旋转 45°（对齐微信加号交互） */}
         <button
@@ -3712,11 +3821,23 @@ function ChatView({
           aria-expanded={plusOpen}
           data-testid="sms-plus-button"
           onClick={() => setPlusOpen((v) => !v)}
-          className="flex h-[33px] w-[33px] shrink-0 items-center justify-center rounded-full bg-white/60 text-muted-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-all active:opacity-60 dark:bg-white/[0.08] dark:ring-white/[0.1]"
+          className={
+            newIm
+              ? /* 新版主题加号钮（参考图同款）：白圆 + 黑加号 + 柔和投影（无描边无玻璃） */
+                'flex h-[33px] w-[33px] shrink-0 items-center justify-center rounded-full bg-white text-black shadow-[0_1px_5px_rgba(0,0,0,0.14)] transition-all active:opacity-60 dark:bg-white/[0.12] dark:text-white dark:shadow-[0_1px_5px_rgba(0,0,0,0.4)]'
+              : 'flex h-[33px] w-[33px] shrink-0 items-center justify-center rounded-full bg-white/60 text-muted-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-all active:opacity-60 dark:bg-white/[0.08] dark:ring-white/[0.1]'
+          }
         >
           <Plus className={`h-[19px] w-[19px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={2} aria-hidden="true" />
         </button>
-        <div className="flex min-h-[36px] min-w-0 flex-1 items-center rounded-[18px] bg-white/60 pl-3.5 pr-1.5 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
+        <div
+          className={
+            newIm
+              ? /* 新版主题输入胶囊（参考图同款）：白底胶囊 + 柔和投影分层（无描边无玻璃），占位灰字 + 右内麦克风 */
+                'flex min-h-[36px] min-w-0 flex-1 items-center rounded-full bg-white pl-3.5 pr-1.5 shadow-[0_1px_5px_rgba(0,0,0,0.10)] dark:bg-white/[0.10] dark:shadow-[0_1px_5px_rgba(0,0,0,0.35)]'
+              : 'flex min-h-[36px] min-w-0 flex-1 items-center rounded-[18px] bg-white/60 pl-3.5 pr-1.5 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
+          }
+        >
           {voiceMode ? (
             /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
             <VoiceHoldBar rec={rec} testId="sms-voice-hold" />
@@ -3757,7 +3878,7 @@ function ChatView({
                   showToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
                 }}
                 className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${
-                  ttsSend ? 'text-[#007AFF]' : 'text-black/40 dark:text-white/40'
+                  ttsSend ? (newIm ? 'text-[#45B6FC]' : 'text-[#007AFF]') : 'text-black/40 dark:text-white/40'
                 }`}
               >
                 <AudioLines className="h-[16px] w-[16px]" strokeWidth={ttsSend ? 2.2 : 1.8} aria-hidden="true" />
@@ -3770,7 +3891,7 @@ function ChatView({
                 type="submit"
                 aria-label={ttsSend ? '发送（转语音）' : input.trim() ? '发送' : '发送（让对方回复）'}
                 className="flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full text-white transition active:scale-90 disabled:opacity-40"
-                style={{ backgroundColor: SELF_BLUE }}
+                style={{ backgroundColor: selfBlue }}
               >
                 {streaming ? (
                   <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.4} aria-hidden="true" />
@@ -3791,7 +3912,7 @@ function ChatView({
                 setVoiceMode((v) => !v);
               }}
               className={`mx-1 flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full transition-colors active:opacity-70 ${
-                voiceMode ? 'bg-[#007AFF] text-white' : 'text-muted-foreground'
+                voiceMode ? (newIm ? 'bg-[#45B6FC] text-white' : 'bg-[#007AFF] text-white') : newIm ? 'text-[#8E8E93]' : 'text-muted-foreground'
               }`}
             >
               <Mic className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
@@ -5092,6 +5213,7 @@ export default function ChatApp() {
           storageKey={chatSession.key}
           initialMsgs={isAssistant ? SEED_MSGS.map((m) => ({ ...m, time: Date.now() })) : []}
           onMsgsChange={isAssistant ? setAssistantMsgs : undefined}
+          headerUnread={isAssistant ? 0 : unreadN}
           peer={chatSession.peer}
           systemPrompt={chatSession.systemPrompt}
           onBack={() => setView('main')}

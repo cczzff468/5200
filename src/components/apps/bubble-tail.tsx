@@ -28,6 +28,11 @@ export function BubbleTail({
   top?: number | string;
 }) {
   const theirs = side === 'theirs';
+  /* 第五十轮（用户指定「小尾巴再细一点」）：同一弯钩几何横向压扁到 78%——
+     弯钩整体变细、尖端突出量同步缩短（0.78×），根部与气泡的搭接仍保持 ~2px 无缝
+     （偏移由 -8 收到 -6.6：缩后根缘 10×0.78=7.8px，-6.6+7.8=1.2≈原 2px 搭接量级）。
+     我方镜像合成 scaleX(-0.78)（翻转 + 压扁一步完成）。高度（纵向）不变。 */
+  const SLIM = 0.78;
   return (
     <svg
       aria-hidden="true"
@@ -37,11 +42,11 @@ export function BubbleTail({
       viewBox="0 0 11 14"
       style={
         theirs
-          ? { left: -8, top, transform: 'none' }
-          : { right: -8, top, transform: 'scaleX(-1)' }
+          ? { left: -6.6, top, transform: 'none' }
+          : { right: -6.6, top, transform: `scaleX(-${SLIM})` }
       }
     >
-      <path d={BUBBLE_TAIL_PATH} fill={color} />
+      <path d={BUBBLE_TAIL_PATH} fill={color} transform={`scale(${SLIM} 1)`} />
     </svg>
   );
 }

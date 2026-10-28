@@ -29,7 +29,7 @@ import { useSettings } from '@/lib/ios/store';
 import {
   BUBBLE_KIND_LABEL,
   BUBBLE_THEME_LABEL,
-  BUBBLE_THEMES,
+  THEMES_OF_APP,
   NATIVE_BUBBLE,
   PRESET_SWATCHES,
   bubbleVisual,
@@ -179,11 +179,45 @@ const PREVIEW_MESSAGES: { side: 'mine' | 'theirs'; text: string }[] = [
 
 // ---------------- 主题缩略图（第四十二轮：界面主题两格的迷你拟态图） ----------------
 
-/** 主题缩略图：拟态两种主题的页面质感——
+/** 主题缩略图：拟态各主题的页面质感——
  *  默认 = 现状（纯白实心卡 + 全宽贴底 TabBar）；
- *  液态 = 玻璃半透卡 + 悬浮胶囊 TabBar（复用 .lg-* 全局类，与真实主题同材质） */
+ *  液态 = 玻璃半透卡 + 悬浮胶囊 TabBar（复用 .lg-* 全局类，与真实主题同材质）；
+ *  新版（第五十轮，信息 App）= iMessage 新版聊天界面——白底 + 居中大头像顶栏 +
+ *  亮蓝/浅灰迷你气泡 + 白底输入胶囊（用户参考图同款） */
 function ThemeThumb({ theme, accent }: { theme: BubbleTheme; accent: string }) {
   const liquid = theme === 'liquid';
+  const fresh = theme === 'new';
+  if (fresh) {
+    /* 新版 iMessage：纯白聊天幕布，居中头像点 + 粗名字条 + iMessage 副标线；
+       左右两枚迷你气泡（对方浅灰 / 我方亮蓝 #45B6FC——参考图实测色）；
+       底部输入行 = 灰加号圆点 + 白胶囊（占位灰点） */
+    return (
+      <div className="relative h-[86px] overflow-hidden rounded-[17px] bg-white dark:bg-[#1C1C1E]">
+        {/* mini 状态栏 */}
+        <div className="flex items-center gap-1 px-2 pt-1.5">
+          <span className="h-[3px] w-[8px] rounded-full bg-black/25 dark:bg-white/30" />
+          <span className="mx-auto h-[3px] w-[16px] rounded-full bg-black/15 dark:bg-white/20" />
+          <span className="h-[3px] w-[8px] rounded-full bg-black/25 dark:bg-white/30" />
+        </div>
+        {/* mini 居中头像 + 名字 + iMessage 副标 */}
+        <div className="mt-[3px] flex flex-col items-center">
+          <span className="h-[14px] w-[14px] rounded-full bg-black/20 dark:bg-white/25" />
+          <span className="mt-[2px] h-[3px] w-[18px] rounded-full bg-black/70 dark:bg-white/80" />
+          <span className="mt-[2px] h-[2px] w-[24px] rounded-full bg-black/20 dark:bg-white/25" />
+        </div>
+        {/* mini 气泡：对方浅灰（左） / 我方亮蓝（右，参考图实测 #45B6FC） */}
+        <span className="absolute left-[10px] top-[46px] h-[7px] w-[30px] rounded-full bg-[#E9E9EB] dark:bg-[#2C2C2E]" />
+        <span className="absolute right-[10px] top-[57px] h-[7px] w-[38px] rounded-full" style={{ background: '#45B6FC' }} />
+        {/* mini 输入行：灰加号圆 + 白胶囊（占位灰点） */}
+        <div className="absolute inset-x-[8px] bottom-[6px] flex h-[11px] items-center gap-[3px]">
+          <span className="h-[10px] w-[10px] shrink-0 rounded-full bg-[#E9E9EB] dark:bg-white/15" />
+          <span className="flex h-[10px] flex-1 items-center rounded-full bg-white px-[4px] shadow-[0_1px_3px_rgba(0,0,0,0.10)] dark:bg-white/[0.10]">
+            <span className="h-[2px] w-[16px] rounded-full bg-black/20 dark:bg-white/25" />
+          </span>
+        </div>
+      </div>
+    );
+  }
   return (
     <div
       className={`relative h-[86px] overflow-hidden rounded-[17px] ${
@@ -369,12 +403,11 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
       />
 
       <div className="no-scrollbar relative flex-1 space-y-7 overflow-y-auto px-4 pb-12">
-        {/* ---------- 0. 界面主题（第四十二轮：仅微信/QQ——默认现状 / 液态玻璃） ---------- */}
-        {app !== 'sms' && (
-          <section aria-label="界面主题">
+        {/* ---------- 0. 界面主题（第四十二轮：微信/QQ 默认/液态玻璃；第五十轮：信息 默认/新版 iMessage） ---------- */}
+        <section aria-label="界面主题">
             <SectionLabel>主题</SectionLabel>
             <div className="mt-2.5 grid grid-cols-2 gap-2.5">
-              {BUBBLE_THEMES.map((theme) => {
+              {THEMES_OF_APP[app].map((theme) => {
                 const selected = (appStyle.theme ?? 'default') === theme;
                 return (
                   <button
@@ -385,7 +418,13 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                     onClick={() => {
                       if (!selected) {
                         setBubbleTheme(app, theme);
-                        onToast(theme === 'liquid' ? '已切换液态玻璃主题，气泡同步换为液态玻璃' : '已恢复默认主题，气泡同步换为原生默认');
+                        onToast(
+                          theme === 'liquid'
+                            ? '已切换液态玻璃主题，气泡同步换为液态玻璃'
+                            : theme === 'new'
+                              ? '已切换新版主题，聊天界面换为新版 iMessage'
+                              : '已恢复默认主题，气泡同步换为原生默认',
+                        );
                       }
                     }}
                     className={`relative flex flex-col items-stretch rounded-[22px] bg-white/60 p-1.5 backdrop-blur-xl transition-transform active:scale-[0.98] dark:bg-white/[0.06] ${
@@ -404,10 +443,11 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
               })}
             </div>
             <p className="mt-2 px-2 text-[11.5px] leading-relaxed text-black/35 dark:text-white/35">
-              切换主题时气泡会跟着换（液态玻璃 ↔ 原生默认）；之后再单独换气泡样式，主题保持不变。铭件（导航/TabBar/列表/输入栏）随主题切换，聊天背景不受影响
+              {app === 'sms'
+                ? '切换主题只改聊天界面（顶栏/气泡/输入栏），会话列表等其他页面不变；之后再单独换气泡样式，主题保持不变'
+                : '切换主题时气泡会跟着换（液态玻璃 ↔ 原生默认）；之后再单独换气泡样式，主题保持不变。铭件（导航/TabBar/列表/输入栏）随主题切换，聊天背景不受影响'}
             </p>
           </section>
-        )}
 
         {/* ---------- 1. 实时预览：玻璃相框裱着聊天幕布 ---------- */}
         <section aria-label="实时预览" className={`${GLASS_CARD} p-1.5`}>

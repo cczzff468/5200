@@ -21,8 +21,10 @@ export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'liquid';
 
 /** App 级界面主题（第四十二轮）：default = 现状原生；liquid = 液态玻璃主题（参考图）。
  *  主题与气泡样式相互独立：主题只接管页面铭件（导航/TabBar/列表卡/输入栏），
- *  气泡仍由 kind 管；聊天背景层不受主题影响（用户指定）。仅 wx / qq 提供主题切换。 */
-export type BubbleTheme = 'default' | 'liquid';
+ *  气泡仍由 kind 管；聊天背景层不受主题影响（用户指定）。仅 wx / qq 提供主题切换。
+ *  第五十轮：新增 new = 新版 iMessage 主题（仅信息 App 提供且只接管聊天界面：
+ *  居中大头像顶栏 + 亮蓝/浅灰气泡 + 白底输入栏，用户参考图同款）；会话列表等其他页面不变 */
+export type BubbleTheme = 'default' | 'liquid' | 'new';
 
 /** 装扮宿主 App 标识（微信 / QQ / 信息） */
 export type BubbleAppId = 'wx' | 'qq' | 'sms';
@@ -73,18 +75,31 @@ export const RAINBOW_COLORS = [
 
 export const BUBBLE_KINDS: readonly BubbleStyleKind[] = ['default', 'rainbow', 'frosted', 'liquid'];
 
-/** 主题列表（设置页用） */
-export const BUBBLE_THEMES: readonly BubbleTheme[] = ['default', 'liquid'];
+/** 主题列表（设置页用——全部主题的权威清单；设置页按宿主 App 取子集） */
+export const BUBBLE_THEMES: readonly BubbleTheme[] = ['default', 'liquid', 'new'];
+
+/** 各 App 提供的主题子集（第五十轮）：微信/QQ = 默认+液态玻璃；信息 = 默认+新版 iMessage */
+export const THEMES_OF_APP: Record<BubbleAppId, readonly BubbleTheme[]> = {
+  wx: ['default', 'liquid'],
+  qq: ['default', 'liquid'],
+  sms: ['default', 'new'],
+};
 
 /** 主题中文名（设置页展示用） */
 export const BUBBLE_THEME_LABEL: Record<BubbleTheme, string> = {
   default: '默认主题',
   liquid: '液态玻璃',
+  new: '新版',
 };
 
 /** 该 App 是否启用了液态玻璃主题（页面铭件读此值切换玻璃视觉；旧档无 theme 字段 = false） */
 export function isLiquidTheme(cfg: BubbleStyleConfig | undefined, app: BubbleAppId): boolean {
   return cfg?.[app]?.theme === 'liquid';
+}
+
+/** 该 App 是否启用了新版 iMessage 主题（第五十轮：仅信息 App——聊天页铭件读此值切换新版视觉） */
+export function isNewImTheme(cfg: BubbleStyleConfig | undefined, app: BubbleAppId): boolean {
+  return cfg?.[app]?.theme === 'new';
 }
 
 /** 各 App 原生默认气泡底色（kind=default 且未自定义色时还原成它）
@@ -216,7 +231,7 @@ function normalizeAppStyle(v: unknown): BubbleAppStyle {
   const o = (v ?? {}) as Partial<BubbleAppStyle>;
   return {
     kind: normKind(o.kind),
-    theme: o.theme === 'liquid' ? 'liquid' : 'default',
+    theme: o.theme === 'liquid' ? 'liquid' : o.theme === 'new' ? 'new' : 'default',
     mineColor: normColor(o.mineColor),
     theirsColor: normColor(o.theirsColor),
   };
@@ -312,8 +327,8 @@ export interface TranscriptVisual {
 const NO_TRANSCRIPT: TranscriptVisual = { override: false, className: '', style: {}, textClass: '', radius: '' };
 
 /** 各 App 装扮后（纯色/七彩）的气泡圆角——与 bubbleVisual 同口径：
- *  微信/信息保持原生（语音气泡 4px / 18px），QQ 装扮后 14px */
-const DECOR_BUBBLE_RADIUS: Record<BubbleAppId, string> = { wx: '4px', qq: '14px', sms: '18px' };
+ *  微信/信息保持原生（语音气泡 4px / 18px）；QQ 装扮后 18px（第五十轮：用户指定「再圆一点」，14→18px） */
+const DECOR_BUBBLE_RADIUS: Record<BubbleAppId, string> = { wx: '4px', qq: '18px', sms: '18px' };
 
 /** 计算语音转文字面板视觉：与所属语音气泡同一装扮语言。
  *  - 默认无色：原生白面板（微信大字白面板/两端小面板，不变）
@@ -438,7 +453,7 @@ export function bubbleVisual(
   if (kind === 'rainbow') {
     // 七彩：参考图 9 色按消息序号循环；尾巴按 App —— 微信保持原生小三角（随色），
     // QQ 用参考图同款弯钩（QQ 原生无尾巴，装扮后才有），信息保持原生弯钩尾巴（随色）。
-    // 圆角：QQ 原生 10px 略方正——装扮后圆一点点（14px，用户指定）；微信/信息保持原生
+    // 圆角：QQ 原生 10px 略方正——装扮后圆一点点（第五十轮 18px，用户指定「再圆一点」）；微信/信息保持原生
     const idx = ((msgIndex % RAINBOW_COLORS.length) + RAINBOW_COLORS.length) % RAINBOW_COLORS.length;
     const c = RAINBOW_COLORS[idx];
     return {
@@ -447,7 +462,7 @@ export function bubbleVisual(
       style: {
         backgroundColor: c,
         color: yiqTextOn(c),
-        ...(app === 'qq' ? { borderRadius: '14px' } : {}),
+        ...(app === 'qq' ? { borderRadius: '18px' } : {}),
       },
       tail: app === 'qq' ? 'hook' : 'native',
       tailColor: c,
@@ -507,7 +522,7 @@ export function bubbleVisual(
   }
 
   // default + 自定义色：仅换底色/文字色；圆角——微信保持原生 5px、信息保持原生 18px（不覆盖），
-  // QQ 原生 10px 略方正——装扮后圆一点点（14px，用户指定）。
+  // QQ 原生 10px 略方正——装扮后圆一点点（第五十轮 18px，用户指定「再圆一点」）。
   // 尾巴按 App —— 微信/信息保持原生尾巴（随色），QQ 用弯钩尾巴
   return {
     override: true,
@@ -515,7 +530,7 @@ export function bubbleVisual(
     style: {
       backgroundColor: color,
       color: yiqTextOn(color as string),
-      ...(app === 'qq' ? { borderRadius: '14px' } : {}),
+      ...(app === 'qq' ? { borderRadius: '18px' } : {}),
     },
     tail: app === 'qq' ? 'hook' : 'native',
     tailColor: color as string,
