@@ -1604,6 +1604,25 @@ Stage Summary:
 - 信息App主题界面新增「新版」主题（与默认二选一）：聊天界面 1:1 复刻用户参考图——居中52px头像顶栏+粗名字+「iMessage 信息」副标+黑底未读徽标、#45B6FC/#E9E9EB 气泡(18px+组尾5px+弯钩尾巴+17px字)、白底输入栏(白圆加号+全圆角白胶囊+灰麦克风)、「今天 HH:MM」时间戳；会话列表等其他页面不变；主题双向切换即时生效
 - 关键文件：bubble-style.ts、bubble-tail.tsx、bubble-style-settings.tsx、chat.tsx；截图证据 tmp-analysis/e2e50/
 ---
+Task ID: 5
+Agent: 主控 Agent（Z.ai Code）
+Task: 环境重置后从 GitHub 重新拉取 5200 仓库并完整重新部署（最新提交 c91160d「主题界面重构」）
+
+Work Log:
+- 环境检测：/home/z/my-project 已被重置为空脚手架（src/components 仅有 ui，无 apps），GitHub 仓库有新提交（主题界面重构：毛玻璃胶囊「主题|气泡」分段器、主题预览卡 mini 手机缩影）
+- git clone（token 认证）→ 同步 src/ public/ prisma/ scripts/ tools/ deploy/ agent-ctx/ tests/ download/ mini-services/ + 根配置文件（package.json/next.config.ts/tailwind/tsconfig 等）到 my-project，保留环境 .env 与 Caddyfile
+- bun install 406 依赖；prisma db push 遇 binaries.prisma.sh 网络受限 → 用 PRISMA_SCHEMA_ENGINE_PATH 指向 ~/.cache/prisma/master 缓存引擎成功建库
+- dev server 启动方式踩坑：nohup/setsid 后台进程仍会被沙箱回收；子 shell 双 fork `(bun run dev &)` 成功常驻；instrumentation.ts 的 ncm-keeper → netease-api(3010) → next-keeper(3000) 守护链全部生效（kill 后自动复活验证通过）
+- 修复仓库 bun.lock 内 react(19.2.3)/react-dom(19.3.1) 版本失配 → bun install 对齐至 19.3.1/19.3.1
+- git 历史对齐：fetch origin/main（c91160d）→ git reset origin/main → checkout 恢复全部文件（含权限位）→ 工作区与远端完全一致（clean）；.env/db/custom.db 按 .gitignore 保留本地
+- Agent Browser E2E（390×844）：锁屏渲染✓（时间/农历/电池/天气/日历小组件/手电筒相机）→ PointerEvent 上滑解锁✓ → 主屏 3 页应用网格✓（天气 13°/主题/浏览器…/音乐/微信/美团/恋人空间/拾光小屋/淘宝）→ 信息 App → 小助手对话✓（消息已送达、AI 回 8″ TTS 语音、播放/暂停切换、POST /api/chat /api/tts 均 200）→ 拾光小屋 3D✓（木地板/墙/窗帘/电视柜/吊灯 + v7.x HUD：宠物头像/装修小屋按钮，GET/POST /api/couple-home 200）→ 控制台无 error
+- 排障记录：锁屏元素是 div[role=dialog] 而非 HTML <dialog>，选择器写错导致三次「假解锁」误报（lockGone 恒真但事件没派发）；无头浏览器 rAF 节流 2fps，截图可能抓到动画中间帧，DOM 文本断言（无「向上轻扫」+ VLM 主屏确认）为准
+
+Stage Summary:
+- 5200 仓库最新版（c91160d 主题界面重构）已在沙箱完整重新部署并 E2E 验证通过：AI Phone 全功能可用（锁屏/主屏/AI 对话+TTS/3D 小屋/网易云等），守护链常驻，git 工作区与远端 clean 对齐，随时可在其上修改/新增功能并推送
+- 关键文件：无代码改动（纯部署）；worklog.md 本条目为唯一差异
+
+---
 Task ID: 6
 Agent: 主控 Agent（Z.ai Code）
 Task: 从 GitHub 拉取 5200 仓库最新版（75b3265）并同步到本地环境 + E2E 验证
