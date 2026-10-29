@@ -182,7 +182,7 @@ function PreviewRow({
     showRead || showTime ? (
       <span
         className={`mt-[2px] flex w-max flex-col gap-y-[1px] leading-none ${
-          side === 'mine' ? 'self-end items-end -mr-1' : 'self-start items-start -ml-1'
+          side === 'mine' ? 'self-end items-end -mr-0.5' : 'self-start items-start -ml-0.5'
         }`}
       >
         {showRead && cfg.readPosition === 'avatar' && (

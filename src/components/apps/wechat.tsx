@@ -1999,9 +1999,9 @@ const wxMetaReadCls = 'text-black/35 dark:text-white/40';
 const wxMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
 /** 显示设置 › 已读未读 + 时间：头像下方上下两行（已读未读在上、时间在下）；
- *  用户指定：往屏幕边缘靠一点点——负 margin 突破聊天区 px-3（12px）padding，
- *  -ml/-mr-2（8px）后距屏幕边缘约 4px；长行仍向屏幕内侧延伸（TA 的右延、我的左延），
- *  长日期模板（如 yyyy/MM/dd HH:mm）也不折行不出屏 */
+ *  用户指定：离屏幕边缘远一点点但仍比头像略向外——负 margin 突破聊天区 px-3（12px）
+ *  padding 的一半，-ml/-mr-1（4px）后距屏幕边缘约 8px；长行仍向屏幕内侧延伸
+ *  （TA 的右延、我的左延），长日期模板（如 yyyy/MM/dd HH:mm）也不折行不出屏 */
 function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && wxMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && wxMetaOk(m);
@@ -2009,7 +2009,7 @@ function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   return (
     <span
       className={`mt-[3px] flex w-max flex-col gap-y-[1px] leading-none ${
-        m.role === 'me' ? 'self-end items-end -mr-2' : 'self-start items-start -ml-2'
+        m.role === 'me' ? 'self-end items-end -mr-1' : 'self-start items-start -ml-1'
       }`}
     >
       {showRead && (
