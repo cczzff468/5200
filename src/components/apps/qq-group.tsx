@@ -179,6 +179,7 @@ import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
+import { chatPlaceholder, resolvePlusKeys } from '@/lib/ios/chat-decor';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -3988,7 +3989,7 @@ export function QqGroupChatPage({
   };
 
   // 加号面板五宫格（与单聊完全一致的入口与配色；红包/转账 → 群级流程：发红包页 / 先选收款成员）
-  const plusItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
+  const plusAllItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
     { key: 'call', label: '语音通话', color: '#2FBF71', icon: <Phone className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('语音通话暂未开放') },
     { key: 'video', label: '视频通话', color: '#1B9FF0', icon: <Video className="h-[26px] w-[26px]" strokeWidth={1.9} />, onClick: () => onToast('视频通话暂未开放') },
     {
@@ -4032,6 +4033,11 @@ export function QqGroupChatPage({
       },
     },
   ];
+  // 输入框设置 › 加号面板功能：与 QQ 单聊共用勾选结果（群面板只含其中可用的功能；空 = 默认全部）
+  const chatDecorQq = useSettings((s) => s.chatDecor.qq);
+  const plusItems = resolvePlusKeys('qq', chatDecorQq.plusKeys)
+    .map((k) => plusAllItems.find((it) => it.key === k))
+    .filter((x): x is { key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void } => !!x);
 
   // ---------------- 长按气泡菜单：复制/删除/编辑/引用/多选/撤回/转发/收藏/重新生成（与单聊完全一致） ----------------
 
@@ -5068,7 +5074,7 @@ export function QqGroupChatPage({
                 guardEnterToSend(e, enterSend, () => send());
               }}
               enterKeyHint={enterSend ? 'send' : undefined}
-              placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
+              placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorQq)}
               placeholderClass="pl-3.5 pt-[9px] text-[15px] leading-[22px] text-black/25 dark:text-white/25"
               ariaLabel="发送群聊消息"
               testId="qq-groupchat-input"

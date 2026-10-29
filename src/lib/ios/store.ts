@@ -16,6 +16,12 @@ import {
   type LiquidSkinConfig,
   type LiquidSkinSettings,
 } from './liquid-skin';
+import {
+  defaultChatDecorConfig,
+  normalizeChatDecorConfig,
+  type ChatDecorConfig,
+  type ChatDecorSettings,
+} from './chat-decor';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
@@ -377,6 +383,9 @@ interface SettingsState {
   /** 液态玻璃主题皮肤自定义（本轮新增：顶栏名字区模式/分类标签文字/会话列表小组件；三 App 隔离；
    *  持久化 settings.liquidSkin，只在液态主题下生效） */
   liquidSkin: LiquidSkinConfig;
+  /** 聊天输入框自定义（输入框占位文字 + 加号面板功能；三 App 隔离；
+   *  持久化 settings.chatDecor，默认/液态两种界面主题下都生效） */
+  chatDecor: ChatDecorConfig;
   loaded: boolean;
 
   /** 设置主屏图标风格（立即持久化；HomeScreen/多任务实时响应） */
@@ -391,6 +400,8 @@ interface SettingsState {
   setBubbleSchemes: (list: BubbleScheme[]) => void;
   /** 更新液态玻璃皮肤设置（patch 合并到对应 App；立即持久化，页面实时响应） */
   setLiquidSkin: (app: BubbleAppId, patch: Partial<LiquidSkinSettings>) => void;
+  /** 更新聊天输入框自定义（patch 合并到对应 App；立即持久化，聊天页实时响应） */
+  setChatDecor: (app: BubbleAppId, patch: Partial<ChatDecorSettings>) => void;
 
   load: () => Promise<void>;
   /** 锁屏总开关：关闭时同时停用密码并立即回到主屏幕 */
@@ -468,12 +479,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
   bubbleStyle: { wx: { ...DEFAULT_BUBBLE_STYLE.wx }, qq: { ...DEFAULT_BUBBLE_STYLE.qq }, sms: { ...DEFAULT_BUBBLE_STYLE.sms } },
   bubbleSchemes: [],
   liquidSkin: defaultLiquidSkinConfig(),
+  chatDecor: defaultChatDecorConfig(),
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec, islandPersistentRec, bubbleStyleRec, bubbleSchemesRec, liquidSkinRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec, islandPersistentRec, bubbleStyleRec, bubbleSchemesRec, liquidSkinRec, chatDecorRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -499,6 +511,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'bubbleStyle'),
         localDB.get('settings', 'bubbleSchemes'),
         localDB.get('settings', 'liquidSkin'),
+        localDB.get('settings', 'chatDecor'),
       ]);
 
       // 性能：八个含密文信封的字段并行解密（getKey 并发单飞，密钥只读一次 IDB）——
@@ -814,6 +827,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         bubbleSchemes: normalizeBubbleSchemes(bubbleSchemesRec?.value),
         // 液态玻璃皮肤：无记录/脏数据回默认（normalize 内部校验模式/文字/开关）
         liquidSkin: normalizeLiquidSkinConfig(liquidSkinRec?.value),
+        // 聊天输入框自定义：无记录/脏数据回默认（normalize 内部校验文字长度/功能 key）
+        chatDecor: normalizeChatDecorConfig(chatDecorRec?.value),
         loaded: true,
       });
       // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
@@ -888,6 +903,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
     const next = normalizeLiquidSkinConfig({ ...cur, [app]: { ...cur[app], ...patch } });
     set({ liquidSkin: next });
     void localDB.put('settings', { key: 'liquidSkin', value: next });
+  },
+
+  setChatDecor: (app, patch) => {
+    const cur = get().chatDecor;
+    const next = normalizeChatDecorConfig({ ...cur, [app]: { ...cur[app], ...patch } });
+    set({ chatDecor: next });
+    void localDB.put('settings', { key: 'chatDecor', value: next });
   },
 
   setAppFont: (id) => {

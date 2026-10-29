@@ -238,6 +238,7 @@ import { liquidTabLabel, LIQUID_TABS, type LiquidTabKey } from '@/lib/ios/liquid
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { BubbleTail } from './bubble-tail';
 import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
+import { chatPlaceholder, resolvePlusKeys } from '@/lib/ios/chat-decor';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
 // 第三十四轮：添加账号弹层（AccountAddSheet）删除——「添加账号」改为直接用账号密码登录（LoginScreen）
@@ -3848,9 +3849,10 @@ function RedPacketIcon() {
 }
 
 /** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方）。
- *  液态玻璃主题（用户指定）：竖向乳白玻璃列表（图标左 + 文字右，lg-menu-row） */
-function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; liquid?: boolean }) {
-  const items: Array<{ key: PlusAction; label: string; icon: React.ReactNode }> = [
+ *  液态玻璃主题（用户指定）：竖向乳白玻璃列表（图标左 + 文字右，lg-menu-row）
+ *  可选 visibleKeys：输入框设置 › 加号面板功能勾选后的显示顺序（空 = 默认全部） */
+function PlusPanel({ onAction, liquid, visibleKeys }: { onAction: (a: PlusAction) => void; liquid?: boolean; visibleKeys?: readonly string[] }) {
+  const all: Array<{ key: PlusAction; label: string; icon: React.ReactNode }> = [
     { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'voicecall', label: '语音通话', icon: <Phone className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
@@ -3863,6 +3865,8 @@ function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; li
     { key: 'together', label: '一起听', icon: <Headphones className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'gift', label: '礼物', icon: <Gift className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
+  // 输入框设置：勾选后的功能按所选顺序显示（visibleKeys 空 = 默认全部）
+  const items = visibleKeys?.length ? visibleKeys.map((k) => all.find((it) => it.key === k)).filter((x): x is { key: PlusAction; label: string; icon: React.ReactNode } => !!x) : all;
   return (
     <div
       className={`shrink-0 ${
@@ -5006,6 +5010,8 @@ function ChatPage({
   const liquid = isLiquidTheme(bubbleStyle, 'wx');
   // 液态玻璃皮肤（本轮新增）：顶栏名字区显示模式（text/avatarName/dual/dualName；仅液态主题生效）
   const liquidSkinWx = useSettings((s) => s.liquidSkin.wx);
+  // 聊天输入框自定义（本轮新增）：输入框占位文字 + 加号面板功能（默认/液态两种主题都生效）
+  const chatDecorWx = useSettings((s) => s.chatDecor.wx);
   const [msgs, setMsgs] = useState<WxMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
   // 每轮 AI 回合开头再异步刷新一次；回合内同步读最近一次构建结果（systemFull 拼装是同步的）——
@@ -9770,7 +9776,7 @@ function ChatPage({
                     guardEnterToSend(e, enterSend, () => void send());
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
-                  placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
+                  placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorWx)}
                   placeholderClass="pl-1 pt-[6px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
                   testId="wx-chat-input"
                   className={`block max-h-[132px] w-full overflow-y-auto py-[8px] pl-3.5 pr-11 text-[16px] leading-[22px] caret-[#07C160] outline-none transition-all duration-200 selection:bg-[#07C160]/20 ${
@@ -9926,10 +9932,10 @@ function ChatPage({
         {plusOpen && (
           liquid ? (
             <div className="absolute bottom-full right-2.5 z-30 w-[248px]">
-              <PlusPanel onAction={handlePlusAction} liquid={liquid} />
+              <PlusPanel onAction={handlePlusAction} liquid={liquid} visibleKeys={resolvePlusKeys('wx', chatDecorWx.plusKeys)} />
             </div>
           ) : (
-            <PlusPanel onAction={handlePlusAction} />
+            <PlusPanel onAction={handlePlusAction} visibleKeys={resolvePlusKeys('wx', chatDecorWx.plusKeys)} />
           )
         )}
         {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}

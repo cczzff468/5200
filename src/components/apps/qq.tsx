@@ -239,6 +239,7 @@ import { MomentsSettingsPage } from './moments-settings';
 import { ThemeStylePage } from './bubble-style-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
+import { chatPlaceholder, resolvePlusKeys } from '@/lib/ios/chat-decor';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -3244,6 +3245,8 @@ function ChatPage({
   const liquid = isLiquidTheme(bubbleStyle, 'qq');
   // 液态玻璃皮肤（本轮新增）：顶栏名字区显示模式（text/avatarName/dual/dualName；仅液态主题生效）
   const liquidSkinQq = useSettings((s) => s.liquidSkin.qq);
+  // 聊天输入框自定义（本轮新增）：输入框占位文字 + 加号面板功能（默认/液态两种主题都生效）
+  const chatDecorQq = useSettings((s) => s.chatDecor.qq);
   const [msgs, setMsgs] = useState<QQMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
   // 每轮 AI 回合开头再异步刷新一次；回合内同步读最近一次构建结果（systemFull 拼装是同步的）
@@ -6674,7 +6677,7 @@ function ChatPage({
   };
 
   // 加号面板宫格（语音通话/视频通话/红包/转账/位置/文字图片；图片入口已移除）
-  const plusItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
+  const plusAllItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
     {
       key: 'call',
       label: '语音通话',
@@ -6767,6 +6770,10 @@ function ChatPage({
       },
     },
   ];
+  // 输入框设置 › 加号面板功能：按勾选顺序显示（空 = 默认全部）
+  const plusItems = resolvePlusKeys('qq', chatDecorQq.plusKeys)
+    .map((k) => plusAllItems.find((it) => it.key === k))
+    .filter((x): x is { key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void } => !!x);
 
   // 聊天设置：置顶 / 免打扰 / 聊天背景 / 查找聊天记录
 
@@ -7796,7 +7803,7 @@ function ChatPage({
                 guardEnterToSend(e, enterSend, () => void send());
               }}
               enterKeyHint={enterSend ? 'send' : undefined}
-              placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
+              placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorQq)}
               placeholderClass="pl-3.5 pt-[9px] text-[15px] leading-[22px] text-black/25 dark:text-white/25"
               ariaLabel={`发送消息给${peer.name}`}
               testId="qq-chat-input"
