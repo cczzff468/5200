@@ -4,11 +4,12 @@
  * 聊天显示设置（微信 / QQ 共用，按联系人隔离）—— 嵌入聊天设置页的折叠区块
  * ---------------------------------------------------------------------------
  * 本轮（用户指定）改造：
- *  - 入口移到聊天设置界面（聊天页右上角 ···），不再占「我」页 / QQ 设置页；
- *  - 配置按联系人隔离（useChatDisplay(app, contactId)，localStorage 持久化）；
- *  - 简约收缩式：一张卡片默认收起，点标题展开——迷你预览 + 头像样式 +
- *    已读未读（开关/位置/自定义文字）+ 时间显示（开关/格式/位置）；
- *  - 未读颜色弃品牌色，改深灰（比已读浅灰深一档）；已读/未读文字可自定义。
+ *  - 已读未读自定义文字**不限字数**（颜文字/长短句随意，手机上不便输入颜文字 →
+ *    附颜文字快捷 chips，点按插入到最后聚焦的已读/未读输入框）；
+ *  - 时间改为**自定义模板**：模板输入框（任意 token/文字/颜文字）+ 实时效果预览 +
+ *    常用格式 chips（含用户示例 mm/dd/yyyy hh:mm AM·PM · yyyyMMdd）+
+ *    符号 chips（tap 追加 token）+ 颜文字 chips + 用法提示；
+ *  - 位置（头像下/气泡下）不变；预览区长文本自动换行不断溢出。
  *
  * 区块随宿主 ChatSettingsPage 的卡片风格渲染（微信 10px 圆角 / QQ 14px 圆角），
  * 展开动画 height auto（framer-motion），设置项即时生效（返回聊天页立见）。
@@ -18,6 +19,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronDown, RotateCcw } from 'lucide-react';
 import {
   DEFAULT_CHAT_DISPLAY,
+  TIME_TOKENS,
   chatDisplaySummary,
   fmtMsgTime,
   patchChatDisplay,
@@ -28,11 +30,29 @@ import {
   type ChatDisplayAppId,
   type ChatDisplayConfig,
   type MetaPosition,
-  type TimeFormat,
 } from '@/lib/ios/chat-display';
 
 /** App 原生气泡配色（预览用：我的 = 品牌色，TA 的 = 白） */
 const NATIVE_MINE: Record<ChatDisplayAppId, string> = { wx: '#95EC69', qq: '#0099FF' };
+
+/** 颜文字快捷键（时间模板 / 已读未读文字通用；手机上不便输入，点按即插） */
+const KAOMOJI_CHIPS: readonly string[] = [
+  '(◕‿◕)', '(｡•ᗑ•｡)', '(っ˘ω˘ς)', 'ヾ(≧▽≦*)o', '(๑•̀ㅗ•́)و✧', 'ᕕ( ᐛ )ᕗ', '(＾▽＾)', '✧', '~',
+];
+
+/** 时间格式预设（含用户示例 MM/dd/yyyy hh:mm AM·PM · yyyyMMdd；chip 文案 = 固定样例时刻的渲染效果） */
+const TIME_SAMPLE = new Date(2025, 11, 25, 14, 30, 45).getTime();
+const TIME_PRESETS: readonly string[] = [
+  'HH:mm',
+  'HH:mm:ss',
+  'hh:mm A',
+  'hh:mm:ss a',
+  'yyyy/MM/dd',
+  'yyyy年M月d日',
+  'yyyy/MM/dd HH:mm',
+  'MM/dd/yyyy hh:mm A',
+  'yyyyMMdd',
+];
 
 /** 元信息文字双色阶：已读浅灰 / 未读深灰（本轮用户指定：未读不用品牌色） */
 const READ_CLS = 'text-black/35 dark:text-white/40';
@@ -94,6 +114,46 @@ function SectionRow({ label, children, indent }: { label: string; children: Reac
   );
 }
 
+/** 快捷 chip（预设格式/符号/颜文字）：tap 即生效；title = 补充说明 */
+function MetaChip({
+  label,
+  title,
+  onClick,
+  testId,
+  mono,
+}: {
+  label: string;
+  title?: string;
+  onClick: () => void;
+  testId?: string;
+  mono?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title ?? label}
+      data-testid={testId}
+      onClick={onClick}
+      className={`whitespace-nowrap rounded-full bg-black/[0.05] px-2.5 py-[4.5px] text-[11px] leading-none text-black/55 transition-transform active:scale-[0.93] dark:bg-white/[0.08] dark:text-white/60 ${
+        mono ? 'font-mono' : ''
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** chip 分组行（标题 + 可换行 chips） */
+function ChipRow({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-2 first:mt-0">
+      <div className="mb-1 text-[10.5px] text-black/35 dark:text-white/35">{title}</div>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
+    </div>
+  );
+}
+
 // ---------------- 迷你预览（跟随全部配置，两行对话） ----------------
 
 function PreviewAvatar({ app, cfg, side, size = 26 }: { app: ChatDisplayAppId; cfg: ChatDisplayConfig; side: 'mine' | 'theirs'; size?: number }) {
@@ -133,27 +193,29 @@ function PreviewRow({
   const showTime = cfg.timeEnabled;
   const avatarMeta =
     showRead || showTime ? (
-      <span className="mt-[2px] flex flex-col items-center gap-[1px] leading-none">
+      <span className="mt-[2px] flex w-full flex-col items-center gap-[1px] leading-none">
         {showRead && cfg.readPosition === 'avatar' && (
-          <span className={`whitespace-nowrap text-[8.5px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}>
+          <span className={`w-full break-words text-center text-[8.5px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}>
             {readTextOf(cfg, read)}
           </span>
         )}
         {showTime && cfg.timePosition === 'avatar' && (
-          <span className={`whitespace-nowrap text-[8.5px] leading-[1.3] ${READ_CLS}`}>{time}</span>
+          <span className="w-full break-words text-center text-[8.5px] leading-[1.3] text-black/40 dark:text-white/40">
+            {time}
+          </span>
         )}
       </span>
     ) : null;
   const bubbleMeta =
     showRead || showTime ? (
-      <span className={`mt-[2px] flex flex-col gap-[1px] leading-none ${side === 'mine' ? 'self-start items-start' : 'self-end items-end'}`}>
+      <span className={`mt-[2px] flex max-w-full flex-col gap-[1px] leading-none ${side === 'mine' ? 'self-start items-start' : 'self-end items-end'}`}>
         {showRead && cfg.readPosition === 'bubble' && (
-          <span className={`whitespace-nowrap text-[9px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}>
+          <span className={`max-w-full break-words text-[9px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}>
             {readTextOf(cfg, read)}
           </span>
         )}
         {showTime && cfg.timePosition === 'bubble' && (
-          <span className={`whitespace-nowrap text-[9px] leading-[1.3] ${READ_CLS}`}>{time}</span>
+          <span className="max-w-full break-words text-[9px] leading-[1.3] text-black/40 dark:text-white/40">{time}</span>
         )}
       </span>
     ) : null;
@@ -193,10 +255,33 @@ export function ChatDisplaySection({ app, contactId }: ChatDisplaySectionProps) 
   /** 输入框草稿（失焦/回车才提交，避免每敲一个字就广播） */
   const [readDraft, setReadDraft] = useState<string | null>(null);
   const [unreadDraft, setUnreadDraft] = useState<string | null>(null);
+  /** 颜文字 chip 插入目标：最后聚焦的已读/未读输入框（默认已读） */
+  const [labelTarget, setLabelTarget] = useState<'read' | 'unread'>('read');
+  /** 时间模板草稿（chips 点按即时提交；输入失焦/回车提交） */
+  const [timeDraft, setTimeDraft] = useState<string | null>(null);
 
   const patch = (p: Partial<ChatDisplayConfig>) => patchChatDisplay(app, contactId, p);
   const isDefault = JSON.stringify(cfg) === JSON.stringify(DEFAULT_CHAT_DISPLAY[app]);
-  const t = fmtMsgTime(Date.now() - 60_000, cfg.timeFormat);
+  const curTime = () => timeDraft ?? cfg.timeFormat;
+  const t = fmtMsgTime(Date.now() - 60_000, curTime());
+
+  /** 时间模板 chips 即时生效（预设 = 替换；符号/颜文字 = 追加到末尾） */
+  const applyTime = (v: string) => {
+    setTimeDraft(null);
+    if (v !== cfg.timeFormat) patch({ timeFormat: v });
+  };
+  /** 颜文字追加到已读/未读文字（目标 = 最后聚焦的输入框，含未提交草稿） */
+  const appendKaomoji = (k: string) => {
+    if (labelTarget === 'read') {
+      const next = (readDraft ?? cfg.readLabel) + k;
+      setReadDraft(null);
+      if (next !== cfg.readLabel) patch({ readLabel: next });
+    } else {
+      const next = (unreadDraft ?? cfg.unreadLabel) + k;
+      setUnreadDraft(null);
+      if (next !== cfg.unreadLabel) patch({ unreadLabel: next });
+    }
+  };
 
   const POSITION_OPTIONS: { value: MetaPosition; label: string }[] = [
     { value: 'avatar', label: '头像下' },
@@ -285,6 +370,7 @@ export function ChatDisplaySection({ app, contactId }: ChatDisplaySectionProps) 
                           testId="read-label-input"
                           placeholder="已读"
                           value={readDraft ?? cfg.readLabel}
+                          onFocus={() => setLabelTarget('read')}
                           onCommit={(v) => {
                             setReadDraft(null);
                             if (v !== cfg.readLabel) patch({ readLabel: v });
@@ -295,6 +381,7 @@ export function ChatDisplaySection({ app, contactId }: ChatDisplaySectionProps) 
                           testId="unread-label-input"
                           placeholder="未读"
                           value={unreadDraft ?? cfg.unreadLabel}
+                          onFocus={() => setLabelTarget('unread')}
                           onCommit={(v) => {
                             setUnreadDraft(null);
                             if (v !== cfg.unreadLabel) patch({ unreadLabel: v });
@@ -303,6 +390,14 @@ export function ChatDisplaySection({ app, contactId }: ChatDisplaySectionProps) 
                         />
                       </div>
                     </SectionRow>
+                    {/* 颜文字快捷插入（不限字数；手机上不便输入 → 点按插入到最后聚焦的输入框） */}
+                    <div className="border-t border-black/[0.045] py-2 pl-[26px] pr-3.5 dark:border-white/[0.06]">
+                      <ChipRow title={`颜文字 → 插入到「${labelTarget === 'read' ? '已读' : '未读'}」`}>
+                        {KAOMOJI_CHIPS.map((k) => (
+                          <MetaChip key={k} label={k} testId="label-kaomoji" onClick={() => appendKaomoji(k)} />
+                        ))}
+                      </ChipRow>
+                    </div>
                   </>
                 )}
               </div>
@@ -316,16 +411,74 @@ export function ChatDisplaySection({ app, contactId }: ChatDisplaySectionProps) 
                 {cfg.timeEnabled && (
                   <>
                     <SectionRow label="格式" indent>
-                      <MiniSegmented
-                        testId="time-format"
-                        value={cfg.timeFormat}
-                        options={[
-                          { value: 'hhmm' as TimeFormat, label: 'HH:mm' },
-                          { value: 'hhmmss' as TimeFormat, label: 'HH:mm:ss' },
-                        ]}
-                        onChange={(v) => patch({ timeFormat: v })}
-                      />
+                      <div className="min-w-0">
+                        <input
+                          type="text"
+                          value={curTime()}
+                          placeholder="HH:mm"
+                          data-testid="time-template-input"
+                          aria-label="自定义时间格式模板"
+                          onChange={(e) => setTimeDraft(e.target.value)}
+                          onBlur={(e) => {
+                            const v = e.target.value.trim();
+                            setTimeDraft(null);
+                            if (v !== cfg.timeFormat) patch({ timeFormat: v });
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') e.currentTarget.blur();
+                          }}
+                          className="h-[30px] w-full min-w-0 rounded-[8px] border border-black/[0.08] bg-white px-2.5 text-[13px] leading-none outline-none transition-colors placeholder:text-black/25 focus:border-black/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/25 dark:focus:border-white/35"
+                        />
+                        <div
+                          data-testid="time-template-preview"
+                          className="mt-1 break-words text-[11px] leading-[1.4] text-black/40 dark:text-white/40"
+                        >
+                          效果：{fmtMsgTime(Date.now(), curTime())}
+                        </div>
+                      </div>
                     </SectionRow>
+                    {/* 快捷键：常用格式（tap = 替换）· 符号（tap = 追加）· 颜文字（tap = 追加） */}
+                    <div className="border-t border-black/[0.045] py-2.5 pl-[26px] pr-3.5 dark:border-white/[0.06]">
+                      <ChipRow title="常用格式（点按替换模板）">
+                        {TIME_PRESETS.map((tpl) => (
+                          <MetaChip
+                            key={tpl}
+                            label={fmtMsgTime(TIME_SAMPLE, tpl)}
+                            title={tpl}
+                            testId="time-preset"
+                            onClick={() => applyTime(tpl)}
+                          />
+                        ))}
+                      </ChipRow>
+                      <ChipRow title="符号（点按追加到末尾）">
+                        {TIME_TOKENS.map((t) => (
+                          <MetaChip
+                            key={t.token}
+                            label={t.token}
+                            title={t.label}
+                            testId="time-token"
+                            mono
+                            onClick={() => applyTime(curTime() + t.token)}
+                          />
+                        ))}
+                        <MetaChip
+                          label="[字]"
+                          title="方括号内的字母原样显示"
+                          testId="time-escape"
+                          mono
+                          onClick={() => applyTime(curTime() + '[]')}
+                        />
+                      </ChipRow>
+                      <ChipRow title="颜文字（点按追加到末尾）">
+                        {KAOMOJI_CHIPS.map((k) => (
+                          <MetaChip key={k} label={k} testId="time-kaomoji" onClick={() => applyTime(curTime() + k)} />
+                        ))}
+                      </ChipRow>
+                      <p className="mt-2 text-[10.5px] leading-[1.55] text-black/30 dark:text-white/30">
+                        yyyy 年 · MM 月 · dd 日 · HH 时(24) · hh 时(12) · mm 分/月 · ss 秒 · A 上午下午；
+                        其余文字颜文字原样输出，字母要原样显示用 [方括号] 括起
+                      </p>
+                    </div>
                     <SectionRow label="位置" indent>
                       <MiniSegmented
                         testId="time-position"
@@ -386,18 +539,20 @@ function ChatToggleMini({ on, onChange, testId }: { on: boolean; onChange: (v: b
   );
 }
 
-/** 自定义文字输入框（失焦/回车提交；空 = 用回默认占位） */
+/** 自定义文字输入框（失焦/回车提交；空 = 用回默认占位；不限字数，颜文字随意） */
 function LabelInput({
   value,
   placeholder,
   onCommit,
   onDraft,
+  onFocus,
   testId,
 }: {
   value: string;
   placeholder: string;
   onCommit: (v: string) => void;
   onDraft: (v: string | null) => void;
+  onFocus?: () => void;
   testId?: string;
 }) {
   return (
@@ -407,8 +562,8 @@ function LabelInput({
       placeholder={placeholder}
       data-testid={testId}
       aria-label={`自定义${placeholder}文字`}
-      maxLength={8}
       onChange={(e) => onDraft(e.target.value)}
+      onFocus={onFocus}
       onBlur={(e) => onCommit(e.target.value.trim())}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {

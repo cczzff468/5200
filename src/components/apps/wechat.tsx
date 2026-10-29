@@ -1990,30 +1990,31 @@ const wxMetaOk = (m: WxMsg) => !m.recalled && m.kind !== 'sys' && m.kind !== 'no
 const markPeerRead = (list: WxMsg[]): WxMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
-/** 元信息小字统一样式（已读未读 / 时间；颜色由 style 覆盖未读态） */
-const wxMetaText = 'whitespace-nowrap text-[10px] leading-[1.35] text-black/40 dark:text-white/40';
+/** 元信息小字统一样式（已读未读 / 时间；颜色由 style 覆盖未读态）。
+ *  自定义文字不限字数（可含颜文字）：可换行防溢出——头像下随列宽换行、气泡下最宽到列宽 */
+const wxMetaText = 'break-words text-[10px] leading-[1.35] text-black/40 dark:text-white/40';
 
 /** 元信息小字：已读浅灰 / 未读深灰（用户指定：未读弃品牌色，灰色系双阶区分） */
 const wxMetaReadCls = 'text-black/35 dark:text-white/40';
 const wxMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
-/** 显示设置 › 已读未读 + 时间：头像下方堆叠块（与头像同宽居中；同显时已读在上、时间在下） */
+/** 显示设置 › 已读未读 + 时间：头像下方堆叠块（与头像同宽居中换行；同显时已读在上、时间在下） */
 function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && wxMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && wxMetaOk(m);
   if (!showRead && !showTime) return null;
   return (
-    <span className="mt-[3px] flex flex-col items-center gap-[1px] leading-none">
+    <span className="mt-[3px] flex w-full flex-col items-center gap-[1px] leading-none">
       {showRead && (
         <span
           data-testid={`wx-read-${m.id}`}
-          className={`${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
+          className={`w-full text-center ${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
-        <span data-testid={`wx-time-${m.id}`} className={wxMetaText}>
+        <span data-testid={`wx-time-${m.id}`} className={`w-full text-center ${wxMetaText}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
         </span>
       )}
@@ -2036,13 +2037,13 @@ function WxMetaUnderBubble({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
       {showRead && (
         <span
           data-testid={`wx-read-${m.id}`}
-          className={`${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
+          className={`max-w-full ${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
-        <span data-testid={`wx-time-${m.id}`} className={wxMetaText}>
+        <span data-testid={`wx-time-${m.id}`} className={`max-w-full ${wxMetaText}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
         </span>
       )}

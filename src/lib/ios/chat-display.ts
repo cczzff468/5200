@@ -7,13 +7,17 @@
  *  - 入口从「我」页 / QQ 设置页移到**聊天设置界面**（聊天页右上角 ··· 打开）；
  *  - 配置**按联系人隔离**（每个角色一份，localStorage 持久化，键 wx-chat-display /
  *    qq-chat-display，值为 { [contactId]: ChatDisplayConfig }）；
- *  - 已读未读支持**自定义文字**（readLabel / unreadLabel，空 = 默认「已读」/「未读」）；
- *  - 未读颜色不再用品牌色，改**深灰**（比已读的浅灰深一档，双色阶都是灰色系）。
+ *  - 已读未读支持**自定义文字**（readLabel / unreadLabel，空 = 默认「已读」/「未读」，
+ *    本轮起**不限字数**，颜文字/长短句随意）；
+ *  - 未读颜色不再用品牌色，改**深灰**（比已读的浅灰深一档，双色阶都是灰色系）；
+ *  - 时间改为**自定义模板**（本轮）：token 替换引擎（fmtMsgTime）——
+ *    yyyy 年 / MM 月 / dd 日 / HH 时(24) / hh 时(12) / mm 分 / ss 秒 / A AM·PM，
+ *    其余任意文字·颜文字·符号原样输出（「[◕‿◕] HH:mm」「yyyy年M月d日」随想随写）。
  *
- * 三个维度（沿袭上轮）：
+ * 三个维度：
  *  - avatarShape：rounded = 圆角方形（微信原生），circle = 圆形（QQ 原生）；
- *  - read：开关 + 位置（avatar = 头像下面 / bubble = 气泡下面）+ 自定义文字；
- *  - time：开关 + 格式（hhmm / hhmmss）+ 位置（同上）。
+ *  - read：开关 + 位置（avatar = 头像下面 / bubble = 气泡下面）+ 自定义文字（不限字数）；
+ *  - time：开关 + 位置（同上）+ 自定义模板（历史枚举 hhmm/hhmmss 自动迁移）。
  *  位置为「气泡下面」时元信息靠气泡末尾（远离头像的一侧）；已读与时间同显时
  *  垂直堆叠（已读在上、时间在下）。
  *
@@ -35,8 +39,9 @@ export type AvatarShape = 'rounded' | 'circle';
 /** 元信息（已读/时间）显示位置：avatar = 头像下面；bubble = 气泡下面 */
 export type MetaPosition = 'avatar' | 'bubble';
 
-/** 时间格式：hhmm = HH:mm（14:30）；hhmmss = HH:mm:ss（14:30:45） */
-export type TimeFormat = 'hhmm' | 'hhmmss';
+/** 时间显示模板（自定义字符串）：token 替换 + 任意文字/颜文字；字母要原样显示用 [方括号] 转义。
+ *  历史枚举值 'hhmm' / 'hhmmss' 在 normalize 时自动迁移为 'HH:mm' / 'HH:mm:ss'。 */
+export type TimeFormat = string;
 
 /** 单联系人的显示配置（全部字段必有值，存取时经 normalize 兜底） */
 export interface ChatDisplayConfig {
@@ -50,6 +55,7 @@ export interface ChatDisplayConfig {
   unreadLabel: string;
   /** 时间显示：默认关（保持原生「5 分钟间隔居中时间条」） */
   timeEnabled: boolean;
+  /** 时间模板（token + 任意文字/颜文字，不限长度；空 = 默认 HH:mm） */
   timeFormat: TimeFormat;
   timePosition: MetaPosition;
 }
@@ -63,7 +69,7 @@ export const DEFAULT_CHAT_DISPLAY: Record<ChatDisplayAppId, ChatDisplayConfig> =
     readLabel: '',
     unreadLabel: '',
     timeEnabled: false,
-    timeFormat: 'hhmm',
+    timeFormat: 'HH:mm',
     timePosition: 'bubble',
   },
   qq: {
@@ -73,15 +79,22 @@ export const DEFAULT_CHAT_DISPLAY: Record<ChatDisplayAppId, ChatDisplayConfig> =
     readLabel: '',
     unreadLabel: '',
     timeEnabled: false,
-    timeFormat: 'hhmm',
+    timeFormat: 'HH:mm',
     timePosition: 'bubble',
   },
 };
 
 const SHAPES: AvatarShape[] = ['rounded', 'circle'];
 const POSITIONS: MetaPosition[] = ['avatar', 'bubble'];
-const FORMATS: TimeFormat[] = ['hhmm', 'hhmmss'];
-const MAX_LABEL_LEN = 8;
+
+/** 时间模板读回兑底：历史枚举 'hhmm'/'hhmmss' 迁移为 'HH:mm'/'HH:mm:ss'；
+ *  非空字符串 = 自定义模板原样保留（不限长度）；空/非法 = 默认 HH:mm */
+function normTimeFormat(v: unknown, app: ChatDisplayAppId): string {
+  if (v === 'hhmm') return 'HH:mm';
+  if (v === 'hhmmss') return 'HH:mm:ss';
+  if (typeof v === 'string' && v.trim()) return v;
+  return DEFAULT_CHAT_DISPLAY[app].timeFormat;
+}
 
 /** 单份配置兜底：字段缺失/非法时回默认（解析 localStorage 与 patch 双入口共用） */
 export function normalizeChatDisplay(raw: unknown, app: ChatDisplayAppId): ChatDisplayConfig {
@@ -92,10 +105,10 @@ export function normalizeChatDisplay(raw: unknown, app: ChatDisplayAppId): ChatD
     avatarShape: SHAPES.includes(r.avatarShape as AvatarShape) ? (r.avatarShape as AvatarShape) : def.avatarShape,
     readEnabled: typeof r.readEnabled === 'boolean' ? r.readEnabled : def.readEnabled,
     readPosition: POSITIONS.includes(r.readPosition as MetaPosition) ? (r.readPosition as MetaPosition) : def.readPosition,
-    readLabel: typeof r.readLabel === 'string' ? r.readLabel.slice(0, MAX_LABEL_LEN) : def.readLabel,
+    readLabel: typeof r.readLabel === 'string' ? r.readLabel : def.readLabel,
     unreadLabel: typeof r.unreadLabel === 'string' ? r.unreadLabel : def.unreadLabel,
     timeEnabled: typeof r.timeEnabled === 'boolean' ? r.timeEnabled : def.timeEnabled,
-    timeFormat: FORMATS.includes(r.timeFormat as TimeFormat) ? (r.timeFormat as TimeFormat) : def.timeFormat,
+    timeFormat: normTimeFormat(r.timeFormat, app),
     timePosition: POSITIONS.includes(r.timePosition as MetaPosition) ? (r.timePosition as MetaPosition) : def.timePosition,
   };
 }
@@ -192,18 +205,107 @@ export function useChatDisplay(app: ChatDisplayAppId, contactId: string): ChatDi
   );
 }
 
-/** 按所选格式格式化时间戳（仅时分 / 含秒；本地时区） */
-export function fmtMsgTime(ts: number, format: TimeFormat): string {
+// ---------------- 时间模板引擎（token 替换 + 颜文字 + 转义） ----------------
+
+/** token 匹配顺序（最长优先；小写 m 单字符放最后避免吃掉 mm） */
+const TOKEN_ORDER = ['yyyy', 'yy', 'MM', 'dd', 'HH', 'hh', 'mm', 'ss', 'M', 'd', 'H', 'h', 's', 'A', 'a', 'm'] as const;
+
+/** 时间 token 速查（设置页「符号」快捷键渲染用；label = tooltip 说明） */
+export const TIME_TOKENS: readonly { token: string; label: string }[] = [
+  { token: 'yyyy', label: '年（2025）' },
+  { token: 'yy', label: '两位年（25）' },
+  { token: 'MM', label: '月（12）' },
+  { token: 'dd', label: '日（25）' },
+  { token: 'HH', label: '时·24 制（14）' },
+  { token: 'hh', label: '时·12 制（02）' },
+  { token: 'mm', label: '分钟（跟在小写小时后；日期位置 = 月份）' },
+  { token: 'ss', label: '秒（45）' },
+  { token: 'A', label: 'AM / PM' },
+  { token: 'a', label: 'am / pm' },
+];
+
+/**
+ * 时间模板格式化（本地时区）——token 最长匹配 + 智能小写 mm + [方括号] 转义。
+ *  - token：yyyy/yy 年 · MM/M 月 · dd/d 日 · HH/H 时(24) · hh/h 时(12) · ss/s 秒 · A/a 上午下午
+ *  - 小写 mm/m 智能区分：模板里出现小时（H/h）之前 = 月份；之后 = 分钟
+ *    （用户示例「mm/dd/yyyy hh:mm AM/PM」= 12/25/2025 02:30 PM；「yyyymmdd」= 20251225）
+ *  - 连写「AM/PM」「am/pm」视作单个 A/a token（用户示例格式直接可用）
+ *  - 其余任意文字 / 颜文字 / 符号原样输出；字母要原样显示请用 [方括号] 括起（moment 同款转义）
+ */
+export function fmtMsgTime(ts: number, template: string): string {
   const d = new Date(ts);
-  const p = (n: number) => String(n).padStart(2, '0');
-  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
-  return format === 'hhmmss' ? `${hm}:${p(d.getSeconds())}` : hm;
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const h24 = d.getHours();
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  const month = d.getMonth() + 1;
+  const date = d.getDate();
+  const out: string[] = [];
+  let hourSeen = false; // 模板中已出现过小时 token（其后的小写 mm/m 按分钟）
+  let i = 0;
+  const s = template ?? '';
+  while (i < s.length) {
+    // [字面] 转义（未闭合则余下全部原样）
+    if (s[i] === '[') {
+      const end = s.indexOf(']', i + 1);
+      if (end === -1) {
+        out.push(s.slice(i + 1));
+        break;
+      }
+      out.push(s.slice(i + 1, end));
+      i = end + 1;
+      continue;
+    }
+    // 连写 AM/PM / am/pm → 单个 A/a token
+    if (s.startsWith('AM/PM', i)) {
+      out.push(h24 < 12 ? 'AM' : 'PM');
+      i += 5;
+      continue;
+    }
+    if (s.startsWith('am/pm', i)) {
+      out.push(h24 < 12 ? 'am' : 'pm');
+      i += 5;
+      continue;
+    }
+    // token 最长优先匹配
+    const t = TOKEN_ORDER.find((x) => s.startsWith(x, i));
+    if (t) {
+      switch (t) {
+        case 'yyyy': out.push(String(d.getFullYear())); break;
+        case 'yy': out.push(p2(d.getFullYear() % 100)); break;
+        case 'MM': out.push(p2(month)); break;
+        case 'M': out.push(String(month)); break;
+        case 'dd': out.push(p2(date)); break;
+        case 'd': out.push(String(date)); break;
+        case 'HH': out.push(p2(h24)); break;
+        case 'H': out.push(String(h24)); break;
+        case 'hh': out.push(p2(h12)); break;
+        case 'h': out.push(String(h12)); break;
+        case 'ss': out.push(p2(d.getSeconds())); break;
+        case 's': out.push(String(d.getSeconds())); break;
+        case 'A': out.push(h24 < 12 ? 'AM' : 'PM'); break;
+        case 'a': out.push(h24 < 12 ? 'am' : 'pm'); break;
+        default: {
+          // 小写 mm/m：小时 token 之前 = 月份；之后 = 分钟（用户示例 mm/dd/yyyy hh:mm 直接可用）
+          const asMinute = hourSeen;
+          out.push(t === 'mm' ? p2(asMinute ? d.getMinutes() : month) : String(asMinute ? d.getMinutes() : month));
+          break;
+        }
+      }
+      if (t === 'HH' || t === 'H' || t === 'hh' || t === 'h') hourSeen = true;
+      i += t.length;
+      continue;
+    }
+    // 其余字符（文字/颜文字/符号）原样输出
+    out.push(s[i]);
+    i += 1;
+  }
+  return out.join('');
 }
 
 /** 配置摘要（聊天设置页折叠标题右侧的一行小字）：默认 / 圆形头像 / 已读 · 时间 … */
 export function chatDisplaySummary(cfg: ChatDisplayConfig): string {
   const parts: string[] = [];
-  if (cfg.readEnabled) parts.push('已读');
+  if (cfg.readEnabled) parts.push(cfg.readLabel || '已读');
   if (cfg.timeEnabled) parts.push('时间');
   if (parts.length === 0) parts.push(cfg.avatarShape === 'circle' ? '圆形头像' : '默认');
   return parts.join(' · ');

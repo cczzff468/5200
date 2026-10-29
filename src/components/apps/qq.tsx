@@ -1684,28 +1684,29 @@ const qqMetaOk = (m: QQMsg) => !m.recalled && m.kind !== 'sys' && m.kind !== 'no
 const qqMarkPeerRead = (list: QQMsg[]): QQMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
-/** 元信息小字统一样式（已读未读 / 时间）；已读浅灰 / 未读深灰（用户指定：未读弃品牌色） */
-const qqMetaText = 'whitespace-nowrap text-[10px] leading-[1.35]';
+/** 元信息小字统一样式（已读未读 / 时间）；已读浅灰 / 未读深灰（用户指定：未读弃品牌色）。
+ *  自定义文字不限字数（可含颜文字）：可换行防溢出——头像下随列宽换行、气泡下最宽到列宽 */
+const qqMetaText = 'break-words text-[10px] leading-[1.35]';
 const qqMetaReadCls = 'text-black/35 dark:text-white/40';
 const qqMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
-/** 显示设置 › 已读未读 + 时间：头像下方堆叠块（与头像同宽居中；同显时已读在上、时间在下） */
+/** 显示设置 › 已读未读 + 时间：头像下方堆叠块（与头像同宽居中换行；同显时已读在上、时间在下） */
 function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && qqMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && qqMetaOk(m);
   if (!showRead && !showTime) return null;
   return (
-    <span className="mt-[3px] flex flex-col items-center gap-[1px] leading-none">
+    <span className="mt-[3px] flex w-full flex-col items-center gap-[1px] leading-none">
       {showRead && (
         <span
           data-testid={`qq-read-${m.id}`}
-          className={`${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
+          className={`w-full text-center ${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
-        <span data-testid={`qq-time-${m.id}`} className={qqMetaText}>
+        <span data-testid={`qq-time-${m.id}`} className={`w-full text-center ${qqMetaText}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
         </span>
       )}
@@ -1728,13 +1729,13 @@ function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
       {showRead && (
         <span
           data-testid={`qq-read-${m.id}`}
-          className={`${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
+          className={`max-w-full ${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
-        <span data-testid={`qq-time-${m.id}`} className={qqMetaText}>
+        <span data-testid={`qq-time-${m.id}`} className={`max-w-full ${qqMetaText}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
         </span>
       )}
