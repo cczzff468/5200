@@ -17,6 +17,7 @@ import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowDown, ArrowUp, Check, ChevronRight, RotateCcw, Sparkles, Type } from 'lucide-react';
 import { useSettings } from '@/lib/ios/store';
+import { ShrinkText } from './shrink-text';
 import {
   PLUS_FEATURE_LABELS,
   PLUS_POOL_KEYS,
@@ -97,7 +98,8 @@ function CollapseSection({
   );
 }
 
-/** 输入框占位文字实时小预览（一条仿真输入条，灰字实时跟随、垂直居中） */
+/** 输入框占位文字实时小预览（一条仿真输入条；灰字实时跟随、垂直居中；
+ *  超长时字号自动变小不折行——与真实输入框同款行为（ShrinkText） */
 function PlaceholderPreview({ app, text }: { app: DecorAppId; text: string }) {
   const meta = PLATFORM_META[app];
   const ph = text.trim();
@@ -106,9 +108,12 @@ function PlaceholderPreview({ app, text }: { app: DecorAppId; text: string }) {
       <span
         className={`flex h-[28px] min-w-0 flex-1 items-center bg-white px-3 text-[12.5px] leading-none shadow-[0_1px_3px_rgba(0,0,0,0.06)] dark:bg-[#2A2C31] dark:shadow-none ${meta.inputShape}`}
       >
-        <span className={`truncate ${ph ? 'text-black/35 dark:text-white/35' : 'text-black/25 dark:text-white/25'}`}>
+        <ShrinkText
+          min={9}
+          className={`block w-full ${ph ? 'text-black/35 dark:text-white/35' : 'text-black/25 dark:text-white/25'}`}
+        >
           {ph || '未设置（默认空）'}
-        </span>
+        </ShrinkText>
       </span>
       <span
         aria-hidden="true"

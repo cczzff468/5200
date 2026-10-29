@@ -240,6 +240,7 @@ import { BubbleTail } from './bubble-tail';
 import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
+import { ShrinkText } from './shrink-text';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
 // 第三十四轮：添加账号弹层（AccountAddSheet）删除——「添加账号」改为直接用账号密码登录（LoginScreen）
@@ -1998,39 +1999,38 @@ const markPeerRead = (list: WxMsg[]): WxMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
 /** 元信息小字统一样式（已读未读 / 时间；颜色由 style 覆盖未读态）。
- *  nowrap：每段文字永不内部折行（长模板向屏幕内侧延伸，不在段内折行） */
-const wxMetaText = 'whitespace-nowrap text-[10px] leading-[1.35] text-black/40 dark:text-white/40';
+ *  每段永不折行：超宽时字号自动变小（ShrinkText），缩进所在盒宽内 */
+const wxMetaText = 'text-[10px] leading-[1.35] text-black/40 dark:text-white/40';
 
 /** 元信息小字：已读浅灰 / 未读深灰（用户指定：未读弃品牌色，灰色系双阶区分） */
 const wxMetaReadCls = 'text-black/35 dark:text-white/40';
 const wxMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
-/** 显示设置 › 已读未读 + 时间：头像下方上下两行（已读未读在上、时间在下）；
- *  用户指定：与头像对齐（不向外突出）——头像列 w-[38px] 与头像同宽，
- *  self-start/self-end 锚定列缘 = 头像外缘；长行仍向屏幕内侧延伸
- *  （TA 的右延、我的左延），长日期模板（如 yyyy/MM/dd HH:mm）也不折行不出屏 */
+/** 显示设置 › 已读未读 + 时间：头像下方上下两行（已读未读在上、时间在下）。
+ *  用户指定（本轮）：文字超宽时字号自动变小、永不折第二行——两行各自缩到头像列宽（38px）内，
+ *  不再向屏幕内侧延伸；对齐沿袭原锚定边（我的右对齐、TA 的左对齐） */
 function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && wxMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && wxMetaOk(m);
   if (!showRead && !showTime) return null;
   return (
     <span
-      className={`mt-[3px] flex w-max flex-col gap-y-[1px] leading-none ${
-        m.role === 'me' ? 'self-end items-end' : 'self-start items-start'
+      className={`mt-[3px] flex flex-col gap-y-[1px] leading-none self-stretch ${
+        m.role === 'me' ? 'text-right' : 'text-left'
       }`}
     >
       {showRead && (
-        <span
-          data-testid={`wx-read-${m.id}`}
-          className={`${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
+        <ShrinkText
+          testId={`wx-read-${m.id}`}
+          className={`block w-full ${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
-        </span>
+        </ShrinkText>
       )}
       {showTime && (
-        <span data-testid={`wx-time-${m.id}`} className={wxMetaText}>
+        <ShrinkText testId={`wx-time-${m.id}`} className={`block w-full ${wxMetaText}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
-        </span>
+        </ShrinkText>
       )}
     </span>
   );
@@ -3917,17 +3917,17 @@ function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; li
 /** 输入框上方快捷功能条的图标/文案（与加号面板同源同文案；点击直接走 handlePlusAction，
  *  与点加号面板里那一项完全等效；面板本身不动） */
 const WX_QUICK_META: Record<string, { label: string; icon: React.ReactNode }> = {
-  camera: { label: '相机', icon: <Camera className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  image: { label: '图片', icon: <ImageIcon className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  voicecall: { label: '语音通话', icon: <Phone className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  videocall: { label: '视频通话', icon: <Video className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  camera: { label: '相机', icon: <Camera className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  image: { label: '图片', icon: <ImageIcon className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  voicecall: { label: '语音通话', icon: <Phone className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  videocall: { label: '视频通话', icon: <Video className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
   redpacket: { label: '红包', icon: <RedPacketIcon /> },
-  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  location: { label: '位置', icon: <MapPin className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  offline: { label: '线下', icon: <Star className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  textcard: { label: '文字图片', icon: <Sparkles className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  together: { label: '一起听', icon: <Headphones className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  gift: { label: '礼物', icon: <Gift className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  location: { label: '位置', icon: <MapPin className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  offline: { label: '线下', icon: <Star className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  textcard: { label: '文字图片', icon: <Sparkles className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  together: { label: '一起听', icon: <Headphones className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  gift: { label: '礼物', icon: <Gift className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
 };
 
 /** 支付方式选择底部弹层（零钱 / 银行卡 / 我收到的亲属卡；发红包/转账页用；单聊/群聊共用） */
@@ -9809,7 +9809,7 @@ function ChatPage({
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorWx)}
-                  placeholderClass="pl-3.5 text-[16px] text-black/30 dark:text-white/30"
+                  placeholderClass="absolute inset-0 flex items-center pl-3.5 pr-11 text-[16px] text-black/30 dark:text-white/30"
                   testId="wx-chat-input"
                   className={`block max-h-[132px] w-full overflow-y-auto py-[8px] pl-3.5 pr-11 text-[16px] leading-[22px] caret-[#07C160] outline-none transition-all duration-200 selection:bg-[#07C160]/20 ${
                     liquid

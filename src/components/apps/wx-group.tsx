@@ -1948,13 +1948,13 @@ function WxGroupPlusPanel({ onAction }: { onAction: (a: GroupPlusAction) => void
 /** 输入框上方快捷功能条（群聊版）：图标/文案与群加号面板同源（仅群内可用的 7 项；
  *  「收藏」为群专属功能不在设置清单里；offline/textcard/together/gift 群内不支持，自动排除） */
 const WXG_QUICK_META: Record<string, { label: string; icon: React.ReactNode }> = {
-  camera: { label: '相机', icon: <Camera className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  image: { label: '图片', icon: <ImageIcon className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  voicecall: { label: '语音通话', icon: <Phone className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  videocall: { label: '视频通话', icon: <Video className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  redpacket: { label: '红包', icon: <Gift className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[13px] w-[13px]" strokeWidth={2} /> },
-  location: { label: '位置', icon: <MapPin className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  camera: { label: '相机', icon: <Camera className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  image: { label: '图片', icon: <ImageIcon className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  voicecall: { label: '语音通话', icon: <Phone className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  videocall: { label: '视频通话', icon: <Video className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  redpacket: { label: '红包', icon: <Gift className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  location: { label: '位置', icon: <MapPin className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
 };
 
 // ---------------- 群红包/转账页面组件（微信风格；纯本地模拟） ----------------
@@ -5534,7 +5534,7 @@ export function WxGroupChatPage({
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorWx)}
-                  placeholderClass="pl-3 text-[16px] text-black/30 dark:text-white/30"
+                  placeholderClass="absolute inset-0 flex items-center pl-3 pr-9 text-[16px] text-black/30 dark:text-white/30"
                   testId="wx-groupchat-input"
                   className="block max-h-[132px] min-h-[36px] w-full overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 focus-visible:border-[#07C160]/40 focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.13),0_5px_16px_rgba(0,0,0,0.05)] dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none dark:focus-visible:border-[#07C160]/45 dark:focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.17)]"
                 />

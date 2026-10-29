@@ -241,6 +241,7 @@ import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '
 import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
+import { ShrinkText } from './shrink-text';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -1687,37 +1688,36 @@ const qqMarkPeerRead = (list: QQMsg[]): QQMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
 /** 元信息小字统一样式（已读未读 / 时间）；已读浅灰 / 未读深灰（用户指定：未读弃品牌色）。
- *  nowrap：每段文字永不内部折行（长模板向屏幕内侧延伸，不在段内折行） */
+ *  每段永不折行；头像下位置超宽时字号自动变小（ShrinkText），缩进头像列宽内 */
 const qqMetaText = 'whitespace-nowrap text-[10px] leading-[1.35]';
 const qqMetaReadCls = 'text-black/35 dark:text-white/40';
 const qqMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
-/** 显示设置 › 已读未读 + 时间：头像下方上下两行（已读未读在上、时间在下）；
- *  用户指定：与头像对齐（不向外突出）——头像列 w-[38px] 与头像同宽，
- *  self-start/self-end 锚定列缘 = 头像外缘；长行仍向屏幕内侧延伸
- *  （TA 的右延、我的左延），长日期模板（如 yyyy/MM/dd HH:mm）也不折行不出屏 */
+/** 显示设置 › 已读未读 + 时间：头像下方上下两行（已读未读在上、时间在下）。
+ *  用户指定（本轮）：文字超宽时字号自动变小、永不折第二行——两行各自缩到头像列宽（40px）内，
+ *  不再向屏幕内侧延伸；对齐沿袭原锚定边（我的右对齐、TA 的左对齐） */
 function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && qqMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && qqMetaOk(m);
   if (!showRead && !showTime) return null;
   return (
     <span
-      className={`mt-[3px] flex w-max flex-col gap-y-[1px] leading-none ${
-        m.role === 'me' ? 'self-end items-end' : 'self-start items-start'
+      className={`mt-[3px] flex flex-col gap-y-[1px] leading-none self-stretch ${
+        m.role === 'me' ? 'text-right' : 'text-left'
       }`}
     >
       {showRead && (
-        <span
-          data-testid={`qq-read-${m.id}`}
-          className={`${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
+        <ShrinkText
+          testId={`qq-read-${m.id}`}
+          className={`block w-full ${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
-        </span>
+        </ShrinkText>
       )}
       {showTime && (
-        <span data-testid={`qq-time-${m.id}`} className={qqMetaText}>
+        <ShrinkText testId={`qq-time-${m.id}`} className={`block w-full ${qqMetaText}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
-        </span>
+        </ShrinkText>
       )}
     </span>
   );
@@ -2394,6 +2394,23 @@ export function QqPlusGrid({
     </div>
   );
 }
+
+/**
+ * 输入框上方快捷功能条（QQ 端）图标/文案（用户指定「图标再美化，变成黑白色」）：
+ * 黑白单色 lucide 线描（currentColor，浅色黑 / 深色白，尺寸由快捷条容器统一压 14px）；
+ * 行为不在此定义——点击取加号面板同名项的 onClick（与面板完全等效，面板本身不动）。
+ * 单聊与群聊共用（qq-group 仅命中其面板实际有的功能，其余自动排除）。
+ */
+export const QQ_QUICK_META: Record<string, { label: string; icon: React.ReactNode }> = {
+  call: { label: '语音通话', icon: <Phone className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  video: { label: '视频通话', icon: <Video className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  rp: { label: '红包', icon: <Gift className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  loc: { label: '位置', icon: <MapPin className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  textcard: { label: '文字图片', icon: <Sparkles className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  together: { label: '一起听', icon: <Headphones className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+  express: { label: '快递', icon: <Package className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+};
 
 /**
  * 「文字图片」弹层（加号面板「文字图片」入口；Task 13 卡片版，无生图依赖，微信端 WxTextCardSheet 的 QQ 主题版）。
@@ -6772,11 +6789,17 @@ function ChatPage({
     },
   ];
   // 输入框上方快捷功能（输入框自定义 › 输入框上方功能）：把加号面板里的功能放到输入框上面，
-  // 点一下直接触发（与点加号面板里那一项同一条 onClick）；未添加 = 不显示；「+」面板本身不受影响
+  // 点一下直接触发（与点加号面板里那一项同一条 onClick）；未添加 = 不显示；「+」面板本身不受影响。
+  // 图标/文案用 QQ_QUICK_META（黑白单色 lucide，用户指定「图标美化成黑白色」）；
+  // 行为取 plusAllItems 同名项的 onClick（与面板点击完全等效）
   const quickItems: QuickBarItem[] = resolveQuickKeys('qq', chatDecorQq.quickKeys)
-    .map((k) => plusAllItems.find((it) => it.key === k))
-    .filter((x): x is { key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void } => !!x)
-    .map((it) => ({ key: it.key, label: it.label, icon: it.icon, onClick: it.onClick }));
+    .map((k): QuickBarItem | null => {
+      const meta = QQ_QUICK_META[k];
+      const panel = plusAllItems.find((it) => it.key === k);
+      if (!meta || !panel) return null;
+      return { key: k, label: meta.label, icon: meta.icon, onClick: panel.onClick };
+    })
+    .filter((x): x is QuickBarItem => x !== null);
 
   // 聊天设置：置顶 / 免打扰 / 聊天背景 / 查找聊天记录
 
@@ -7814,7 +7837,7 @@ function ChatPage({
               }}
               enterKeyHint={enterSend ? 'send' : undefined}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorQq)}
-              placeholderClass="pl-3.5 text-[15px] text-black/25 dark:text-white/25"
+              placeholderClass="absolute inset-0 flex items-center pl-3.5 pr-10 text-[15px] text-black/25 dark:text-white/25"
               ariaLabel={`发送消息给${peer.name}`}
               testId="qq-chat-input"
               className={

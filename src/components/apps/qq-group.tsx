@@ -140,6 +140,7 @@ import {
   TransferCompose,
   PayPwdGate,
   fmtMoney,
+  QQ_QUICK_META,
   type MsgPacket,
 } from './qq';
 import { canPay, executePayment, gainToWallet, loadBankCards, loadPayPwd, loadWallet, round2 } from './qq';
@@ -4035,12 +4036,17 @@ export function QqGroupChatPage({
     },
   ];
   // 输入框上方快捷功能（输入框自定义 › 输入框上方功能；与 QQ 单聊共用槽位）：把加号面板里的功能
-  // 放到输入框上面，点一下直接触发（同一条 onClick）；未添加 = 不显示；「+」面板本身不受影响
+  // 放到输入框上面，点一下直接触发（同一条 onClick）；未添加 = 不显示；「+」面板本身不受影响。
+  // 图标/文案用 QQ_QUICK_META（黑白单色，用户指定）；行为取群面板同名项 onClick（群不支持的自动排除）
   const chatDecorQq = useSettings((s) => s.chatDecor.qq);
   const quickItems: QuickBarItem[] = resolveQuickKeys('qq', chatDecorQq.quickKeys)
-    .map((k) => plusAllItems.find((it) => it.key === k))
-    .filter((x): x is { key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void } => !!x)
-    .map((it) => ({ key: it.key, label: it.label, icon: it.icon, onClick: it.onClick }));
+    .map((k): QuickBarItem | null => {
+      const meta = QQ_QUICK_META[k];
+      const panel = plusAllItems.find((it) => it.key === k);
+      if (!meta || !panel) return null;
+      return { key: k, label: meta.label, icon: meta.icon, onClick: panel.onClick };
+    })
+    .filter((x): x is QuickBarItem => x !== null);
 
   // ---------------- 长按气泡菜单：复制/删除/编辑/引用/多选/撤回/转发/收藏/重新生成（与单聊完全一致） ----------------
 
@@ -5085,7 +5091,7 @@ export function QqGroupChatPage({
               }}
               enterKeyHint={enterSend ? 'send' : undefined}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorQq)}
-              placeholderClass="pl-3.5 text-[15px] text-black/25 dark:text-white/25"
+              placeholderClass="absolute inset-0 flex items-center pl-3.5 pr-9 text-[15px] text-black/25 dark:text-white/25"
               ariaLabel="发送群聊消息"
               testId="qq-groupchat-input"
               className="max-h-[132px] min-h-[40px] w-full overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-9 text-[15px] leading-[22px] outline-none dark:border-white/[0.08] dark:bg-white/[0.07]"

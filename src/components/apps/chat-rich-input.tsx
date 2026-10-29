@@ -2,6 +2,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { splitEmojiCodes, type EmojiCodeApp } from '@/lib/ios/emoji-codes';
+import { ShrinkText } from './shrink-text';
 
 /**
  * 聊天富文本输入框（contentEditable，微信 / QQ / 群聊四端共用）：
@@ -101,7 +102,8 @@ interface ChatRichInputProps {
   onChange: (v: string) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
   placeholder?: string;
-  /** placeholder 叠层的对齐类（只需给水平内边距/字号/颜色，垂直方向自动居中；如 "pl-3.5 text-[15px] text-black/25 dark:text-white/25"） */
+  /** placeholder 叠层的布局/颜色类（需自带左右内边距与对齐，如 "absolute inset-0 flex items-center pl-3.5 pr-11 text-[16px] text-black/30 dark:text-white/30"；
+   *  垂直自动居中；超长时字号自动变小，永不折行（ShrinkText） */
   placeholderClass?: string;
   ariaLabel?: string;
   testId?: string;
@@ -200,10 +202,16 @@ export const ChatRichInput = forwardRef<ChatRichInputHandle, ChatRichInputProps>
         className={className}
       />
       {!value && placeholder ? (
-        /* 占位灰字：铺满输入框叠层 + flex 垂直居中（上下都在中间，与各端输入框高度无关） */
-        <span aria-hidden className={`pointer-events-none absolute inset-0 flex items-center ${placeholderClass ?? ''}`}>
+        /* 占位灰字（ShrinkText）：布局/内边距/颜色由 placeholderClass 提供
+           （absolute inset-0 flex items-center + pl/pr/字号/颜色）；垂直居中；
+           字数超出时字号自动变小，永不折第二行、不压右侧按钮 */
+        <ShrinkText
+          ariaHidden
+          min={6}
+          className={`pointer-events-none ${placeholderClass ?? ''}`}
+        >
           {placeholder}
-        </span>
+        </ShrinkText>
       ) : null}
     </div>
   );
