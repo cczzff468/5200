@@ -14,7 +14,7 @@
  */
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CalendarDays, Camera, Check, ChevronRight, Music2, Paintbrush, RotateCcw, X } from 'lucide-react';
+import { CalendarDays, Camera, Check, ChevronRight, LayoutGrid, Music2, Paintbrush, PanelTop, RotateCcw, Tags, X } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { useSettings } from '@/lib/ios/store';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
@@ -257,7 +257,7 @@ export function LiquidSkinPanel({ app, onToast, wxMe }: LiquidSkinPanelProps) {
       <CollapseSection
         testId="liquid-sec-header"
         accent={meta.accent}
-        icon={<span className="h-[15px] w-[15px] rounded-full border-[2.5px]" style={{ borderColor: meta.accent }} aria-hidden="true" />}
+        icon={<PanelTop className="h-[15px] w-[15px]" style={{ color: meta.accent }} strokeWidth={2.1} aria-hidden="true" />}
         title="聊天顶栏名字"
         summary={`当前：${LIQUID_HEADER_MODE_LABEL[skin.headerMode]}`}
         open={sec === 'header'}
@@ -332,7 +332,7 @@ export function LiquidSkinPanel({ app, onToast, wxMe }: LiquidSkinPanelProps) {
         <CollapseSection
           testId="liquid-sec-tabs"
           accent={meta.accent}
-          icon={<span className="h-[15px] w-[15px] rounded-full border-[2.5px]" style={{ borderColor: meta.accent }} aria-hidden="true" />}
+          icon={<Tags className="h-[15px] w-[15px]" style={{ color: meta.accent }} strokeWidth={2.1} aria-hidden="true" />}
           title="分类标签文字"
           summary={customTabCount > 0 ? `已自定义 ${customTabCount} 项` : '默认'}
           open={sec === 'tabs'}
@@ -371,7 +371,7 @@ export function LiquidSkinPanel({ app, onToast, wxMe }: LiquidSkinPanelProps) {
         <CollapseSection
           testId="liquid-sec-widgets"
           accent={meta.accent}
-          icon={<span className="h-[15px] w-[15px] rounded-full border-[2.5px]" style={{ borderColor: meta.accent }} aria-hidden="true" />}
+          icon={<LayoutGrid className="h-[15px] w-[15px]" style={{ color: meta.accent }} strokeWidth={2.1} aria-hidden="true" />}
           title="列表小组件"
           summary={widgetOnCount > 0 ? `${widgetOnCount} 项开启` : '全部关闭'}
           open={sec === 'widgets'}

@@ -1,22 +1,22 @@
 'use client';
 
 /**
- * 聊天装扮设置（第十七轮建立 · 本轮重构：主题页 = 顶部实时大预览 + 下方主题选择）
+ * 聊天装扮设置（第十七轮建立 · 本轮重构：主题 / 气泡 各自独立界面 + 整体简约）
  * ---------------------------------------------------------------------------
  * 入口：QQ 个人抽屉 / 设置 › 个性装扮；微信「发现」页 › 主题；
  *       信息 App › 聊天设置 › 主题。
  *
- * 本轮（用户指定：预览卡放最上面 + 液态玻璃设置放液态玻璃主题下面）：
- *  1. 「主题」胶囊 = 顶部**实时大预览卡**——选哪个主题就显示哪个主题的整页样式
- *     （状态栏/顶栏/消息/输入条/TabBar 全套；液态顶栏名字区还跟随液态设置实时变化，
- *     所见即所得）；预览卡下方标注当前主题名；
- *  2. 预览下方两列紧凑主题卡（材质缩影，点选切换，选中 accent 描边 + 圆勾）；
- *  3. 「液态玻璃设置」收缩面板紧跟液态玻璃主题卡下方（无独立界面）；
- *  4. 「气泡」胶囊不变（实时预览 + 四格样式 + HSL 颜色 + 收藏夹）；
- *  5. 主题切换仍联动气泡（液态玻璃 ↔ 原生默认，setBubbleTheme 内实现）；
- *     气泡胶囊下单独换样式不动主题（patchAppStyle 只写 kind）。
+ * 本轮（用户指定：主题一个界面、气泡一个界面，不共用一页，更简约）：
+ *  1. 装扮主页 = 一张卡两行入口（主题 / 气泡；行内缩影 + 当前值），
+ *     iOS push 动画进入各自独立界面；
+ *  2. 「主题」独立界面：顶部实时大预览卡（选哪个主题就显示哪个主题的整页样式，
+ *     液态顶栏名字区联动液态设置所见即所得）+ 主题选择卡 +
+ *     「液态玻璃设置」收缩面板（紧跟液态玻璃主题下方，无独立界面）；
+ *  3. 「气泡」独立界面：实时预览 + 四格样式 + HSL 颜色 + 收藏夹；
+ *  4. 主题切换仍联动气泡（液态玻璃 ↔ 原生默认，setBubbleTheme 内实现）；
+ *     气泡界面单独换样式不动主题（patchAppStyle 只写 kind）。
  */
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, ChevronRight, Palette, RotateCcw, Trash2 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
@@ -508,61 +508,119 @@ function HslSlider({
   );
 }
 
-// ================= 主题界面（本轮重构：毛玻璃胶囊「主题|气泡」两个选择） =================
+// ================= 装扮主页（极简：一张卡两行入口 → 两个独立界面） =================
 
-/** 毛玻璃胶囊分段控制器（用户指定：主题界面两个选择，毛玻璃胶囊风格；滑块 spring 动画） */
-function GlassSegmented({
-  value,
-  onChange,
-  options,
-}: {
-  value: 'theme' | 'bubble';
-  onChange: (v: 'theme' | 'bubble') => void;
-  options: { value: 'theme' | 'bubble'; label: string }[];
-}) {
+/** 主题行缩影（44px 材质示意）：液态 = 彩色玻璃渐变 + 光斑；默认 = 素浅底；各带左右两颗小泡 */
+function ThemeRowThumb({ theme, accent }: { theme: BubbleTheme; accent: string }) {
+  const liquid = theme === 'liquid';
   return (
-    <div
-      role="tablist"
-      aria-label="装扮分类"
-      className="relative mx-4 flex rounded-full bg-white/55 p-[3px] shadow-[0_2px_10px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.07] dark:shadow-none dark:ring-white/[0.12]"
+    <span
+      aria-hidden
+      className={`relative flex h-11 w-11 shrink-0 items-center justify-center gap-[5px] overflow-hidden rounded-[12px] ring-1 ring-inset ${
+        liquid
+          ? 'bg-gradient-to-br from-[#EAF2FF] via-[#F3EAFF] to-[#FFEAF2] ring-white/60 dark:from-[#20263F] dark:via-[#272043] dark:to-[#3D2233] dark:ring-white/10'
+          : 'bg-black/[0.045] ring-black/[0.05] dark:bg-white/[0.07] dark:ring-white/[0.09]'
+      }`}
     >
-      {options.map((o) => {
-        const active = value === o.value;
-        return (
-          <button
-            key={o.value}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            data-testid={`dress-seg-${o.value}`}
-            onClick={() => {
-              if (!active) {
-                onChange(o.value);
-                navigator.vibrate?.(6);
-              }
-            }}
-            className="relative z-[1] flex h-[34px] flex-1 items-center justify-center rounded-full"
-          >
-            {active && (
-              <motion.span
-                layoutId="dress-seg-pill"
-                className="absolute inset-0 rounded-full bg-white shadow-[0_2px_8px_rgba(17,24,39,0.14)] ring-1 ring-black/[0.04] dark:bg-white/[0.16] dark:shadow-[0_2px_8px_rgba(0,0,0,0.35)] dark:ring-white/[0.08]"
-                transition={{ type: 'spring', stiffness: 480, damping: 38 }}
-              />
-            )}
-            <span
-              className={`relative text-[14px] leading-none transition-colors ${
-                active ? 'font-semibold text-black/80 dark:text-white/90' : 'font-medium text-black/40 dark:text-white/45'
-              }`}
-            >
-              {o.label}
-            </span>
-          </button>
-        );
-      })}
-    </div>
+      {liquid && (
+        <>
+          <span className="absolute -left-1.5 -top-1.5 h-5 w-5 rounded-full bg-[#FF9500]/45 blur-md" />
+          <span className="absolute -bottom-1.5 -right-1 h-5 w-5 rounded-full bg-[#3D9BFF]/45 blur-md" />
+        </>
+      )}
+      <span className="relative h-[13px] w-[15px] rounded-full rounded-bl-[4px] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.14)] dark:bg-white/85" />
+      <span className="relative h-[13px] w-[15px] rounded-full rounded-br-[4px]" style={{ backgroundColor: accent }} />
+    </span>
   );
 }
+
+/** 气泡行缩影（44px）：按当前气泡样式渲染质感（纯色 / 七彩渐变 / 奶白磨砂 / 清透水膜） */
+function BubbleRowThumb({ kind, mine, accent }: { kind: BubbleStyleKind; mine: string; accent: string }) {
+  const mineBg =
+    kind === 'rainbow'
+      ? 'linear-gradient(135deg,#FF6B6B,#FFD93D,#6BCB77,#4D96FF)'
+      : kind === 'frosted'
+        ? 'rgba(255,255,255,0.80)'
+        : kind === 'liquid'
+          ? 'rgba(90,160,255,0.32)'
+          : mine;
+  const mineRing =
+    kind === 'liquid' ? 'ring-1 ring-inset ring-white/75' : kind === 'frosted' ? 'ring-1 ring-inset ring-white/95' : '';
+  return (
+    <span
+      aria-hidden
+      className="relative flex h-11 w-11 shrink-0 items-center justify-center gap-[5px] overflow-hidden rounded-[12px] bg-black/[0.045] ring-1 ring-inset ring-black/[0.05] dark:bg-white/[0.07] dark:ring-white/[0.09]"
+    >
+      {kind === 'liquid' && <span className="absolute -left-1.5 -top-1.5 h-5 w-5 rounded-full bg-[#FF9500]/40 blur-md" />}
+      <span className="relative h-[13px] w-[15px] rounded-full rounded-bl-[4px] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.14)] dark:bg-white/85" />
+      <span
+        className={`relative h-[13px] w-[15px] rounded-full rounded-br-[4px] shadow-[0_1px_3px_rgba(0,0,0,0.14)] ${mineRing}`}
+        style={{ background: mineBg }}
+      />
+    </span>
+  );
+}
+
+/** 装扮主页（极简）：一张卡两行——主题 / 气泡 各自进入独立界面；行内缩影 + 当前值 */
+function DressMenuContent({ app, onOpen }: { app: BubbleAppId; onOpen: (v: 'theme' | 'bubble') => void }) {
+  const meta = PLATFORM_META[app];
+  const bubbleStyle = useSettings((s) => s.bubbleStyle);
+  const appStyle: BubbleAppStyle = bubbleStyle[app] ?? { kind: 'default' };
+  const curTheme: BubbleTheme = appStyle.theme ?? 'default';
+
+  const rows = [
+    {
+      key: 'theme' as const,
+      title: '主题',
+      summary: BUBBLE_THEME_LABEL[curTheme],
+      thumb: <ThemeRowThumb theme={curTheme} accent={meta.accent} />,
+    },
+    {
+      key: 'bubble' as const,
+      title: '气泡',
+      summary: `${BUBBLE_KIND_LABEL[appStyle.kind]}${appStyle.mineColor ? ` · ${appStyle.mineColor.toUpperCase()}` : ''}`,
+      thumb: <BubbleRowThumb kind={appStyle.kind} mine={appStyle.mineColor ?? meta.accent} accent={meta.accent} />,
+    },
+  ];
+
+  return (
+    <>
+      <div className="overflow-hidden rounded-[20px] bg-white shadow-[0_3px_14px_rgba(17,24,39,0.04)] ring-1 ring-black/[0.05] dark:bg-[#1C1E23] dark:shadow-none dark:ring-white/[0.08]">
+        {rows.map((r, i) => (
+          <Fragment key={r.key}>
+            {i > 0 && <div aria-hidden className="mx-4 border-t border-black/[0.05] dark:border-white/[0.07]" />}
+            <button
+              type="button"
+              data-testid={`dress-entry-${r.key}`}
+              onClick={() => {
+                onOpen(r.key);
+                navigator.vibrate?.(6);
+              }}
+              className="flex w-full items-center gap-3.5 px-4 py-3.5 text-left transition-colors active:bg-black/[0.03] dark:active:bg-white/[0.04]"
+            >
+              {r.thumb}
+              <span className="min-w-0 flex-1">
+                <span className="block text-[16.5px] font-semibold leading-tight text-black/85 dark:text-white/90">{r.title}</span>
+                <span className="mt-[3px] block truncate text-[12.5px] leading-tight text-black/40 dark:text-white/40">{r.summary}</span>
+              </span>
+              <ChevronRight
+                className="h-[18px] w-[18px] shrink-0 text-black/20 dark:text-white/25"
+                strokeWidth={2.4}
+                aria-hidden="true"
+              />
+            </button>
+          </Fragment>
+        ))}
+      </div>
+      <p className="mt-3 px-2 text-[12px] leading-relaxed text-black/35 dark:text-white/35">
+        主题与气泡独立设置，仅对{meta.name}生效；选哪个主题，预览就显示哪个样式。
+      </p>
+    </>
+  );
+}
+
+/** 子页面过渡：iOS push/pop（推入从右滑进，返回滑出；主页轻微视差后退） */
+const PAGE_TRANSITION = { duration: 0.34, ease: [0.32, 0.72, 0, 1] } as const;
 
 export interface ThemeStylePageProps {
   /** 宿主 App（装扮完全隔离：本页所有修改只写入 cfg[app]） */
@@ -577,49 +635,76 @@ export interface ThemeStylePageProps {
   wxMe?: { name: string; avatar: string | null };
 }
 
-/** 主题界面：顶部毛玻璃胶囊两个选择（主题 / 气泡）——
- *  「主题」= 顶部实时大预览卡（选哪个主题显示哪个样式）+ 两列紧凑主题卡 +
- *  选中液态玻璃时「液态玻璃设置」收缩面板紧跟液态玻璃主题下方；
- *  「气泡」= 实时预览 + 四格样式 + 颜色 + 收藏夹。 */
+/** 装扮页（三个独立界面）：装扮主页（主题/气泡两行入口）→ 主题界面 / 气泡界面；
+ *  子页面 iOS push 动画推入，返回主页滑出；三个 App 入口 API 不变。 */
 export function ThemeStylePage({ app, onBack, onToast, title = '主题', wxMe }: ThemeStylePageProps) {
-  const [tab, setTab] = useState<'theme' | 'bubble'>('theme');
+  /** 页面栈：menu = 装扮主页（默认）；theme / bubble = 两个独立子界面 */
+  const [view, setView] = useState<'menu' | 'theme' | 'bubble'>('menu');
+  const bg = 'bg-[#F4F5F7] dark:bg-[#0E1014]';
+  const navCls = 'bg-[#F4F5F7]/75! dark:bg-[#0E1014]/75!';
 
   return (
-    <IOSScreen className="bg-[#F4F5F7] dark:bg-[#0E1014]">
-      <IOSNavBar
-        title={title}
-        large={false}
-        left={<IOSBackButton onClick={onBack} label="" />}
-        className="bg-[#F4F5F7]/75! dark:bg-[#0E1014]/75!"
-      />
-
-      {/* 毛玻璃胶囊：主题 | 气泡 两个选择（用户指定） */}
-      <div className="shrink-0 pb-2 pt-1.5">
-        <GlassSegmented
-          value={tab}
-          onChange={setTab}
-          options={[
-            { value: 'theme', label: '主题' },
-            { value: 'bubble', label: '气泡' },
-          ]}
-        />
-      </div>
-
-      <div className="no-scrollbar relative flex-1 overflow-y-auto px-4 pb-12">
-        {tab === 'theme' ? (
-          <ThemeTabContent app={app} onToast={onToast} wxMe={wxMe} />
-        ) : (
-          <BubbleStyleContent app={app} onToast={onToast} />
+    <IOSScreen className={`relative ${bg}`}>
+      <AnimatePresence initial={false}>
+        {/* 装扮主页：主题 / 气泡 两个入口（各自独立界面，不共用一页） */}
+        {view === 'menu' && (
+          <motion.div
+            key="menu"
+            initial={{ x: '-18%', opacity: 0.55 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: '-18%', opacity: 0.55 }}
+            transition={PAGE_TRANSITION}
+            className="absolute inset-0 flex flex-col"
+          >
+            <IOSNavBar title={title} large={false} left={<IOSBackButton onClick={onBack} label="" />} className={navCls} />
+            <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-12 pt-3">
+              <DressMenuContent app={app} onOpen={setView} />
+            </div>
+          </motion.div>
         )}
-      </div>
+
+        {/* 主题独立界面：顶部实时大预览 + 主题选择 + 液态玻璃设置收缩面板 */}
+        {view === 'theme' && (
+          <motion.div
+            key="theme"
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={PAGE_TRANSITION}
+            className={`absolute inset-0 z-10 flex flex-col ${bg}`}
+          >
+            <IOSNavBar title="主题" large={false} left={<IOSBackButton onClick={() => setView('menu')} label="" />} className={navCls} />
+            <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-12 pt-1">
+              <ThemeContent app={app} onToast={onToast} wxMe={wxMe} />
+            </div>
+          </motion.div>
+        )}
+
+        {/* 气泡独立界面：实时预览 + 四格样式 + HSL 颜色 + 收藏夹 */}
+        {view === 'bubble' && (
+          <motion.div
+            key="bubble"
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={PAGE_TRANSITION}
+            className={`absolute inset-0 z-10 flex flex-col ${bg}`}
+          >
+            <IOSNavBar title="气泡" large={false} left={<IOSBackButton onClick={() => setView('menu')} label="" />} className={navCls} />
+            <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-12 pt-1">
+              <BubbleStyleContent app={app} onToast={onToast} />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </IOSScreen>
   );
 }
 
-/** 「主题」选择内容：**顶部实时大预览卡**（选哪个主题就显示哪个主题的整页样式，
- *  液态顶栏名字区还联动液态设置实时变化）+ 两列紧凑主题卡（材质缩影，点选切换）+
+/** 主题界面内容：**顶部实时大预览卡**（选哪个主题就显示哪个主题的整页样式，
+ *  液态顶栏名字区还联动液态设置实时变化）+ 主题选择卡（材质缩影，点选切换）+
  *  选中液态玻璃时「液态玻璃设置」收缩面板紧跟液态玻璃主题下方（无独立界面）。 */
-function ThemeTabContent({
+function ThemeContent({
   app,
   onToast,
   wxMe,
@@ -652,10 +737,14 @@ function ThemeTabContent({
         </p>
       </div>
 
-      {/* 2. 主题选择（两列紧凑卡：材质缩影一眼区分，点选即切换，顶部预览实时跟随） */}
-      <div className="mt-5">
+      {/* 2. 主题选择（材质缩影一眼区分，点选即切换，顶部预览实时跟随；单主题时单列全宽） */}
+      <div className="mt-4">
         <SectionLabel accent={meta.accent}>选择主题</SectionLabel>
-        <div className="mt-2.5 grid grid-cols-2 gap-3" role="region" aria-label="界面主题">
+        <div
+          className={`mt-2.5 grid gap-3 ${THEMES_OF_APP[app].length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}
+          role="region"
+          aria-label="界面主题"
+        >
           {THEMES_OF_APP[app].map((theme) => {
             const selected = curTheme === theme;
             return (
@@ -723,9 +812,9 @@ function ThemeTabContent({
   );
 }
 
-// ================= 气泡内容（主题界面 › 毛玻璃胶囊「气泡」选择的内容区） =================
+// ================= 气泡界面内容（独立界面：实时预览 + 样式 + 颜色 + 收藏夹） =================
 
-/** 气泡装扮内容（实时预览 + 四格样式 + HSL 颜色 + 收藏夹；由主题界面「气泡」胶囊切换承载） */
+/** 气泡装扮内容（实时预览 + 四格样式 + HSL 颜色 + 收藏夹；气泡独立界面承载） */
 function BubbleStyleContent({ app, onToast }: { app: BubbleAppId; onToast: (m: string) => void }) {
   const meta = PLATFORM_META[app];
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
@@ -811,7 +900,7 @@ function BubbleStyleContent({ app, onToast }: { app: BubbleAppId; onToast: (m: s
   }, [schemes, appStyle]);
 
   return (
-    <div className="relative space-y-8">
+    <div className="relative space-y-6">
       {/* ---------- 1. 实时预览：单层干净浅底幕布（去玻璃相框嵌套） ---------- */}
         <FadeInSection index={0} className="section" role="region" ariaLabel="实时预览">
           <div className="relative overflow-hidden rounded-[20px] ring-1 ring-black/[0.05] dark:ring-white/[0.09]">
