@@ -25,7 +25,7 @@
  */
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronRight, MessageCircle, Palette, RotateCcw, Trash2 } from 'lucide-react';
+import { Check, ChevronRight, MessageCircle, Palette, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { useSettings } from '@/lib/ios/store';
 import {
@@ -90,10 +90,24 @@ function SectionLabel({ accent, children }: { accent?: string; children: React.R
 }
 
 /** 区块入场动画（轻微错峰淡入上浮） */
-function FadeInSection({ index, className, children }: { index: number; className?: string; children: React.ReactNode }) {
+function FadeInSection({
+  index,
+  className,
+  role,
+  ariaLabel,
+  children,
+}: {
+  index: number;
+  className?: string;
+  role?: string;
+  ariaLabel?: string;
+  children: React.ReactNode;
+}) {
   return (
     <motion.div
       className={className}
+      role={role}
+      aria-label={ariaLabel}
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.05 * index, duration: 0.32 }}
@@ -365,12 +379,14 @@ export interface ThemeStylePageProps {
   onBack: () => void;
   /** 进入气泡样式页（本页只管界面主题，气泡在独立页单独调） */
   onOpenBubbles: () => void;
+  /** 进入液态玻璃皮肤设置页（仅液态主题时显示；wx/qq 传入） */
+  onOpenSkin?: () => void;
   /** 弹一条本地提示 */
   onToast: (m: string) => void;
 }
 
-/** 主题页（本轮重做：顶部预览卡 + 简约主题列表 + 气泡入口行） */
-export function ThemeStylePage({ app, onBack, onOpenBubbles, onToast }: ThemeStylePageProps) {
+/** 主题页（本轮重做：顶部预览卡 + 简约主题列表 + 气泡入口行 + 液态皮肤入口行） */
+export function ThemeStylePage({ app, onBack, onOpenBubbles, onOpenSkin, onToast }: ThemeStylePageProps) {
   const meta = PLATFORM_META[app];
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
   const setBubbleTheme = useSettings((s) => s.setBubbleTheme);
@@ -486,6 +502,35 @@ export function ThemeStylePage({ app, onBack, onOpenBubbles, onToast }: ThemeSty
             <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
           </button>
         </FadeInSection>
+
+        {/* ---------- 4. 液态玻璃设置入口（仅液态主题时显示：顶栏名字区/分类标签文字/列表小组件） ---------- */}
+        {onOpenSkin && curTheme === 'liquid' && (
+          <FadeInSection index={3} className="section">
+            <SectionLabel accent={meta.accent}>液态玻璃</SectionLabel>
+            <button
+              type="button"
+              data-testid="liquid-skin-entry"
+              onClick={onOpenSkin}
+              className="mt-2.5 flex w-full items-center gap-3 rounded-[18px] bg-white px-4 py-[13px] text-left ring-1 ring-black/[0.05] transition-transform active:scale-[0.99] dark:bg-[#1C1E23] dark:ring-white/[0.08]"
+            >
+              <span
+                className="flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-[12px]"
+                style={{ backgroundColor: withAlpha(meta.accent, 0.12) }}
+              >
+                <Sparkles className="h-[19px] w-[19px]" style={{ color: meta.accent }} strokeWidth={2.1} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] font-medium leading-tight text-black/85 dark:text-white/90">
+                  液态玻璃设置
+                </span>
+                <span className="mt-[2px] block truncate text-[11.5px] leading-tight text-black/40 dark:text-white/40">
+                  顶栏名字样式{app === 'wx' ? ' · 分类标签 · 小组件' : ''}
+                </span>
+              </span>
+              <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
+            </button>
+          </FadeInSection>
+        )}
       </div>
     </IOSScreen>
   );
@@ -597,7 +642,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
 
       <div className="no-scrollbar relative flex-1 space-y-8 overflow-y-auto px-4 pb-12">
         {/* ---------- 1. 实时预览：单层干净浅底幕布（去玻璃相框嵌套） ---------- */}
-        <FadeInSection index={0} className="section" role="region" aria-label="实时预览">
+        <FadeInSection index={0} className="section" role="region" ariaLabel="实时预览">
           <div className="relative overflow-hidden rounded-[20px] ring-1 ring-black/[0.05] dark:ring-white/[0.09]">
             <div className="absolute inset-0 bg-gradient-to-b from-[#F5F7FA] to-[#EAEFF4] dark:from-[#222631] dark:to-[#161A22]" />
             <AuraLayer />
@@ -620,7 +665,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
         </FadeInSection>
 
         {/* ---------- 2. 气泡样式四格（示意胶囊 + 名称，无多余装饰） ---------- */}
-        <FadeInSection index={1} className="section" role="region" aria-label="气泡样式">
+        <FadeInSection index={1} className="section" role="region" ariaLabel="气泡样式">
           <SectionLabel accent={meta.accent}>样式</SectionLabel>
           <div className="mt-3 grid grid-cols-2 gap-3">
             {(Object.keys(BUBBLE_KIND_LABEL) as BubbleStyleKind[]).map((kind) => {
@@ -680,7 +725,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
         </FadeInSection>
 
         {/* ---------- 3. 颜色（分段胶囊 / 滑条 / 色板，同卡三分区） ---------- */}
-        <FadeInSection index={2} className="section" role="region" aria-label="自定义颜色">
+        <FadeInSection index={2} className="section" role="region" ariaLabel="自定义颜色">
           <SectionLabel accent={meta.accent}>颜色</SectionLabel>
           <div
             className={`mt-3 space-y-4 ${GLASS_CARD} p-4 transition-opacity ${
@@ -848,7 +893,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
         </FadeInSection>
 
         {/* ---------- 5. 收藏夹（胶囊行） ---------- */}
-        <FadeInSection index={4} className="section" role="region" aria-label="我的气泡收藏夹">
+        <FadeInSection index={4} className="section" role="region" ariaLabel="我的气泡收藏夹">
           <SectionLabel accent={meta.accent}>我的气泡</SectionLabel>
           {schemes.length === 0 ? (
             <div className={`mt-2.5 border border-dashed border-black/[0.14] ${GLASS_CARD} py-6 text-center dark:border-white/[0.14]`}>

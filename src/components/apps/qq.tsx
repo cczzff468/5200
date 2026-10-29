@@ -237,6 +237,7 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, PostMoreMenu, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
+import { LiquidSkinPage } from './liquid-skin-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
@@ -3242,6 +3243,8 @@ function ChatPage({
   // + 返回/菜单 lg-chip 椭圆 + 输入框毛玻璃胶囊 + 六工具钮 lg-chip + 语音/加号/表情面板 lg-sheet；
   // 聊天气泡仍由装扮系统（kind）管、聊天背景层完全不受主题影响（用户指定）；默认主题时零覆盖
   const liquid = isLiquidTheme(bubbleStyle, 'qq');
+  // 液态玻璃皮肤（本轮新增）：顶栏名字区显示模式（text/avatarName/dual/dualName；仅液态主题生效）
+  const liquidSkinQq = useSettings((s) => s.liquidSkin.qq);
   const [msgs, setMsgs] = useState<QQMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
   // 每轮 AI 回合开头再异步刷新一次；回合内同步读最近一次构建结果（systemFull 拼装是同步的）
@@ -6919,6 +6922,38 @@ function ChatPage({
           </span>
         )}
         <div className="ml-1 min-w-0 flex-1">
+          {liquid && liquidSkinQq.headerMode !== 'text' ? (
+            /* 液态玻璃皮肤（本轮新增）：名字区四种模式——头像+名字（名字可关）/ 双头像+中间文字 / 双头像+名字 */
+            <div className="flex items-center gap-1.5">
+              <span
+                data-testid="qq-chat-liquid-header"
+                className="lg-title flex min-w-0 items-center gap-1.5 truncate rounded-full py-[4px] pl-[5px] pr-[12px] text-[15px] font-semibold"
+              >
+                <QqAvatar src={peer.avatar} alt={peer.name} size={26} />
+                {(liquidSkinQq.headerMode === 'dual' || liquidSkinQq.headerMode === 'dualName') && (
+                  <>
+                    {liquidSkinQq.headerMiddleText.trim() && (
+                      <span className="max-w-[86px] truncate text-[13px] font-semibold text-black/80 dark:text-white/85">
+                        {liquidSkinQq.headerMiddleText.trim()}
+                      </span>
+                    )}
+                    <QqAvatar src={me.avatar} alt={me.name} size={26} />
+                  </>
+                )}
+                {(liquidSkinQq.headerMode === 'avatarName' && liquidSkinQq.headerShowName) || liquidSkinQq.headerMode === 'dualName' ? (
+                  <span className="truncate">{streaming || delivering ? '正在输入中…' : peer.name}</span>
+                ) : null}
+              </span>
+              <CoupleMark contactId={peer.id} size={20} testId="qq-chat-couple-mark" />
+              {flags.muted === true && (
+                <BellOff
+                  className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                  strokeWidth={2}
+                  aria-label="消息免打扰"
+                />
+              )}
+            </div>
+          ) : (
           <div className="flex items-center gap-1.5">
             <span
               data-testid="qq-chat-title"
@@ -6936,6 +6971,7 @@ function ChatPage({
               />
             )}
           </div>
+          )}
           <button
             type="button"
             onClick={() => onToast('在线状态暂未开放')}
@@ -17120,6 +17156,7 @@ type MainRoute =
   | { page: 'momentsSettings' }
   | { page: 'dress' }
   | { page: 'bubbles' }
+  | { page: 'liquidSkin' }
   | { page: 'settings' }
   | { page: 'security' }
   | { page: 'stickers' }
@@ -17752,11 +17789,15 @@ function MainScreen({
           app="qq"
           onBack={() => openTabs('消息')}
           onOpenBubbles={() => setRoute({ page: 'bubbles' })}
+          onOpenSkin={() => setRoute({ page: 'liquidSkin' })}
           onToast={showToast}
         />
       ) : route.page === 'bubbles' ? (
         // 气泡样式页（个性装扮 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
         <BubbleStylePage app="qq" onBack={() => setRoute({ page: 'dress' })} onToast={showToast} />
+      ) : route.page === 'liquidSkin' ? (
+        // 液态玻璃皮肤页（主题页 › 液态玻璃设置）：顶栏名字区模式（QQ 无分类标签/小组件区块）
+        <LiquidSkinPage app="qq" onBack={() => setRoute({ page: 'dress' })} onToast={showToast} />
       ) : route.page === 'momentsSettings' ? (
         <MomentsSettingsPage
           app="qq"

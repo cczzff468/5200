@@ -10,6 +10,12 @@ import {
   type BubbleStyleConfig,
   type BubbleTheme,
 } from './bubble-style';
+import {
+  defaultLiquidSkinConfig,
+  normalizeLiquidSkinConfig,
+  type LiquidSkinConfig,
+  type LiquidSkinSettings,
+} from './liquid-skin';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
@@ -368,6 +374,9 @@ interface SettingsState {
   bubbleStyle: BubbleStyleConfig;
   /** 「我的气泡」收藏夹已命名方案（归属某个 App，应用时只覆盖该 App；持久化 settings.bubbleSchemes） */
   bubbleSchemes: BubbleScheme[];
+  /** 液态玻璃主题皮肤自定义（本轮新增：顶栏名字区模式/分类标签文字/会话列表小组件；三 App 隔离；
+   *  持久化 settings.liquidSkin，只在液态主题下生效） */
+  liquidSkin: LiquidSkinConfig;
   loaded: boolean;
 
   /** 设置主屏图标风格（立即持久化；HomeScreen/多任务实时响应） */
@@ -380,6 +389,8 @@ interface SettingsState {
   setBubbleTheme: (app: BubbleAppId, theme: BubbleTheme) => void;
   /** 替换「我的气泡」收藏夹列表（立即持久化） */
   setBubbleSchemes: (list: BubbleScheme[]) => void;
+  /** 更新液态玻璃皮肤设置（patch 合并到对应 App；立即持久化，页面实时响应） */
+  setLiquidSkin: (app: BubbleAppId, patch: Partial<LiquidSkinSettings>) => void;
 
   load: () => Promise<void>;
   /** 锁屏总开关：关闭时同时停用密码并立即回到主屏幕 */
@@ -456,12 +467,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
   goodsImgStyle: 'cartoon',
   bubbleStyle: { wx: { ...DEFAULT_BUBBLE_STYLE.wx }, qq: { ...DEFAULT_BUBBLE_STYLE.qq }, sms: { ...DEFAULT_BUBBLE_STYLE.sms } },
   bubbleSchemes: [],
+  liquidSkin: defaultLiquidSkinConfig(),
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec, islandPersistentRec, bubbleStyleRec, bubbleSchemesRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec, islandPersistentRec, bubbleStyleRec, bubbleSchemesRec, liquidSkinRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -486,6 +498,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'islandPersistent'),
         localDB.get('settings', 'bubbleStyle'),
         localDB.get('settings', 'bubbleSchemes'),
+        localDB.get('settings', 'liquidSkin'),
       ]);
 
       // 性能：八个含密文信封的字段并行解密（getKey 并发单飞，密钥只读一次 IDB）——
@@ -799,6 +812,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         // 聊天气泡装扮 + 收藏夹：无记录/脏数据回默认（normalize 内部校验 kind/color/结构）
         bubbleStyle: normalizeBubbleStyle(bubbleStyleRec?.value),
         bubbleSchemes: normalizeBubbleSchemes(bubbleSchemesRec?.value),
+        // 液态玻璃皮肤：无记录/脏数据回默认（normalize 内部校验模式/文字/开关）
+        liquidSkin: normalizeLiquidSkinConfig(liquidSkinRec?.value),
         loaded: true,
       });
       // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
@@ -866,6 +881,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
     const safe = normalizeBubbleSchemes(list);
     set({ bubbleSchemes: safe });
     void localDB.put('settings', { key: 'bubbleSchemes', value: safe });
+  },
+
+  setLiquidSkin: (app, patch) => {
+    const cur = get().liquidSkin;
+    const next = normalizeLiquidSkinConfig({ ...cur, [app]: { ...cur[app], ...patch } });
+    set({ liquidSkin: next });
+    void localDB.put('settings', { key: 'liquidSkin', value: next });
   },
 
   setAppFont: (id) => {

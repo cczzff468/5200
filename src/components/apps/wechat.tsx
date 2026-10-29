@@ -61,6 +61,13 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
+  Disc3,
+  Pause,
+  Play,
+  Repeat,
+  Settings,
+  SkipBack,
+  SkipForward,
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
@@ -229,6 +236,8 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
+import { LiquidSkinPage } from './liquid-skin-settings';
+import { liquidTabLabel, LIQUID_TABS, type LiquidTabKey } from '@/lib/ios/liquid-skin';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { BubbleTail } from './bubble-tail';
 import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
@@ -4998,6 +5007,8 @@ function ChatPage({
   // 液态玻璃主题（气泡样式设置 › 界面主题）：只接管页面铭件（根底色/顶栏胶囊/输入胶囊/输入框），
   // 气泡仍由上方 bubbleStyle 装扮系统管、聊天背景层一行不动；默认主题全部走原类（像素级保持现状）
   const liquid = isLiquidTheme(bubbleStyle, 'wx');
+  // 液态玻璃皮肤（本轮新增）：顶栏名字区显示模式（text/avatarName/dual/dualName；仅液态主题生效）
+  const liquidSkinWx = useSettings((s) => s.liquidSkin.wx);
   const [msgs, setMsgs] = useState<WxMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
   // 每轮 AI 回合开头再异步刷新一次；回合内同步读最近一次构建结果（systemFull 拼装是同步的）——
@@ -8829,23 +8840,54 @@ function ChatPage({
             </span>
           )}
           <div className="flex min-w-0 flex-1 items-center justify-center" data-testid="wx-chat-peer-name">
-            <span
-              className={
-                liquid
-                  ? /* 液态（第四十五轮，参考图）：名字椭圆形玻璃胶囊包裹（黑色粗体字） */
-                    'lg-title flex min-w-0 items-center gap-1.5 truncate rounded-full px-[16px] py-[6px] text-[16px] font-semibold'
-                  : 'flex items-center gap-1.5 truncate text-[17px] font-medium'
-              }
-            >
-              <span className="truncate">{streaming || delivering ? '正在输入中…' : peer.name}</span>
-              {flags.muted === true && (
-                <BellOff
-                  className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
-                  strokeWidth={2}
-                  aria-label="消息免打扰"
-                />
-              )}
-            </span>
+            {liquid && liquidSkinWx.headerMode !== 'text' ? (
+              /* 液态玻璃皮肤（本轮新增）：名字区四种模式——头像+名字（名字可关）/ 双头像+中间文字 / 双头像+名字；
+                 群聊（peer 侧另有页面）不走此分支；selfChat 也能用（两个头像都是自己） */
+              <span
+                data-testid="wx-chat-liquid-header"
+                className="lg-title flex min-w-0 items-center gap-1.5 truncate rounded-full py-[4px] pl-[5px] pr-[12px] text-[15px] font-semibold"
+              >
+                <WxAvatar src={peer.avatar} alt={peer.name} size={26} shape="circle" />
+                {(liquidSkinWx.headerMode === 'dual' || liquidSkinWx.headerMode === 'dualName') && (
+                  <>
+                    {liquidSkinWx.headerMiddleText.trim() && (
+                      <span className="max-w-[86px] truncate text-[13px] font-semibold text-black/80 dark:text-white/85">
+                        {liquidSkinWx.headerMiddleText.trim()}
+                      </span>
+                    )}
+                    <WxAvatar src={me.avatar} alt={me.name} size={26} shape="circle" />
+                  </>
+                )}
+                {(liquidSkinWx.headerMode === 'avatarName' && liquidSkinWx.headerShowName) || liquidSkinWx.headerMode === 'dualName' ? (
+                  <span className="truncate">{streaming || delivering ? '正在输入中…' : peer.name}</span>
+                ) : null}
+                {flags.muted === true && (
+                  <BellOff
+                    className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                    strokeWidth={2}
+                    aria-label="消息免打扰"
+                  />
+                )}
+              </span>
+            ) : (
+              <span
+                className={
+                  liquid
+                    ? /* 液态（第四十五轮，参考图）：名字椭圆形玻璃胶囊包裹（黑色粗体字） */
+                      'lg-title flex min-w-0 items-center gap-1.5 truncate rounded-full px-[16px] py-[6px] text-[16px] font-semibold'
+                    : 'flex items-center gap-1.5 truncate text-[17px] font-medium'
+                }
+              >
+                <span className="truncate">{streaming || delivering ? '正在输入中…' : peer.name}</span>
+                {flags.muted === true && (
+                  <BellOff
+                    className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                    strokeWidth={2}
+                    aria-label="消息免打扰"
+                  />
+                )}
+              </span>
+            )}
           </div>
           <button
             type="button"
@@ -13585,7 +13627,8 @@ type Page =
   | 'accountSwitch'
   | 'look'
   | 'dress'
-  | 'bubbles';
+  | 'bubbles'
+  | 'liquidSkin';
 
 // ---------------- 看一看页（发现页 › 看一看：轻量内容流） ----------------
 
@@ -14097,6 +14140,178 @@ function WxSearchPage({
   );
 }
 
+// ---------------- 液态玻璃主题 · 会话列表小组件（搜索框下面；设置见 主题页›液态玻璃设置） ----------------
+
+/** 秒数 → mm:ss */
+function mmss(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+/** 网易云音乐小组件：装饰性迷你播放器——播放/暂停真实驱动进度条与唱片旋转（本组件内自洽，不影响音乐 App） */
+function WxWidgetMusic() {
+  const [playing, setPlaying] = useState(true);
+  const DURATION = 225; // 03:45
+  const [sec, setSec] = useState(47);
+  // 播放中每秒推进 1 秒，到结尾循环
+  useEffect(() => {
+    if (!playing) return;
+    const t = window.setInterval(() => setSec((v) => (v + 1 >= DURATION ? 0 : v + 1)), 1000);
+    return () => window.clearInterval(t);
+  }, [playing]);
+  const pct = (sec / DURATION) * 100;
+
+  return (
+    <div
+      data-testid="wx-widget-music"
+      className="lg-card flex items-stretch gap-3 overflow-hidden rounded-[22px] p-3"
+    >
+      {/* 左侧信息列 */}
+      <div className="flex min-w-0 flex-1 flex-col justify-between">
+        <div className="flex items-center gap-2">
+          <span aria-hidden="true" className="h-[30px] w-[30px] shrink-0 rounded-full bg-gradient-to-br from-[#E8B4CB] to-[#9D8BC0] shadow-[0_2px_6px_rgba(0,0,0,0.15)]" />
+          <span className="truncate text-[14px] font-semibold text-black/85 dark:text-white/90">冷冷</span>
+        </div>
+        <div className="mt-1.5 min-w-0">
+          <p className="truncate text-[19px] font-bold leading-tight text-black/90 dark:text-white/95">玻璃</p>
+          <p className="mt-0.5 truncate text-[12.5px] font-medium leading-tight text-black/45 dark:text-white/45">衬托着渐入睡的</p>
+        </div>
+        {/* 进度条 */}
+        <div className="mt-2">
+          <div className="h-[4px] w-full overflow-hidden rounded-full bg-black/[0.08] dark:bg-white/[0.14]">
+            <div className="h-full rounded-full bg-[#07C160]/80" style={{ width: `${pct}%` }} />
+          </div>
+          <div className="mt-1 flex justify-between text-[10px] tabular-nums text-black/35 dark:text-white/40">
+            <span>{mmss(sec)}</span>
+            <span>{mmss(DURATION)}</span>
+          </div>
+        </div>
+        {/* 控制行 */}
+        <div className="mt-1 flex items-center justify-between px-1 text-black/75 dark:text-white/85">
+          <button type="button" aria-label="播放设置" onClick={() => setPlaying((v) => !v)} className="p-1 active:opacity-50">
+            <Settings className="h-[17px] w-[17px]" strokeWidth={2} />
+          </button>
+          <button type="button" aria-label="上一首" onClick={() => setSec(0)} className="p-1 active:opacity-50">
+            <SkipBack className="h-[17px] w-[17px]" strokeWidth={2} />
+          </button>
+          <button
+            type="button"
+            aria-label={playing ? '暂停' : '播放'}
+            data-testid="wx-widget-music-toggle"
+            onClick={() => setPlaying((v) => !v)}
+            className="p-1 active:opacity-50"
+          >
+            {playing ? <Pause className="h-[21px] w-[21px]" strokeWidth={2} /> : <Play className="h-[21px] w-[21px]" strokeWidth={2} />}
+          </button>
+          <button type="button" aria-label="下一首" onClick={() => setSec(DURATION - 15)} className="p-1 active:opacity-50">
+            <SkipForward className="h-[17px] w-[17px]" strokeWidth={2} />
+          </button>
+          <button type="button" aria-label="循环播放" onClick={() => setPlaying(true)} className="p-1 active:opacity-50">
+            <Repeat className="h-[17px] w-[17px]" strokeWidth={2} />
+          </button>
+        </div>
+      </div>
+      {/* 右侧旋转唱片（播放中旋转；中心 = 专辑封面示意） */}
+      <div className="relative flex w-[108px] shrink-0 items-center justify-center">
+        <div
+          aria-hidden="true"
+          className="relative h-[96px] w-[96px] rounded-full bg-[#141416] shadow-[0_6px_18px_rgba(0,0,0,0.28)]"
+          style={{
+            animation: playing ? 'wxWidgetSpin 6s linear infinite' : undefined,
+            background:
+              'repeating-radial-gradient(circle at center, #161618 0px, #1E1E22 1.5px, #161618 3px)',
+          }}
+        >
+          <span className="absolute left-1/2 top-1/2 h-[52px] w-[52px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full bg-gradient-to-br from-[#F6D9E5] via-[#DCC7EC] to-[#B9C7F2] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.4)]">
+            <span className="absolute left-1/2 top-1/2 h-[14px] w-[14px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#141416]" />
+          </span>
+        </div>
+        {/* 唱针（静态装饰） */}
+        <span aria-hidden="true" className="absolute right-1 top-0 h-[46px] w-[2px] origin-top rotate-[26deg] rounded-full bg-black/50 dark:bg-white/50" />
+      </div>
+      <style>{'@keyframes wxWidgetSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}'}</style>
+    </div>
+  );
+}
+
+/** 日历小组件：iOS 风格——星期 + 大日期 + 月份 */
+function WxWidgetCalendar() {
+  const now = new Date();
+  const week = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][now.getDay()];
+  const weekend = now.getDay() === 0 || now.getDay() === 6;
+  return (
+    <div
+      data-testid="wx-widget-calendar"
+      className="lg-card flex items-center gap-4 overflow-hidden rounded-[22px] px-4 py-3"
+    >
+      <div className="flex min-w-0 flex-1 flex-col">
+        <p className="text-[12.5px] font-medium leading-none text-black/40 dark:text-white/45">
+          {now.getFullYear()}年{now.getMonth() + 1}月
+        </p>
+        <p className="mt-1.5 flex items-baseline gap-2">
+          <span
+            className="text-[34px] font-bold leading-none tabular-nums text-black/90 dark:text-white/95"
+            style={weekend ? { color: '#FF453A' } : undefined}
+          >
+            {now.getDate()}
+          </span>
+          <span className="text-[14px] font-medium text-black/55 dark:text-white/55" style={weekend ? { color: '#FF453A' } : undefined}>
+            {week}
+          </span>
+        </p>
+      </div>
+      {/* 右侧日历示意 */}
+      <div aria-hidden="true" className="grid shrink-0 grid-cols-7 gap-[3px] opacity-70">
+        {Array.from({ length: 31 }, (_, i) => (
+          <span
+            key={i}
+            className={`h-[7px] w-[7px] rounded-full ${
+              i + 1 === now.getDate()
+                ? 'bg-[#FF453A]'
+                : 'bg-black/[0.10] dark:bg-white/[0.16]'
+            }`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 自定义 CSS/HTML 小组件：渲染用户内容（内容里可带 <style>；纯本机自用） */
+function WxWidgetCustom({ html }: { html: string }) {
+  if (!html.trim()) {
+    return (
+      <div
+        data-testid="wx-widget-custom"
+        className="lg-card rounded-[22px] px-4 py-5 text-center text-[12.5px] text-black/35 dark:text-white/35"
+      >
+        自定义小组件 · 去 主题 › 液态玻璃设置 写点内容，或点「插入示例」
+      </div>
+    );
+  }
+  return (
+    <div
+      data-testid="wx-widget-custom"
+      className="wx-custom-widget overflow-hidden rounded-[22px]"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+/** 小组件区（搜索框下、分类标签上）：按设置开关逐个渲染 */
+function WxLiquidWidgets() {
+  const skin = useSettings((s) => s.liquidSkin.wx);
+  if (!skin.widgetMusic && !skin.widgetCalendar && !skin.widgetCustom) return null;
+  return (
+    <div className="mb-2.5 flex flex-col gap-2.5">
+      {skin.widgetMusic && <WxWidgetMusic />}
+      {skin.widgetCalendar && <WxWidgetCalendar />}
+      {skin.widgetCustom && <WxWidgetCustom html={skin.customHtml} />}
+    </div>
+  );
+}
+
 function MainScreen({
   me,
   contacts,
@@ -14194,6 +14409,8 @@ function MainScreen({
    *  默认主题全部走原类（像素级保持现状），主题只接管页面铭件、不动气泡与功能逻辑 */
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
   const liquid = isLiquidTheme(bubbleStyle, 'wx');
+  /** 液态玻璃皮肤（本轮新增）：分类标签自定义文字 / 列表小组件开关（液态主题下生效） */
+  const liquidSkinWx = useSettings((s) => s.liquidSkin.wx);
   /** 「让好友发一条」弹层与生成中的联系人 id */
   const [askOpen, setAskOpen] = useState(false);
   const [askBusyId, setAskBusyId] = useState<string | null>(null);
@@ -15366,11 +15583,14 @@ function MainScreen({
         app="wx"
         onBack={() => setPage('main')}
         onOpenBubbles={() => setPage('bubbles')}
+        onOpenSkin={() => setPage('liquidSkin')}
         onToast={showToast}
       />
     );
   // 气泡样式页（主题页 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
   if (page === 'bubbles') return <BubbleStylePage app="wx" onBack={() => setPage('dress')} onToast={showToast} />;
+  // 液态玻璃皮肤页（主题页 › 液态玻璃设置）：顶栏名字区/分类标签文字/列表小组件
+  if (page === 'liquidSkin') return <LiquidSkinPage app="wx" onBack={() => setPage('dress')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'album') {
     // 我的主页「相册」入口：当前用户自己的相册（可增删改）
@@ -15731,7 +15951,7 @@ function MainScreen({
         {tab === 'chats' && (
           <>
             {liquid && (
-              /* 液态（参考图）：搜索胶囊 + 分类标签栏（分段控件）；搜索点按进搜索页，分类过滤下方会话卡片 */
+              /* 液态（参考图）：搜索胶囊 + 小组件区（网易云/日历/自定义 CSS，可开关） + 分类标签栏（分段控件）；搜索点按进搜索页，分类过滤下方会话卡片 */
               <div className="px-2.5 pt-1">
                 <button
                   type="button"
@@ -15742,6 +15962,8 @@ function MainScreen({
                   <Search className="h-[16px] w-[16px]" strokeWidth={2.1} aria-hidden="true" />
                   <span className="text-[14px]">搜索</span>
                 </button>
+                {/* 小组件区（本轮新增）：搜索框下、分类标签上，在 主题页›液态玻璃设置 里开关 */}
+                <WxLiquidWidgets />
                 <div
                   className="lg-seg mb-2.5 flex items-center gap-1 overflow-x-auto rounded-[17px] p-[3px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                   role="tablist"
@@ -15750,12 +15972,9 @@ function MainScreen({
                 >
                   {(
                     [
-                      /* 第四十六轮（用户指定）：加回「工作」分类（全部/好友/工作/群聊/服务号） */
-                      ['all', '全部'],
-                      ['friends', '好友'],
-                      ['work', '工作'],
-                      ['groups', '群聊'],
-                      ['officials', '服务号'],
+                      /* 第四十六轮（用户指定）：加回「工作」分类（全部/好友/工作/群聊/服务号）；
+                         本轮：五个标签文字可在 主题页›液态玻璃设置 自定义（空 = 默认文字） */
+                      ...LIQUID_TABS.map((t) => [t.key, liquidTabLabel(liquidSkinWx, t.key)] as const),
                     ] as Array<['all' | 'friends' | 'work' | 'groups' | 'officials', string]>
                   ).map(([id, label]) => {
                     const active = cat === id;
