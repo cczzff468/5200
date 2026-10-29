@@ -208,7 +208,6 @@ const PREVIEW_MESSAGES: { side: 'mine' | 'theirs'; text: string }[] = [
   { side: 'theirs', text: '早安呀，今天也要开心' },
   { side: 'mine', text: '早安！窗外云超好看' },
   { side: 'theirs', text: '哈哈快拍给我看看' },
-  { side: 'mine', text: '这就发你，等我' },
 ];
 
 // ---------------- 顶部实时大预览（本轮：预览卡放最上面，选哪个主题显示哪个样式） ----------------
@@ -407,19 +406,19 @@ function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string 
   return (
     <div
       aria-hidden
-      className={`relative h-[92px] overflow-hidden rounded-[14px] ${
+      className={`relative h-[78px] overflow-hidden rounded-[14px] ${
         liquid ? 'lg-root' : 'bg-gradient-to-b from-[#F6F7FA] to-[#EBEDF2] dark:from-[#191B20] dark:to-[#141519]'
       }`}
     >
       {liquid && (
         <span className="pointer-events-none absolute inset-0 overflow-hidden">
-          <span className="absolute -left-2 top-1 h-8 w-8 rounded-full bg-[#FF9500]/35 blur-lg" />
-          <span className="absolute right-2 top-3 h-7 w-7 rounded-full bg-[#34C759]/35 blur-lg" />
-          <span className="absolute bottom-0 left-1/3 h-8 w-8 rounded-full bg-[#AF52DE]/30 blur-lg" />
+          <span className="absolute -left-2 top-1 h-7 w-7 rounded-full bg-[#FF9500]/35 blur-lg" />
+          <span className="absolute right-2 top-3 h-6 w-6 rounded-full bg-[#34C759]/35 blur-lg" />
+          <span className="absolute bottom-0 left-1/3 h-7 w-7 rounded-full bg-[#AF52DE]/30 blur-lg" />
         </span>
       )}
       {/* mini 顶栏条 */}
-      <div className={`relative mx-2 mt-[7px] flex h-[13px] items-center justify-between rounded-full px-[6px] ${liquid ? 'lg-search' : solid}`}>
+      <div className={`relative mx-2 mt-[6px] flex h-[12px] items-center justify-between rounded-full px-[6px] ${liquid ? 'lg-search' : solid}`}>
         <span className="h-[4px] w-[4px] -rotate-45 border-b border-l border-black/40 dark:border-white/50" />
         <span className="text-[6.5px] font-semibold leading-none text-black/60 dark:text-white/70">安吉丽娜</span>
         <span className="flex gap-[1.5px]">
@@ -429,7 +428,7 @@ function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string 
         </span>
       </div>
       {/* 两条迷你气泡 */}
-      <div className="relative mt-[9px] flex flex-col gap-[6px] px-2.5">
+      <div className="relative mt-[7px] flex flex-col gap-[5px] px-2.5">
         <div className="flex items-end gap-[4px]">
           <span className="h-[11px] w-[11px] shrink-0 rounded-full bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]" />
           <span className="h-[12px] w-[46px] rounded-[4px] rounded-bl-[2px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.08)] dark:bg-[#2A2B30]" />
@@ -441,17 +440,17 @@ function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string 
       </div>
       {/* TabBar */}
       {liquid ? (
-        <div className="lg-tabbar absolute inset-x-[7px] bottom-[7px] flex h-[11px] items-center justify-around">
+        <div className="lg-tabbar absolute inset-x-[7px] bottom-[6px] flex h-[9px] items-center justify-around">
           {[0, 1, 2, 3].map((d) => (
-            <i key={d} className="h-[3.5px] w-[3.5px] rounded-full" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.30)' }} />
+            <i key={d} className="h-[3px] w-[3px] rounded-full" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.30)' }} />
           ))}
         </div>
       ) : (
-        <div className="absolute inset-x-0 bottom-0 flex h-[13px] items-center justify-around border-t border-black/[0.06] bg-[#FBFBFD] dark:border-white/[0.08] dark:bg-[#1D1E23]">
+        <div className="absolute inset-x-0 bottom-0 flex h-[11px] items-center justify-around border-t border-black/[0.06] bg-[#FBFBFD] dark:border-white/[0.08] dark:bg-[#1D1E23]">
           {[0, 1, 2, 3].map((d) => (
             <i
               key={d}
-              className="h-[3.5px] w-[3.5px] rounded-full bg-black/[0.18] dark:bg-white/40"
+              className="h-[3px] w-[3px] rounded-full bg-black/[0.18] dark:bg-white/40"
               style={d === 0 ? { backgroundColor: accent } : undefined}
             />
           ))}
@@ -612,8 +611,8 @@ function DressMenuContent({ app, onOpen }: { app: BubbleAppId; onOpen: (v: 'them
           </Fragment>
         ))}
       </div>
-      <p className="mt-3 px-2 text-[12px] leading-relaxed text-black/35 dark:text-white/35">
-        主题与气泡独立设置，仅对{meta.name}生效；选哪个主题，预览就显示哪个样式。
+      <p className="mt-2 px-2 text-[11.5px] leading-none text-black/30 dark:text-white/30">
+        主题与气泡相互独立，仅对{meta.name}生效
       </p>
     </>
   );
@@ -727,12 +726,7 @@ function ThemeContent({
       {/* 1. 实时大预览（最上面）：选哪个主题，这里就显示哪个主题的样式 */}
       <div role="region" aria-label="主题实时预览">
         <ThemeLivePreview app={app} cfg={bubbleStyle} theme={curTheme} accent={meta.accent} skin={skin} />
-        <p className="mt-2.5 flex items-center justify-center gap-[6px] text-[12px] font-medium leading-none text-black/45 dark:text-white/45">
-          <span
-            aria-hidden
-            className="h-[5px] w-[5px] rounded-full"
-            style={{ backgroundColor: meta.accent, boxShadow: `0 0 0 2.5px ${withAlpha(meta.accent, 0.18)}` }}
-          />
+        <p className="mt-2 text-center text-[11.5px] font-medium leading-none text-black/40 dark:text-white/40">
           实时预览 · {BUBBLE_THEME_LABEL[curTheme]}
         </p>
       </div>
@@ -1137,24 +1131,22 @@ function BubbleStyleContent({ app, onToast }: { app: BubbleAppId; onToast: (m: s
           </div>
         </FadeInSection>
 
-        {/* ---------- 4. 保存当前设置（accent 胶囊） ---------- */}
-        <FadeInSection index={3}>
-          <button
-            type="button"
-            onClick={() => {
-              setNameDraft('');
-              setNaming(true);
-            }}
-            className="w-full rounded-full py-3.5 text-[15.5px] font-semibold text-white transition-transform active:scale-[0.98]"
-            style={{ backgroundColor: meta.accent, boxShadow: `0 4px 14px ${withAlpha(meta.accent, 0.2)}` }}
-          >
-            保存当前设置
-          </button>
-        </FadeInSection>
-
-        {/* ---------- 5. 收藏夹（胶囊行） ---------- */}
-        <FadeInSection index={4} className="section" role="region" ariaLabel="我的气泡收藏夹">
-          <SectionLabel accent={meta.accent}>我的气泡</SectionLabel>
+        {/* ---------- 4. 我的气泡（标题行内联「存当前」小按钮，替代全宽大按钮更简约） ---------- */}
+        <FadeInSection index={3} className="section" role="region" ariaLabel="我的气泡收藏夹">
+          <div className="flex items-center justify-between gap-2">
+            <SectionLabel accent={meta.accent}>我的气泡</SectionLabel>
+            <button
+              type="button"
+              onClick={() => {
+                setNameDraft('');
+                setNaming(true);
+              }}
+              className="shrink-0 rounded-full px-3 py-[5px] text-[12px] font-semibold active:opacity-60"
+              style={{ color: meta.accent, backgroundColor: withAlpha(meta.accent, 0.1) }}
+            >
+              存当前
+            </button>
+          </div>
           {schemes.length === 0 ? (
             <div className={`mt-2.5 border border-dashed border-black/[0.14] ${GLASS_CARD} py-6 text-center dark:border-white/[0.14]`}>
               <Palette className="mx-auto mb-1.5 h-5 w-5 text-black/25 dark:text-white/25" aria-hidden="true" />
@@ -1215,20 +1207,7 @@ function BubbleStyleContent({ app, onToast }: { app: BubbleAppId; onToast: (m: s
                           {s.style.theirsColor ? ` · TA ${s.style.theirsColor}` : ''}
                         </p>
                       </div>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <button
-                          type="button"
-                          aria-label={`应用 ${s.name}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            applyScheme(s);
-                          }}
-                          className="flex items-center gap-0.5 rounded-full px-3 py-1.5 text-[12px] font-semibold text-white transition-transform active:scale-95"
-                          style={{ backgroundColor: sMeta.accent }}
-                        >
-                          应用
-                          <ChevronRight className="h-3 w-3" aria-hidden="true" />
-                        </button>
+                      <div className="flex shrink-0 items-center gap-1">
                         <button
                           type="button"
                           aria-label={`删除 ${s.name}`}

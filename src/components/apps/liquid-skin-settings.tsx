@@ -324,7 +324,7 @@ export function LiquidSkinPanel({ app, onToast, wxMe }: LiquidSkinPanelProps) {
             <Switch data-testid="liquid-show-name" checked={skin.headerShowName} onCheckedChange={(v) => patch({ headerShowName: v })} />
           </div>
         )}
-        <p className="mt-2 px-1 text-[11px] leading-relaxed text-black/35 dark:text-white/35">只在液态玻璃主题聊天页生效；群聊保持群名。</p>
+        <p className="mt-1.5 px-1 text-[11px] leading-tight text-black/35 dark:text-white/35">仅液态主题聊天页生效；群聊保持群名。</p>
       </CollapseSection>
 
       {/* ---------- 2. 分类标签文字（仅微信） ---------- */}
@@ -362,7 +362,7 @@ export function LiquidSkinPanel({ app, onToast, wxMe }: LiquidSkinPanelProps) {
               </div>
             ))}
           </div>
-          <p className="mt-2 px-1 text-[11px] leading-relaxed text-black/35 dark:text-white/35">留空恢复默认文字。</p>
+          <p className="mt-1.5 px-1 text-[11px] leading-tight text-black/35 dark:text-white/35">留空即用默认文字。</p>
         </CollapseSection>
       )}
 
@@ -500,8 +500,8 @@ export function LiquidSkinPanel({ app, onToast, wxMe }: LiquidSkinPanelProps) {
               />
             </div>
           )}
-          <p className="mt-2 px-1 text-[11px] leading-relaxed text-black/35 dark:text-white/35">
-            小组件显示在会话列表搜索框下面；网易云已连接音乐 App，可直接控制播放。
+          <p className="mt-1.5 px-1 text-[11px] leading-tight text-black/35 dark:text-white/35">
+            显示在会话列表搜索框下方；网易云可控制播放。
           </p>
         </CollapseSection>
       )}
