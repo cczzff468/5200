@@ -236,21 +236,6 @@ export function WxIcTheme() {
   );
 }
 
-/** 聊天气泡：微信绿圆角气泡 + 两点（「发现」页 › 聊天气泡 入口） */
-export function WxIcBubble() {
-  return (
-    <Slot>
-      <path
-        d="M24 8 C33.6 8 41 14.4 41 22.4 C41 30.4 33.6 36.8 24 36.8 C21.7 36.8 19.5 36.4 17.5 35.7 L11 37.7 L13 31.8 C9.9 29.3 8 25.9 8 22.4 C8 14.4 14.4 8 24 8 Z"
-        stroke="#07C160"
-        strokeWidth={3}
-      />
-      <circle cx="18.6" cy="22.4" r="2.3" fill="#07C160" />
-      <circle cx="29.4" cy="22.4" r="2.3" fill="#07C160" />
-    </Slot>
-  );
-}
-
 /** 设置：蓝色齿轮（lucide 自带 viewBox，独立于 48 画布） */
 export function WxIcSettings() {
   return (
