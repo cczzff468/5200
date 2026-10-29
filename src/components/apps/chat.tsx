@@ -3936,7 +3936,8 @@ function ChatView({
           }
           onBack={() => setSettingsOpen(false)}
           onOpenTranslate={() => setTranslateOpen(true)}
-          themeSummary={(() => {
+          themeSummary={bubbleStyle.sms?.theme === 'liquid' ? '液态玻璃' : '默认'}
+          bubbleSummary={(() => {
             const s = bubbleStyle.sms;
             if (!s || (s.kind === 'default' && !s.mineColor && !s.theirsColor)) return '默认';
             const parts = [BUBBLE_KIND_LABEL[s.kind] ?? '默认'];
@@ -3945,6 +3946,7 @@ function ChatView({
             return parts.join(' · ');
           })()}
           onOpenTheme={() => setThemeOpen(true)}
+          onOpenBubbles={() => setBubbleOpen(true)}
           replyCount={replyCountValue}
           onOpenReplyCount={() => setReplyCountOpen(true)}
           onToggleSentenceSend={(v) => {
@@ -3973,21 +3975,19 @@ function ChatView({
         />
       )}
 
-      {/* 主题页（聊天设置 › 主题）：界面主题（信息仅默认）+ 聊天气泡样式入口；
-          气泡页在其下一级独立打开（bubbleOpen，z 更高，返回回到主题页）；装扮写入
+      {/* 主题页（聊天设置 › 主题）：纯界面主题（信息仅默认）；装扮写入
           bubbleStyle.sms 独立槽位——与微信/QQ 完全隔离 */}
       {themeOpen && !bubbleOpen && (
         <div className="absolute inset-0 z-[60]">
           <ThemeStylePage
             app="sms"
             onBack={() => setThemeOpen(false)}
-            onOpenBubbles={() => setBubbleOpen(true)}
             onToast={showToast}
           />
         </div>
       )}
 
-      {/* 气泡样式页（主题页 › 聊天气泡样式）：实时预览/样式四格/HSL 色板/收藏夹 */}
+      {/* 气泡样式页（聊天设置 › 聊天气泡，与主题各自独立）：实时预览/样式四格/HSL 色板/收藏夹 */}
       {bubbleOpen && (
         <div className="absolute inset-0 z-[61]">
           <BubbleStylePage app="sms" onBack={() => setBubbleOpen(false)} onToast={showToast} />

@@ -237,7 +237,6 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, PostMoreMenu, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
-import { LiquidSkinPage } from './liquid-skin-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
@@ -12610,6 +12609,7 @@ function MeDrawer({
   onOpenFavorites,
   onOpenSettings,
   onOpenDress,
+  onOpenBubbles,
   onOpenAlbum,
   onPatchUser,
   onToast,
@@ -12621,8 +12621,10 @@ function MeDrawer({
   onOpenStickers: () => void;
   onOpenFavorites: () => void;
   onOpenSettings: () => void;
-  /** 第十七轮：个性装扮 → 聊天气泡装扮设置页 */
+  /** 第十七轮：个性装扮 → 主题装扮设置页 */
   onOpenDress: () => void;
+  /** 聊天气泡（与主题各自独立的界面） */
+  onOpenBubbles: () => void;
   onOpenAlbum: () => void;
   onPatchUser: (patch: Partial<QQUser>) => void;
   onToast: (m: string) => void;
@@ -12678,8 +12680,9 @@ function MeDrawer({
     { icon: <Smile className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '表情', onClick: () => { close(); window.setTimeout(onOpenStickers, 240); } },
     { icon: <Wallet className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '钱包', onClick: () => { close(); window.setTimeout(onOpenWallet, 240); } },
     { icon: <Shirt className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '个性装扮', onClick: () => { close(); window.setTimeout(onOpenDress, 240); } },
+    { icon: <MessageCircle className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '聊天气泡', onClick: () => { close(); window.setTimeout(onOpenBubbles, 240); } },
   ];
-  const rowColors = ['#F5B90F', '#3BA0FF', '#3BA0FF', '#3BA0FF', '#F0479C'];
+  const rowColors = ['#F5B90F', '#3BA0FF', '#3BA0FF', '#3BA0FF', '#F0479C', '#3BA0FF'];
 
   return (
     <div className="absolute inset-0 z-40 overflow-hidden" role="dialog" aria-label="个人中心">
@@ -14729,14 +14732,17 @@ function SettingsPage({
   onBack,
   onOpenSecurity,
   onOpenDress,
+  onOpenBubbles,
   onLogout,
   onToast,
 }: {
   me: QQUser;
   onBack: () => void;
   onOpenSecurity: () => void;
-  /** 第十七轮：个性装扮与特权外显 → 聊天气泡装扮设置页 */
+  /** 个性装扮与特权外显 → 主题装扮设置页 */
   onOpenDress: () => void;
+  /** 聊天气泡（与主题各自独立的界面） */
+  onOpenBubbles: () => void;
   onLogout: () => void;
   onToast: (m: string) => void;
 }) {
@@ -14760,6 +14766,7 @@ function SettingsPage({
     { icon: <Bell className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '消息通知', onClick: () => onToast('消息通知暂未开放') },
     { icon: <SlidersHorizontal className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '模式选择', hint: '普通模式', onClick: () => onToast('模式选择暂未开放') },
     { icon: <Shirt className="h-5 w-5" strokeWidth={1.9} />, color: '#F0479C', label: '个性装扮与特权外显', onClick: onOpenDress },
+    { icon: <MessageCircle className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '聊天气泡样式', onClick: onOpenBubbles },
     { icon: <Sparkles className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '头像双击动作', hint: clapShown, onClick: openClap, testid: 'qq-settings-clap' },
     { icon: <Settings className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '通用', onClick: () => onToast('通用设置暂未开放') },
   ];
@@ -17191,7 +17198,6 @@ type MainRoute =
   | { page: 'momentsSettings' }
   | { page: 'dress' }
   | { page: 'bubbles' }
-  | { page: 'liquidSkin' }
   | { page: 'settings' }
   | { page: 'security' }
   | { page: 'stickers' }
@@ -17819,20 +17825,11 @@ function MainScreen({
           renderAvatar={(src, name, size) => <QqAvatar src={src} alt={name} size={size} />}
         />
       ) : route.page === 'dress' ? (
-        // 主题页（个性装扮拆分：界面主题独立成页，气泡样式在下一级独立页）
-        <ThemeStylePage
-          app="qq"
-          onBack={() => openTabs('消息')}
-          onOpenBubbles={() => setRoute({ page: 'bubbles' })}
-          onOpenSkin={() => setRoute({ page: 'liquidSkin' })}
-          onToast={showToast}
-        />
+        // 主题页（个性装扮：纯主题界面，两列紧凑卡 + 液态玻璃设置内联收缩）
+        <ThemeStylePage app="qq" onBack={() => openTabs('消息')} onToast={showToast} />
       ) : route.page === 'bubbles' ? (
-        // 气泡样式页（个性装扮 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
-        <BubbleStylePage app="qq" onBack={() => setRoute({ page: 'dress' })} onToast={showToast} />
-      ) : route.page === 'liquidSkin' ? (
-        // 液态玻璃皮肤页（主题页 › 液态玻璃设置）：顶栏名字区模式（QQ 无分类标签/小组件区块）
-        <LiquidSkinPage app="qq" onBack={() => setRoute({ page: 'dress' })} onToast={showToast} />
+        // 气泡样式页（与主题各自独立的界面）：实时预览 + 四格样式 + 颜色 + 收藏夹
+        <BubbleStylePage app="qq" onBack={() => openTabs('消息')} onToast={showToast} />
       ) : route.page === 'momentsSettings' ? (
         <MomentsSettingsPage
           app="qq"
@@ -17855,6 +17852,7 @@ function MainScreen({
           onBack={() => openTabs('消息')}
           onOpenSecurity={() => setRoute({ page: 'security' })}
           onOpenDress={() => setRoute({ page: 'dress' })}
+          onOpenBubbles={() => setRoute({ page: 'bubbles' })}
           onLogout={onLogout}
           onToast={showToast}
         />
@@ -18036,6 +18034,10 @@ function MainScreen({
           onOpenDress={() => {
             setDrawerOpen(false);
             setRoute({ page: 'dress' });
+          }}
+          onOpenBubbles={() => {
+            setDrawerOpen(false);
+            setRoute({ page: 'bubbles' });
           }}
           onOpenAlbum={() => {
             setDrawerOpen(false);

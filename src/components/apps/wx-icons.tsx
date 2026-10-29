@@ -221,7 +221,7 @@ export function WxIcSticker() {
   );
 }
 
-/** 主题：四段彩色弧环（绿/蓝/橙/紫，调色盘色环）+ 中心色点（「我」页 › 主题 入口） */
+/** 主题：四段彩色弧环（绿/蓝/橙/紫，调色盘色环）+ 中心色点（「发现」页 › 主题 入口） */
 export function WxIcTheme() {
   return (
     <Slot>
@@ -232,6 +232,21 @@ export function WxIcTheme() {
         <path d="M7.26 21.05 A17 17 0 0 1 21.05 7.26" stroke="#AF52DE" />
       </g>
       <circle cx="24" cy="24" r="4.6" fill="#07C160" />
+    </Slot>
+  );
+}
+
+/** 聊天气泡：微信绿圆角气泡 + 两点（「发现」页 › 聊天气泡 入口） */
+export function WxIcBubble() {
+  return (
+    <Slot>
+      <path
+        d="M24 8 C33.6 8 41 14.4 41 22.4 C41 30.4 33.6 36.8 24 36.8 C21.7 36.8 19.5 36.4 17.5 35.7 L11 37.7 L13 31.8 C9.9 29.3 8 25.9 8 22.4 C8 14.4 14.4 8 24 8 Z"
+        stroke="#07C160"
+        strokeWidth={3}
+      />
+      <circle cx="18.6" cy="22.4" r="2.3" fill="#07C160" />
+      <circle cx="29.4" cy="22.4" r="2.3" fill="#07C160" />
     </Slot>
   );
 }

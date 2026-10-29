@@ -20,8 +20,9 @@
  */
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronRight, MessageCircle, Palette, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
+import { Check, ChevronRight, Palette, RotateCcw, Trash2 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
+import { LiquidSkinPanel } from './liquid-skin-settings';
 import { useSettings } from '@/lib/ios/store';
 import {
   BUBBLE_KIND_LABEL,
@@ -56,12 +57,6 @@ const KIND_CAPTIONS: Record<BubbleStyleKind, string> = {
   rainbow: '九色 · 按消息循环',
   frosted: '奶白磨砂 · 隐约透底',
   liquid: '清透水膜 · 透底',
-};
-
-/** 主题副标题（主题卡下方的一行小注） */
-const THEME_CAPTIONS: Record<BubbleTheme, string> = {
-  default: '原生经典 · 纯色界面',
-  liquid: '玻璃通透 · 悬浮胶囊',
 };
 
 /** 玻璃卡（统一材质；圆角 22px） */
@@ -217,10 +212,10 @@ const PREVIEW_MESSAGES: { side: 'mine' | 'theirs'; text: string }[] = [
   { side: 'mine', text: '这就发你，等我' },
 ];
 
-// ---------------- 主题卡内实时缩影预览（本轮重做：主题单独成界面，每卡自带预览） ----------------
+// ---------------- 主题卡内实时缩影预览（本轮简化：两列紧凑卡，卡内只留顶栏/两泡/TabBar） ----------------
 
-/** 主题卡内的紧凑实时缩影（约 132px）：mini 顶栏 + 日期胶囊 + 两条**真实渲染**气泡
- *  （PreviewBubble，气泡装扮同步联动）+ 输入胶囊 + TabBar；
+/** 主题卡内的紧凑实时缩影（约 118px）：mini 顶栏 + 两条**真实渲染**气泡（PreviewBubble，
+ *  气泡装扮同步联动）+ 悬浮 TabBar；
  *  液态 = 玻璃半透 lg-* 同材质 + 悬浮胶囊 TabBar；默认 = 白实底 + 贴底素条。 */
 function ThemeCardPreview({
   app,
@@ -237,55 +232,45 @@ function ThemeCardPreview({
   const solid = 'bg-white shadow-[0_1px_3px_rgba(0,0,0,0.07)] dark:bg-[#2A2B30] dark:shadow-none';
   return (
     <div
-      className={`relative h-[132px] overflow-hidden rounded-[16px] ${
+      className={`relative h-[118px] overflow-hidden rounded-[14px] ${
         liquid ? 'lg-root' : 'bg-[#F2F3F7] dark:bg-[#17181C]'
       }`}
     >
       {liquid && <AuraLayer />}
       {/* mini 顶栏：液态 = 玻璃胶囊；默认 = 白实底条 */}
-      <div className={`mx-2.5 mt-2.5 flex h-[15px] items-center justify-center ${liquid ? 'lg-search' : solid}`}>
-        <span className="h-[3.5px] w-[30px] rounded-full bg-black/[0.12] dark:bg-white/25" />
-      </div>
-      {/* 日期胶囊（居中小字） */}
-      <div className="mt-[5px] flex justify-center">
-        <span
-          className={`rounded-full px-1.5 py-[1px] text-[7px] leading-none text-black/35 dark:text-white/35 ${
-            liquid ? '' : 'bg-black/[0.05] dark:bg-white/[0.08]'
-          }`}
-        >
-          10:24
-        </span>
+      <div className={`mx-2 mt-2 flex h-[14px] items-center justify-center ${liquid ? 'lg-search' : solid}`}>
+        <span className="h-[3px] w-[26px] rounded-full bg-black/[0.12] dark:bg-white/25" />
       </div>
       {/* 消息：TA（左）真实装扮泡 + 我（右）真实装扮泡 */}
-      <div className="mt-[5px] flex flex-col items-start gap-[5px] px-3">
-        <PreviewBubble app={app} cfg={cfg} side="theirs" index={0} className="!px-2 !py-[3.5px] !text-[8.5px]">
+      <div className="mt-[7px] flex flex-col items-start gap-[6px] px-3">
+        <PreviewBubble app={app} cfg={cfg} side="theirs" index={0} className="!px-2 !py-[3.5px] !text-[8px]">
           早呀
         </PreviewBubble>
         <span className="ml-auto">
-          <PreviewBubble app={app} cfg={cfg} side="mine" index={1} className="!px-2 !py-[3.5px] !text-[8.5px]">
+          <PreviewBubble app={app} cfg={cfg} side="mine" index={1} className="!px-2 !py-[3.5px] !text-[8px]">
             今天也要开心
           </PreviewBubble>
         </span>
       </div>
       {/* mini 输入条 */}
-      <div className={`mx-2.5 mt-2 h-[12px] rounded-full ${liquid ? 'lg-input' : solid}`} />
+      <div className={`mx-2 mt-2 h-[11px] rounded-full ${liquid ? 'lg-input' : solid}`} />
       {/* mini TabBar：默认 = 贴底素条；液态 = 悬浮玻璃胶囊 */}
       {liquid ? (
-        <div className="lg-tabbar absolute inset-x-[10px] bottom-[7px] flex h-[14px] items-center justify-around">
+        <div className="lg-tabbar absolute inset-x-[9px] bottom-[7px] flex h-[13px] items-center justify-around">
           {[0, 1, 2].map((d) => (
             <span
               key={d}
-              className="h-[4.5px] w-[4.5px] rounded-full"
+              className="h-[4px] w-[4px] rounded-full"
               style={{ background: d === 0 ? accent : 'rgba(0,0,0,0.35)' }}
             />
           ))}
         </div>
       ) : (
-        <div className="absolute inset-x-0 bottom-0 flex h-[16px] items-center justify-around border-t border-black/[0.06] bg-[#FBFBFD] dark:border-white/[0.08] dark:bg-[#1D1E23]">
+        <div className="absolute inset-x-0 bottom-0 flex h-[15px] items-center justify-around border-t border-black/[0.06] bg-[#FBFBFD] dark:border-white/[0.08] dark:bg-[#1D1E23]">
           {[0, 1, 2].map((d) => (
             <span
               key={d}
-              className="h-[4.5px] w-[4.5px] rounded-full bg-black/[0.18] dark:bg-white/40"
+              className="h-[4px] w-[4px] rounded-full bg-black/[0.18] dark:bg-white/40"
               style={d === 0 ? { background: accent } : undefined}
             />
           ))}
@@ -342,25 +327,23 @@ function HslSlider({
   );
 }
 
-// ================= 主题页（本轮重做：主题单独成界面 + 液态玻璃设置挂在液态主题卡内） =================
+// ================= 主题页（本轮重做：纯主题界面·两列紧凑卡 + 液态玻璃设置内联收缩） =================
 
 export interface ThemeStylePageProps {
   /** 宿主 App（装扮完全隔离：本页所有修改只写入 cfg[app]） */
   app: BubbleAppId;
   /** 返回上一级 */
   onBack: () => void;
-  /** 进入气泡样式页（本页只管界面主题，气泡在独立页单独调） */
-  onOpenBubbles: () => void;
-  /** 进入液态玻璃皮肤设置页（挂在液态玻璃主题卡内；仅选中液态主题时显示，wx/qq 传入） */
-  onOpenSkin?: () => void;
   /** 弹一条本地提示 */
   onToast: (m: string) => void;
+  /** （仅微信）当前登录账号的头像/昵称——液态玻璃设置里网易云小组件预览用 */
+  wxMe?: { name: string; avatar: string | null };
 }
 
-/** 主题页（本轮重做·简约）：纯主题选择界面 —— 每个主题一张全宽大卡（卡内自带实时缩影
- *  预览，气泡装扮同步联动，所见即所得）；选中卡 accent 描边 + 圆勾徽标；
- *  液态玻璃设置行嵌在液态玻璃卡内部下方（归属一目了然）；页尾仅气泡入口一行。 */
-export function ThemeStylePage({ app, onBack, onOpenBubbles, onOpenSkin, onToast }: ThemeStylePageProps) {
+/** 主题页（纯主题界面）：两列紧凑主题卡（卡内实时缩影预览，气泡装扮同步联动，
+ *  所见即所得）；选中卡 accent 描边 + 圆勾；选中液态玻璃时下方内联展开
+ *  「液态玻璃设置」收缩面板（无独立界面，归属一目了然）。 */
+export function ThemeStylePage({ app, onBack, onToast, wxMe }: ThemeStylePageProps) {
   const meta = PLATFORM_META[app];
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
   const setBubbleTheme = useSettings((s) => s.setBubbleTheme);
@@ -368,6 +351,7 @@ export function ThemeStylePage({ app, onBack, onOpenBubbles, onOpenSkin, onToast
   /** 当前 App 的装扮（三 App 隔离：只读写 bubbleStyle[app]） */
   const appStyle: BubbleAppStyle = bubbleStyle[app] ?? { kind: 'default' };
   const curTheme: BubbleTheme = appStyle.theme ?? 'default';
+  const liquidOn = curTheme === 'liquid' && THEMES_OF_APP[app].includes('liquid');
 
   return (
     <IOSScreen className="bg-[#F4F5F7] dark:bg-[#0E1014]">
@@ -378,148 +362,79 @@ export function ThemeStylePage({ app, onBack, onOpenBubbles, onOpenSkin, onToast
         className="bg-[#F4F5F7]/75! dark:bg-[#0E1014]/75!"
       />
 
-      <div className="no-scrollbar relative flex-1 space-y-6 overflow-y-auto px-4 pb-12">
-        {/* ---------- 1. 主题卡（主题单独成界面：每卡自带实时缩影预览 + 名称行；点整卡切换） ---------- */}
-        <FadeInSection index={0} className="section">
+      <div className="no-scrollbar relative flex-1 overflow-y-auto px-4 pb-12">
+        {/* ---------- 主题卡（两列紧凑网格：点卡切换，选中 accent 描边 + 圆勾） ---------- */}
+        <FadeInSection index={0} className="section" role="region" ariaLabel="界面主题">
           <SectionLabel accent={meta.accent}>界面主题</SectionLabel>
-          <div className="mt-2.5 space-y-3.5">
+          <div className="mt-2.5 grid grid-cols-2 gap-3">
             {THEMES_OF_APP[app].map((theme) => {
               const selected = curTheme === theme;
-              const liquid = theme === 'liquid';
               return (
-                <div
+                <button
                   key={theme}
-                  className={`overflow-hidden rounded-[22px] bg-white transition-shadow duration-300 dark:bg-[#1C1E23] ${
-                    selected ? '' : 'ring-1 ring-inset ring-black/[0.05] dark:ring-white/[0.08]'
+                  type="button"
+                  data-testid={`bubble-theme-${theme}`}
+                  aria-pressed={selected}
+                  onClick={() => {
+                    if (!selected) {
+                      setBubbleTheme(app, theme);
+                      onToast(
+                        theme === 'liquid'
+                          ? '已切换液态玻璃主题，气泡同步换为液态玻璃'
+                          : '已恢复默认主题，气泡同步换为原生默认',
+                      );
+                    }
+                  }}
+                  className={`rounded-[18px] bg-white p-2 pb-1 text-left ring-1 transition-all active:scale-[0.98] dark:bg-[#1C1E23] ${
+                    selected ? 'ring-[1.5px]' : 'ring-black/[0.05] dark:ring-white/[0.08]'
                   }`}
                   style={
                     selected
-                      ? { boxShadow: `inset 0 0 0 1.5px ${meta.accent}, 0 10px 28px ${withAlpha(meta.accent, 0.14)}` }
+                      ? { ['--tw-ring-color' as string]: meta.accent, boxShadow: `0 8px 22px ${withAlpha(meta.accent, 0.13)}` }
                       : undefined
                   }
                 >
-                  {/* 点按整卡切换主题 */}
-                  <button
-                    type="button"
-                    data-testid={`bubble-theme-${theme}`}
-                    aria-pressed={selected}
-                    onClick={() => {
-                      if (!selected) {
-                        setBubbleTheme(app, theme);
-                        onToast(
-                          theme === 'liquid'
-                            ? '已切换液态玻璃主题，气泡同步换为液态玻璃'
-                            : '已恢复默认主题，气泡同步换为原生默认',
-                        );
-                      }
-                    }}
-                    className="block w-full text-left transition-transform active:scale-[0.99]"
-                  >
-                    <div className="p-2.5 pb-0">
-                      <ThemeCardPreview app={app} cfg={bubbleStyle} theme={theme} accent={meta.accent} />
-                    </div>
-                    <div className="flex items-center gap-3 px-4 py-3">
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-[15.5px] font-semibold leading-tight text-black/85 dark:text-white/90">
-                          {BUBBLE_THEME_LABEL[theme]}
-                        </span>
-                        <span className="mt-[3px] block truncate text-[11.5px] leading-tight text-black/40 dark:text-white/40">
-                          {THEME_CAPTIONS[theme]}
-                        </span>
-                      </span>
-                      {selected && (
-                        <span
-                          className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-white shadow-sm"
-                          style={{ backgroundColor: meta.accent }}
-                        >
-                          <Check className="h-[13px] w-[13px]" strokeWidth={3.2} />
-                        </span>
-                      )}
-                    </div>
-                  </button>
-
-                  {/* 液态玻璃专属设置：嵌在液态玻璃主题卡内部下方（仅选中该主题时展开，
-                      归属清晰：设置就在对应主题里面，不再放页尾独立区块） */}
-                  <AnimatePresence initial={false}>
-                    {liquid && selected && onOpenSkin && (
-                      <motion.div
-                        key="skin-row"
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-                        className="overflow-hidden"
+                  <ThemeCardPreview app={app} cfg={bubbleStyle} theme={theme} accent={meta.accent} />
+                  <div className="flex items-center gap-1.5 px-1.5 pb-1 pt-2">
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-tight text-black/85 dark:text-white/90">
+                      {BUBBLE_THEME_LABEL[theme]}
+                    </span>
+                    {selected && (
+                      <span
+                        className="flex h-[16px] w-[16px] shrink-0 items-center justify-center rounded-full text-white"
+                        style={{ backgroundColor: meta.accent }}
                       >
-                        <div className="border-t border-black/[0.05] dark:border-white/[0.07]">
-                          <button
-                            type="button"
-                            data-testid="liquid-skin-entry"
-                            onClick={onOpenSkin}
-                            className="flex w-full items-center gap-2.5 bg-black/[0.02] px-4 py-[10px] text-left transition-colors active:bg-black/[0.05] dark:bg-white/[0.03] dark:active:bg-white/[0.06]"
-                          >
-                            <span
-                              className="flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[9px]"
-                              style={{ backgroundColor: withAlpha(meta.accent, 0.12) }}
-                            >
-                              <Sparkles
-                                className="h-[15px] w-[15px]"
-                                style={{ color: meta.accent }}
-                                strokeWidth={2.1}
-                              />
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-[13.5px] font-medium leading-tight text-black/80 dark:text-white/85">
-                                液态玻璃设置
-                              </span>
-                              <span className="mt-[2px] block truncate text-[10.5px] leading-tight text-black/35 dark:text-white/35">
-                                {app === 'wx' ? '顶栏名字样式 · 分类标签 · 小组件' : '顶栏名字样式'}
-                              </span>
-                            </span>
-                            <ChevronRight
-                              className="h-4 w-4 shrink-0 text-black/25 dark:text-white/25"
-                              aria-hidden="true"
-                            />
-                          </button>
-                        </div>
-                      </motion.div>
+                        <Check className="h-[10px] w-[10px]" strokeWidth={3.4} />
+                      </span>
                     )}
-                  </AnimatePresence>
-                </div>
+                  </div>
+                </button>
               );
             })}
           </div>
           <p className="mt-2.5 px-2 text-[11px] leading-relaxed text-black/35 dark:text-white/35">
-            {app === 'sms' ? '信息 App 暂仅默认主题；气泡样式可单独挑选' : '切换主题会同步气泡与界面；气泡样式也可单独挑选'}
+            {app === 'sms' ? '信息 App 暂仅默认主题' : '切换主题会同步气泡与界面样式'}
           </p>
         </FadeInSection>
 
-        {/* ---------- 2. 气泡入口（列表行，进入独立气泡页） ---------- */}
-        <FadeInSection index={1} className="section">
-          <SectionLabel accent={meta.accent}>气泡</SectionLabel>
-          <button
-            type="button"
-            data-testid="bubble-style-entry"
-            onClick={onOpenBubbles}
-            className="mt-2.5 flex w-full items-center gap-3 rounded-[22px] bg-white px-4 py-[13px] text-left ring-1 ring-black/[0.05] transition-transform active:scale-[0.99] dark:bg-[#1C1E23] dark:ring-white/[0.08]"
-          >
-            <span
-              className="flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-[12px]"
-              style={{ backgroundColor: withAlpha(meta.accent, 0.12) }}
+        {/* ---------- 液态玻璃设置（内联收缩面板，仅选中液态玻璃时出现，无独立界面） ---------- */}
+        <AnimatePresence initial={false}>
+          {liquidOn && (
+            <motion.div
+              key="liquid-panel"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.26 }}
+              className="mt-5"
             >
-              <MessageCircle className="h-[19px] w-[19px]" style={{ color: meta.accent }} strokeWidth={2.1} />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[15px] font-medium leading-tight text-black/85 dark:text-white/90">
-                聊天气泡样式
-              </span>
-              <span className="mt-[2px] block truncate text-[11.5px] leading-tight text-black/40 dark:text-white/40">
-                {BUBBLE_KIND_LABEL[appStyle.kind]}
-                {appStyle.mineColor || appStyle.theirsColor ? ' · 自定义色' : ''}
-              </span>
-            </span>
-            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
-          </button>
-        </FadeInSection>
+              <SectionLabel accent={meta.accent}>液态玻璃设置</SectionLabel>
+              <div className="mt-2.5">
+                <LiquidSkinPanel app={app} onToast={onToast} wxMe={wxMe} />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </IOSScreen>
   );

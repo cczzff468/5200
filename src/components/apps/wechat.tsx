@@ -130,6 +130,7 @@ import {
   WxIcWorks,
   WxIcSticker,
   WxIcTheme,
+  WxIcBubble,
   WxIcSettings,
   WxTabCompassIcon,
 } from './wx-icons';
@@ -234,7 +235,6 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
-import { LiquidSkinPage } from './liquid-skin-settings';
 import { liquidTabLabel, LIQUID_TABS, type LiquidTabKey } from '@/lib/ios/liquid-skin';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { BubbleTail } from './bubble-tail';
@@ -13657,8 +13657,7 @@ type Page =
   | 'accountSwitch'
   | 'look'
   | 'dress'
-  | 'bubbles'
-  | 'liquidSkin';
+  | 'bubbles';
 
 // ---------------- 看一看页（发现页 › 看一看：轻量内容流） ----------------
 
@@ -15741,22 +15740,18 @@ function MainScreen({
   if (page === 'services') return <WxServices friends={friends} myRealName={myRealName} onExit={() => setPage('main')} />;
   if (page === 'stickers') return <WxStickersPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'look') return <WxLookPage onBack={() => setPage('main')} onToast={showToast} />;
-  // 主题页（「发现」页 › 主题，原小程序位进入）：界面主题独立成页，气泡样式在下一级独立页
+  // 主题页（「发现」页 › 主题，原小程序位进入）：纯主题界面（两列紧凑卡 + 液态玻璃设置内联收缩）
   if (page === 'dress')
     return (
       <ThemeStylePage
         app="wx"
         onBack={() => setPage('main')}
-        onOpenBubbles={() => setPage('bubbles')}
-        onOpenSkin={() => setPage('liquidSkin')}
         onToast={showToast}
+        wxMe={{ name: me.name, avatar: me.avatar }}
       />
     );
-  // 气泡样式页（主题页 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
-  if (page === 'bubbles') return <BubbleStylePage app="wx" onBack={() => setPage('dress')} onToast={showToast} />;
-  // 液态玻璃皮肤页（主题页 › 液态玻璃设置）：顶栏名字区/分类标签文字/列表小组件（网易云身份跟随微信预览用）
-  if (page === 'liquidSkin')
-    return <LiquidSkinPage app="wx" onBack={() => setPage('dress')} onToast={showToast} wxMe={{ name: me.name, avatar: me.avatar }} />;
+  // 气泡样式页（「发现」页 › 聊天气泡，与主题各自独立）：实时预览 + 四格样式 + 颜色 + 收藏夹
+  if (page === 'bubbles') return <BubbleStylePage app="wx" onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'album') {
     // 我的主页「相册」入口：当前用户自己的相册（可增删改）
@@ -16387,13 +16382,19 @@ function MainScreen({
               />
             </div>
             <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
-              {/* 主题（自「我」页移此，顶替原小程序位）：界面主题 + 气泡样式两级独立页 */}
+              {/* 主题 / 聊天气泡（发现页两个独立入口，各自单独的界面） */}
               <WxMenuRow
                 first
                 label="主题"
                 testId="wx-discover-theme"
                 onClick={() => setPage('dress')}
                 icon={<WxIcTheme />}
+              />
+              <WxMenuRow
+                label="聊天气泡"
+                testId="wx-discover-bubbles"
+                onClick={() => setPage('bubbles')}
+                icon={<WxIcBubble />}
               />
             </div>
           </div>
