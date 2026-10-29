@@ -186,7 +186,8 @@ import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
-import { chatPlaceholder, resolvePlusKeys } from '@/lib/ios/chat-decor';
+import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
+import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -1907,8 +1908,8 @@ let groupCascadeDepth = 0;
 type GroupPlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'favorite';
 
 /** 群加号面板（与单聊 PlusPanel 同款布局与图标，共用同一套视觉；红包/转账为群内真实可用功能）。
- *  visibleKeys：输入框设置 › 加号面板功能（与单聊共用；群专属功能如「收藏」不受勾选影响，恒显示） */
-function WxGroupPlusPanel({ onAction, visibleKeys }: { onAction: (a: GroupPlusAction) => void; visibleKeys?: readonly string[] }) {
+ *  面板保持原生全部功能（用户指定「加号面板里面的功能不要动」）；自定义只影响输入框上方快捷条 */
+function WxGroupPlusPanel({ onAction }: { onAction: (a: GroupPlusAction) => void }) {
   const all: Array<{ key: GroupPlusAction; label: string; icon: React.ReactNode }> = [
     { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
@@ -1919,21 +1920,13 @@ function WxGroupPlusPanel({ onAction, visibleKeys }: { onAction: (a: GroupPlusAc
     { key: 'location', label: '位置', icon: <MapPin className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'favorite', label: '收藏', icon: <Star className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
-  // 输入框设置：与单聊共用勾选结果（群专属 key 不在设置清单里，恒保留在末尾）
-  const GROUP_ONLY: readonly GroupPlusAction[] = ['favorite'];
-  const items = visibleKeys?.length
-    ? [
-        ...visibleKeys.map((k) => all.find((it) => it.key === k)).filter((x): x is { key: GroupPlusAction; label: string; icon: React.ReactNode } => !!x),
-        ...all.filter((it) => GROUP_ONLY.includes(it.key)),
-      ]
-    : all;
   return (
     <div
       className="shrink-0 border-t border-black/[0.05] bg-[#F7F7F7] px-2 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 dark:border-white/[0.06] dark:bg-[#161616]"
       data-testid="wx-group-plus-panel"
     >
       <div className="grid grid-cols-4">
-        {items.map((it) => (
+        {all.map((it) => (
           <button
             key={it.key}
             type="button"
@@ -1951,6 +1944,18 @@ function WxGroupPlusPanel({ onAction, visibleKeys }: { onAction: (a: GroupPlusAc
     </div>
   );
 }
+
+/** 输入框上方快捷功能条（群聊版）：图标/文案与群加号面板同源（仅群内可用的 7 项；
+ *  「收藏」为群专属功能不在设置清单里；offline/textcard/together/gift 群内不支持，自动排除） */
+const WXG_QUICK_META: Record<string, { label: string; icon: React.ReactNode }> = {
+  camera: { label: '相机', icon: <Camera className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  image: { label: '图片', icon: <ImageIcon className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  voicecall: { label: '语音通话', icon: <Phone className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  videocall: { label: '视频通话', icon: <Video className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  redpacket: { label: '红包', icon: <Gift className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  location: { label: '位置', icon: <MapPin className="h-[13px] w-[13px]" strokeWidth={2} /> },
+};
 
 // ---------------- 群红包/转账页面组件（微信风格；纯本地模拟） ----------------
 
@@ -4400,6 +4405,16 @@ export function WxGroupChatPage({
     onToast(`${label[a] ?? '该功能'}暂未开放`);
   };
 
+  /** 输入框上方快捷功能条（与单聊共用微信槽位设置）：把加号面板里的功能放到输入框上面，
+ *  点一下直接触发（与点面板里那一项等效）；未添加 = 不显示；「+」面板本身不受影响 */
+  const quickItems: QuickBarItem[] = resolveQuickKeys('wx', chatDecorWx.quickKeys)
+    .map((k): QuickBarItem | null => {
+      const meta = WXG_QUICK_META[k];
+      if (!meta) return null;
+      return { key: k, label: meta.label, icon: meta.icon, onClick: () => handlePlusAction(k as GroupPlusAction) };
+    })
+    .filter((x): x is QuickBarItem => x !== null);
+
   // ---------------- 长按气泡菜单：复制/删除/编辑/引用/多选/撤回/转发/收藏/重新生成（与单聊完全一致） ----------------
 
   /** 消息是否可长按弹菜单 / 多选勾选（通知行与已撤回行除外） */
@@ -5440,6 +5455,12 @@ export function WxGroupChatPage({
           </div>
         )}
         <div className="px-2.5 pb-[18px] pt-2">
+          {/* 输入框上方快捷功能条（输入框自定义 › 输入框上方功能；群聊只含群内可用的功能） */}
+          {quickItems.length > 0 && (
+            <div className="mb-1.5">
+              <ChatQuickBar items={quickItems} testPrefix="wxg" />
+            </div>
+          )}
           <div className="flex items-end gap-2.5">
             <button
               type="button"
@@ -5513,7 +5534,7 @@ export function WxGroupChatPage({
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorWx)}
-                  placeholderClass="pl-3 pt-[7px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
+                  placeholderClass="pl-3 text-[16px] text-black/30 dark:text-white/30"
                   testId="wx-groupchat-input"
                   className="block max-h-[132px] min-h-[36px] w-full overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 focus-visible:border-[#07C160]/40 focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.13),0_5px_16px_rgba(0,0,0,0.05)] dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none dark:focus-visible:border-[#07C160]/45 dark:focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.17)]"
                 />
@@ -5606,7 +5627,7 @@ export function WxGroupChatPage({
         </div>
         {/* 表情面板 / 加号面板（与单聊共用同一套组件与布局） */}
         {stickerOpen && <WxStickerPanel onPick={sendSticker} onPickBuiltin={insertBuiltinEmoji} onClose={() => setStickerOpen(false)} onToast={onToast} />}
-        {plusOpen && <WxGroupPlusPanel onAction={handlePlusAction} visibleKeys={resolvePlusKeys('wx', chatDecorWx.plusKeys)} />}
+        {plusOpen && <WxGroupPlusPanel onAction={handlePlusAction} />}
         {/* @ 成员浮层：锚定输入区容器上方（含面板与引用条也不遮挡） */}
         {atOpen && (
           <>

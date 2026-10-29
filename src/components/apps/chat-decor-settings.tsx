@@ -1,34 +1,33 @@
 'use client';
 
 /**
- * 聊天输入框自定义 · 设置面板（本轮新增）
+ * 聊天输入框自定义 · 设置面板
  * ---------------------------------------------------------------------------
  * 位置：主题页 › 主题 Tab ›「输入框」区块（液态玻璃设置下方，两种界面主题下都显示——
- *       用户指定「默认主题也可以添加」）。
+ *       用户指定「默认主题也可以添加」）。信息 App 不接入（无此区块）。
  * 形态：与液态玻璃设置同款收缩面板，两段可收缩区块（点标题行展开/收起，默认收起，简约）——
  *  1. 输入框文字：自定义不打字时输入框里显示的灰色占位文字（如「♡*·☆ 1314 day with U·+°♡」），
- *     带实时小预览；留空 = App 原生默认。
- *  2. 加号面板功能：勾选「+」面板里显示哪些功能、按什么顺序显示；
- *     支持上移/下移排序与恢复默认。
+ *     带实时小预览；留空 = 原生默认。
+ *  2. 输入框上方功能：把「+」面板里的功能添加到输入框上面成为小胶囊快捷条（点一下直接触发，
+ *     与点加号面板里那一项等效）；「+」面板本身保持原样不动（用户指定）；留空 = 不显示。
  *
  * 修改即时写入 useSettings.setChatDecor（App 隔离）并持久化，聊天页实时跟随。
  */
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowDown, ArrowUp, Check, ChevronRight, Keyboard, LayoutGrid, RotateCcw, Type } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronRight, RotateCcw, Sparkles, Type } from 'lucide-react';
 import { useSettings } from '@/lib/ios/store';
 import {
-  DEFAULT_PLUS_KEYS,
   PLUS_FEATURE_LABELS,
-  resolvePlusKeys,
+  PLUS_POOL_KEYS,
+  resolveQuickKeys,
   type ChatDecorSettings,
+  type DecorAppId,
 } from '@/lib/ios/chat-decor';
-import type { BubbleAppId } from '@/lib/ios/bubble-style';
 
-const PLATFORM_META: Record<BubbleAppId, { name: string; accent: string; inputShape: string }> = {
+const PLATFORM_META: Record<DecorAppId, { name: string; accent: string; inputShape: string }> = {
   wx: { name: '微信', accent: '#07C160', inputShape: 'rounded-[5px]' },
   qq: { name: 'QQ', accent: '#0099FF', inputShape: 'rounded-full' },
-  sms: { name: '信息', accent: '#007AFF', inputShape: 'rounded-[18px]' },
 };
 
 // ---------------- 收缩区块（与液态玻璃设置同款结构） ----------------
@@ -98,8 +97,8 @@ function CollapseSection({
   );
 }
 
-/** 输入框占位文字实时小预览（一条仿真输入条，灰字实时跟随） */
-function PlaceholderPreview({ app, text }: { app: BubbleAppId; text: string }) {
+/** 输入框占位文字实时小预览（一条仿真输入条，灰字实时跟随、垂直居中） */
+function PlaceholderPreview({ app, text }: { app: DecorAppId; text: string }) {
   const meta = PLATFORM_META[app];
   const ph = text.trim();
   return (
@@ -108,7 +107,7 @@ function PlaceholderPreview({ app, text }: { app: BubbleAppId; text: string }) {
         className={`flex h-[28px] min-w-0 flex-1 items-center bg-white px-3 text-[12.5px] leading-none shadow-[0_1px_3px_rgba(0,0,0,0.06)] dark:bg-[#2A2C31] dark:shadow-none ${meta.inputShape}`}
       >
         <span className={`truncate ${ph ? 'text-black/35 dark:text-white/35' : 'text-black/25 dark:text-white/25'}`}>
-          {ph || (app === 'sms' ? 'iMessage信息' : '未设置（默认空）')}
+          {ph || '未设置（默认空）'}
         </span>
       </span>
       <span
@@ -126,12 +125,12 @@ function PlaceholderPreview({ app, text }: { app: BubbleAppId; text: string }) {
 
 export interface ChatDecorPanelProps {
   /** 宿主 App（自定义完全隔离：本页所有修改只写入 chatDecor[app]） */
-  app: BubbleAppId;
+  app: DecorAppId;
   /** 弹一条本地提示 */
   onToast: (m: string) => void;
 }
 
-/** 输入框设置 · 收缩面板（嵌在主题页主题 Tab 内，默认/液态两种主题都显示） */
+/** 输入框设置 · 收缩面板（嵌在主题页主题 Tab 内，默认/液态两种主题都显示；信息 App 不接入） */
 export function ChatDecorPanel({ app, onToast }: ChatDecorPanelProps) {
   const meta = PLATFORM_META[app];
   const chatDecor = useSettings((s) => s.chatDecor);
@@ -139,38 +138,33 @@ export function ChatDecorPanel({ app, onToast }: ChatDecorPanelProps) {
 
   const decor: ChatDecorSettings = chatDecor[app];
   /** 两段区块独立收缩（默认全收起，简约） */
-  const [sec, setSec] = useState<'placeholder' | 'plus' | null>(null);
-  const toggle = (k: 'placeholder' | 'plus') => setSec((v) => (v === k ? null : k));
+  const [sec, setSec] = useState<'placeholder' | 'quick' | null>(null);
+  const toggle = (k: 'placeholder' | 'quick') => setSec((v) => (v === k ? null : k));
 
   const patch = (p: Partial<ChatDecorSettings>) => setChatDecor(app, p);
 
-  /** 加号面板功能：全部功能（默认顺序）+ 是否自定义过 */
-  const allKeys = DEFAULT_PLUS_KEYS[app];
+  /** 输入框上方快捷功能：功能池（= 加号面板原生功能，顺序一致）+ 已添加列表 */
+  const poolKeys = PLUS_POOL_KEYS[app];
   const labels = PLUS_FEATURE_LABELS[app];
-  /** 已选顺序（resolvePlusKeys 处理空/脏数据 → 永不为空） */
-  const activeKeys = resolvePlusKeys(app, decor.plusKeys);
-  const isCustomPlus = decor.plusKeys.length > 0;
+  /** 已添加顺序（resolveQuickKeys 过滤未知 key；可为空 = 不显示快捷条） */
+  const activeKeys = resolveQuickKeys(app, decor.quickKeys);
 
-  /** 切换一个功能：已选 → 移除；未选 → 追加到末尾（至少保留一项） */
-  const togglePlusKey = (key: string) => {
+  /** 切换一个功能：已添加 → 移除；未添加 → 追加到末尾（允许清空 = 不显示快捷条） */
+  const toggleQuickKey = (key: string) => {
     const has = activeKeys.includes(key);
-    if (has && activeKeys.length <= 1) {
-      onToast('至少保留一项功能');
-      return;
-    }
     const next = has ? activeKeys.filter((k) => k !== key) : [...activeKeys, key];
-    patch({ plusKeys: next });
+    patch({ quickKeys: next });
     navigator.vibrate?.(6);
   };
 
-  /** 上移/下移已选功能（与相邻项交换位置） */
+  /** 上移/下移已添加功能（与相邻项交换位置） */
   const moveKey = (key: string, dir: -1 | 1) => {
     const idx = activeKeys.indexOf(key);
     const swap = idx + dir;
     if (idx < 0 || swap < 0 || swap >= activeKeys.length) return;
     const next = [...activeKeys];
     [next[idx], next[swap]] = [next[swap], next[idx]];
-    patch({ plusKeys: next });
+    patch({ quickKeys: next });
     navigator.vibrate?.(6);
   };
 
@@ -219,72 +213,80 @@ export function ChatDecorPanel({ app, onToast }: ChatDecorPanelProps) {
         </div>
         <PlaceholderPreview app={app} text={decor.inputPlaceholder} />
         <p className="mt-1.5 px-1 text-[11px] leading-tight text-black/35 dark:text-white/35">
-          开启「文字转语音」时优先显示语音提示；{app === 'sms' ? `${meta.name}内同步生效` : `${meta.name}与群聊同步生效`}。
+          开启「文字转语音」时优先显示语音提示；{meta.name}单聊与群聊同步生效。
         </p>
       </CollapseSection>
 
-      {/* ---------- 2. 加号面板功能 ---------- */}
+      {/* ---------- 2. 输入框上方功能 ---------- */}
       <CollapseSection
-        testId="decor-sec-plus"
+        testId="decor-sec-quick"
         accent={meta.accent}
-        icon={<LayoutGrid className="h-[15px] w-[15px]" style={{ color: meta.accent }} strokeWidth={2.1} aria-hidden="true" />}
-        title="加号面板功能"
-        summary={isCustomPlus ? `已选 ${activeKeys.length} / ${allKeys.length} 项` : '默认全部'}
-        open={sec === 'plus'}
-        onToggle={() => toggle('plus')}
+        icon={<Sparkles className="h-[15px] w-[15px]" style={{ color: meta.accent }} strokeWidth={2.1} aria-hidden="true" />}
+        title="输入框上方功能"
+        summary={activeKeys.length ? `已添加 ${activeKeys.length} 项` : '未添加'}
+        open={sec === 'quick'}
+        onToggle={() => toggle('quick')}
       >
-        {/* 已选列表（可排序）：↑ ↓ 调顺序，点名称行取消勾选 */}
-        <p className="px-1 text-[12px] font-medium text-black/55 dark:text-white/55">已选功能（点行可移除，箭头调顺序）</p>
-        <div className="mt-1.5 overflow-hidden rounded-[12px] bg-black/[0.02] ring-1 ring-black/[0.05] dark:bg-white/[0.04] dark:ring-white/[0.08]" data-testid="decor-plus-active">
-          {activeKeys.map((key, i) => (
-            <div
-              key={key}
-              className={`flex items-center gap-2 px-3 py-[9px] ${i > 0 ? 'border-t border-black/[0.04] dark:border-white/[0.06]' : ''}`}
-            >
-              <button
-                type="button"
-                aria-label={`移除${labels[key] ?? key}`}
-                onClick={() => togglePlusKey(key)}
-                className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full text-white transition active:scale-90"
-                style={{ backgroundColor: meta.accent }}
-              >
-                <Check className="h-[11px] w-[11px]" strokeWidth={3.2} />
-              </button>
-              <span className="min-w-0 flex-1 truncate text-[13.5px] text-black/80 dark:text-white/85">{labels[key] ?? key}</span>
-              <span className="flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  aria-label={`${labels[key] ?? key}上移`}
-                  disabled={i === 0}
-                  onClick={() => moveKey(key, -1)}
-                  className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-black/[0.05] text-black/50 transition active:bg-black/[0.12] disabled:opacity-25 dark:bg-white/[0.08] dark:text-white/55 dark:active:bg-white/[0.16]"
-                >
-                  <ArrowUp className="h-[13px] w-[13px]" strokeWidth={2.4} />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`${labels[key] ?? key}下移`}
-                  disabled={i === activeKeys.length - 1}
-                  onClick={() => moveKey(key, 1)}
-                  className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-black/[0.05] text-black/50 transition active:bg-black/[0.12] disabled:opacity-25 dark:bg-white/[0.08] dark:text-white/55 dark:active:bg-white/[0.16]"
-                >
-                  <ArrowDown className="h-[13px] w-[13px]" strokeWidth={2.4} />
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {/* 未选功能：点加回 */}
-        {activeKeys.length < allKeys.length && (
+        {/* 已添加列表（可排序）：↑ ↓ 调顺序，点名称行移除；空 = 不显示快捷条 */}
+        {activeKeys.length > 0 ? (
           <>
-            <p className="mt-2.5 px-1 text-[12px] font-medium text-black/55 dark:text-white/55">未选功能（点加回）</p>
-            <div className="mt-1.5 flex flex-wrap gap-1.5 px-1" data-testid="decor-plus-inactive">
-              {allKeys.filter((k) => !activeKeys.includes(k)).map((key) => (
+            <p className="px-1 text-[12px] font-medium text-black/55 dark:text-white/55">已添加（点行可移除，箭头调顺序）</p>
+            <div className="mt-1.5 overflow-hidden rounded-[12px] bg-black/[0.02] ring-1 ring-black/[0.05] dark:bg-white/[0.04] dark:ring-white/[0.08]" data-testid="decor-quick-active">
+              {activeKeys.map((key, i) => (
+                <div
+                  key={key}
+                  className={`flex items-center gap-2 px-3 py-[9px] ${i > 0 ? 'border-t border-black/[0.04] dark:border-white/[0.06]' : ''}`}
+                >
+                  <button
+                    type="button"
+                    aria-label={`移除${labels[key] ?? key}`}
+                    onClick={() => toggleQuickKey(key)}
+                    className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full text-white transition active:scale-90"
+                    style={{ backgroundColor: meta.accent }}
+                  >
+                    <Check className="h-[11px] w-[11px]" strokeWidth={3.2} />
+                  </button>
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] text-black/80 dark:text-white/85">{labels[key] ?? key}</span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      aria-label={`${labels[key] ?? key}上移`}
+                      disabled={i === 0}
+                      onClick={() => moveKey(key, -1)}
+                      className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-black/[0.05] text-black/50 transition active:bg-black/[0.12] disabled:opacity-25 dark:bg-white/[0.08] dark:text-white/55 dark:active:bg-white/[0.16]"
+                    >
+                      <ArrowUp className="h-[13px] w-[13px]" strokeWidth={2.4} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${labels[key] ?? key}下移`}
+                      disabled={i === activeKeys.length - 1}
+                      onClick={() => moveKey(key, 1)}
+                      className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-black/[0.05] text-black/50 transition active:bg-black/[0.12] disabled:opacity-25 dark:bg-white/[0.08] dark:text-white/55 dark:active:bg-white/[0.16]"
+                    >
+                      <ArrowDown className="h-[13px] w-[13px]" strokeWidth={2.4} />
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="rounded-[10px] bg-black/[0.02] px-3 py-2.5 text-[12px] leading-relaxed text-black/40 dark:bg-white/[0.04] dark:text-white/40" data-testid="decor-quick-empty">
+            未添加——把加号面板里的功能加到输入框上面，点一下直接使用；不加就是原生样子。
+          </p>
+        )}
+
+        {/* 功能池：点添加到末尾 */}
+        {activeKeys.length < poolKeys.length && (
+          <>
+            <p className="mt-2.5 px-1 text-[12px] font-medium text-black/55 dark:text-white/55">加号面板里的功能（点添加）</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5 px-1" data-testid="decor-quick-pool">
+              {poolKeys.filter((k) => !activeKeys.includes(k)).map((key) => (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => togglePlusKey(key)}
+                  onClick={() => toggleQuickKey(key)}
                   className="rounded-full bg-black/[0.04] px-3 py-[6px] text-[12.5px] text-black/55 transition active:bg-black/[0.1] dark:bg-white/[0.07] dark:text-white/60 dark:active:bg-white/[0.14]"
                 >
                   + {labels[key] ?? key}
@@ -294,22 +296,22 @@ export function ChatDecorPanel({ app, onToast }: ChatDecorPanelProps) {
           </>
         )}
 
-        {isCustomPlus && (
+        {activeKeys.length > 0 && (
           <button
             type="button"
-            data-testid="decor-plus-reset"
+            data-testid="decor-quick-reset"
             onClick={() => {
-              patch({ plusKeys: [] });
-              onToast('已恢复默认功能');
+              patch({ quickKeys: [] });
+              onToast('已清空，输入框上方恢复原生');
             }}
             className="mt-3 flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] bg-black/[0.04] text-[13px] font-medium text-black/55 transition active:bg-black/[0.09] dark:bg-white/[0.07] dark:text-white/60 dark:active:bg-white/[0.13]"
           >
             <RotateCcw className="h-[13px] w-[13px]" strokeWidth={2.4} aria-hidden="true" />
-            恢复默认功能
+            清空（不显示快捷条）
           </button>
         )}
         <p className="mt-1.5 px-1 text-[11px] leading-tight text-black/35 dark:text-white/35">
-          设置输入栏「+」面板里显示哪些功能；至少保留一项。
+          快捷条放在输入框上面，点一下与点加号面板里那一项等效；「+」面板本身保持原样。
         </p>
       </CollapseSection>
     </div>

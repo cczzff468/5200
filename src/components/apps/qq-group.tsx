@@ -179,7 +179,8 @@ import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
-import { chatPlaceholder, resolvePlusKeys } from '@/lib/ios/chat-decor';
+import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
+import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -4033,11 +4034,13 @@ export function QqGroupChatPage({
       },
     },
   ];
-  // 输入框设置 › 加号面板功能：与 QQ 单聊共用勾选结果（群面板只含其中可用的功能；空 = 默认全部）
+  // 输入框上方快捷功能（输入框自定义 › 输入框上方功能；与 QQ 单聊共用槽位）：把加号面板里的功能
+  // 放到输入框上面，点一下直接触发（同一条 onClick）；未添加 = 不显示；「+」面板本身不受影响
   const chatDecorQq = useSettings((s) => s.chatDecor.qq);
-  const plusItems = resolvePlusKeys('qq', chatDecorQq.plusKeys)
+  const quickItems: QuickBarItem[] = resolveQuickKeys('qq', chatDecorQq.quickKeys)
     .map((k) => plusAllItems.find((it) => it.key === k))
-    .filter((x): x is { key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void } => !!x);
+    .filter((x): x is { key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void } => !!x)
+    .map((it) => ({ key: it.key, label: it.label, icon: it.icon, onClick: it.onClick }));
 
   // ---------------- 长按气泡菜单：复制/删除/编辑/引用/多选/撤回/转发/收藏/重新生成（与单聊完全一致） ----------------
 
@@ -5048,6 +5051,13 @@ export function QqGroupChatPage({
             </button>
           </div>
         )}
+        {/* 输入框上方快捷功能条（输入框自定义 › 输入框上方功能）：把加号面板里的功能放到输入框上面；
+            点一下与点面板里那一项等效；未添加 = 不显示；「+」面板本身不受影响 */}
+        {quickItems.length > 0 && (
+          <div className="px-3 pt-2">
+            <ChatQuickBar items={quickItems} testPrefix="qqg" />
+          </div>
+        )}
         <div className="flex items-end gap-2 px-3 pb-1 pt-3">
           <div className="relative min-w-0 flex-1">
             <ChatRichInput
@@ -5075,7 +5085,7 @@ export function QqGroupChatPage({
               }}
               enterKeyHint={enterSend ? 'send' : undefined}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorQq)}
-              placeholderClass="pl-3.5 pt-[9px] text-[15px] leading-[22px] text-black/25 dark:text-white/25"
+              placeholderClass="pl-3.5 text-[15px] text-black/25 dark:text-white/25"
               ariaLabel="发送群聊消息"
               testId="qq-groupchat-input"
               className="max-h-[132px] min-h-[40px] w-full overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-9 text-[15px] leading-[22px] outline-none dark:border-white/[0.08] dark:bg-white/[0.07]"
@@ -5214,7 +5224,7 @@ export function QqGroupChatPage({
             className="border-t border-black/[0.05] px-5 pb-6 pt-5 dark:border-white/[0.06]"
             style={{ animation: 'qqPanelIn 0.24s ease-out' }}
           >
-            <QqPlusGrid items={plusItems} />
+            <QqPlusGrid items={plusAllItems} />
           </div>
         )}
         {/* 表情面板（与单聊共用同一套组件；表情包按群会话独立保存） */}

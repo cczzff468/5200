@@ -608,7 +608,7 @@ export function ThemeStylePage({ app, onBack, onToast, title = '主题', wxMe }:
 /** 主题界面内容：**顶部实时大预览卡**（选哪个主题就显示哪个主题的整页样式，
  *  液态顶栏名字区还联动液态设置实时变化）+ 主题选择卡（材质缩影，点选切换）+
  *  选中液态玻璃时「液态玻璃设置」收缩面板紧跟液态玻璃主题下方（无独立界面）+
- *  「输入框」设置收缩面板（占位文字/加号面板功能；默认/液态两种主题都可用）。 */
+ *  「输入框」设置收缩面板（占位文字/输入框上方快捷功能；默认/液态两种主题都可用；信息 App 不接入）。 */
 function ThemeContent({
   app,
   onToast,
@@ -710,13 +710,15 @@ function ThemeContent({
       </AnimatePresence>
 
       {/* 4. 输入框设置（收缩面板）：默认/液态两种主题都可用（用户指定「默认主题也可以添加」）——
-          自定义输入框占位灰字 + 加号面板功能增删排序 */}
-      <FadeInSection index={1} className="mt-4" role="region" ariaLabel="输入框设置">
-        <SectionLabel accent={meta.accent}>输入框</SectionLabel>
-        <div className="mt-2.5">
-          <ChatDecorPanel app={app} onToast={onToast} />
-        </div>
-      </FadeInSection>
+          自定义输入框占位灰字 + 输入框上方快捷功能（加号面板保持原样）；信息 App 不接入（用户指定） */}
+      {app !== 'sms' && (
+        <FadeInSection index={1} className="mt-4" role="region" ariaLabel="输入框设置">
+          <SectionLabel accent={meta.accent}>输入框</SectionLabel>
+          <div className="mt-2.5">
+            <ChatDecorPanel app={app} onToast={onToast} />
+          </div>
+        </FadeInSection>
+      )}
     </>
   );
 }

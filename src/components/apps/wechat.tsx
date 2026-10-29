@@ -238,7 +238,8 @@ import { liquidTabLabel, LIQUID_TABS, type LiquidTabKey } from '@/lib/ios/liquid
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { BubbleTail } from './bubble-tail';
 import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
-import { chatPlaceholder, resolvePlusKeys } from '@/lib/ios/chat-decor';
+import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
+import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
 // 第三十四轮：添加账号弹层（AccountAddSheet）删除——「添加账号」改为直接用账号密码登录（LoginScreen）
@@ -3849,9 +3850,9 @@ function RedPacketIcon() {
 }
 
 /** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方）。
- *  液态玻璃主题（用户指定）：竖向乳白玻璃列表（图标左 + 文字右，lg-menu-row）
- *  可选 visibleKeys：输入框设置 › 加号面板功能勾选后的显示顺序（空 = 默认全部） */
-function PlusPanel({ onAction, liquid, visibleKeys }: { onAction: (a: PlusAction) => void; liquid?: boolean; visibleKeys?: readonly string[] }) {
+ *  液态玻璃主题（用户指定）：竖向乳白玻璃列表（图标左 + 文字右，lg-menu-row）。
+ *  面板保持原生全部功能（用户指定「加号面板里面的功能不要动」）；自定义只影响输入框上方快捷条 */
+function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; liquid?: boolean }) {
   const all: Array<{ key: PlusAction; label: string; icon: React.ReactNode }> = [
     { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
@@ -3865,8 +3866,6 @@ function PlusPanel({ onAction, liquid, visibleKeys }: { onAction: (a: PlusAction
     { key: 'together', label: '一起听', icon: <Headphones className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'gift', label: '礼物', icon: <Gift className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
-  // 输入框设置：勾选后的功能按所选顺序显示（visibleKeys 空 = 默认全部）
-  const items = visibleKeys?.length ? visibleKeys.map((k) => all.find((it) => it.key === k)).filter((x): x is { key: PlusAction; label: string; icon: React.ReactNode } => !!x) : all;
   return (
     <div
       className={`shrink-0 ${
@@ -3880,7 +3879,7 @@ function PlusPanel({ onAction, liquid, visibleKeys }: { onAction: (a: PlusAction
     >
       {liquid ? (
         <div className="flex flex-col">
-          {items.map((it) => (
+          {all.map((it) => (
             <button
               key={it.key}
               type="button"
@@ -3895,7 +3894,7 @@ function PlusPanel({ onAction, liquid, visibleKeys }: { onAction: (a: PlusAction
         </div>
       ) : (
         <div className="grid grid-cols-4">
-          {items.map((it) => (
+          {all.map((it) => (
             <button
               key={it.key}
               type="button"
@@ -3914,6 +3913,22 @@ function PlusPanel({ onAction, liquid, visibleKeys }: { onAction: (a: PlusAction
     </div>
   );
 }
+
+/** 输入框上方快捷功能条的图标/文案（与加号面板同源同文案；点击直接走 handlePlusAction，
+ *  与点加号面板里那一项完全等效；面板本身不动） */
+const WX_QUICK_META: Record<string, { label: string; icon: React.ReactNode }> = {
+  camera: { label: '相机', icon: <Camera className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  image: { label: '图片', icon: <ImageIcon className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  voicecall: { label: '语音通话', icon: <Phone className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  videocall: { label: '视频通话', icon: <Video className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  redpacket: { label: '红包', icon: <RedPacketIcon /> },
+  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  location: { label: '位置', icon: <MapPin className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  offline: { label: '线下', icon: <Star className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  textcard: { label: '文字图片', icon: <Sparkles className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  together: { label: '一起听', icon: <Headphones className="h-[13px] w-[13px]" strokeWidth={2} /> },
+  gift: { label: '礼物', icon: <Gift className="h-[13px] w-[13px]" strokeWidth={2} /> },
+};
 
 /** 支付方式选择底部弹层（零钱 / 银行卡 / 我收到的亲属卡；发红包/转账页用；单聊/群聊共用） */
 export function WxPayMethodSheet({
@@ -8651,6 +8666,16 @@ function ChatPage({
     onToast(`${label[a] ?? '该功能'}暂未开放`);
   };
 
+  /** 输入框上方快捷功能条（输入框自定义 › 输入框上方功能）：把加号面板里的功能放到输入框上面，
+   *  点一下直接触发（与点面板里那一项等效）；未添加 = 不显示；「+」面板本身不受影响 */
+  const quickItems: QuickBarItem[] = resolveQuickKeys('wx', chatDecorWx.quickKeys)
+    .map((k): QuickBarItem | null => {
+      const meta = WX_QUICK_META[k];
+      if (!meta) return null;
+      return { key: k, label: meta.label, icon: meta.icon, onClick: () => handlePlusAction(k as PlusAction) };
+    })
+    .filter((x): x is QuickBarItem => x !== null);
+
   // ---- 聊天设置：置顶 / 免打扰 / 聊天背景 / 查找聊天记录 ----
 
   const handlePickBgColor = useCallback(
@@ -9711,6 +9736,13 @@ function ChatPage({
             第三十四轮：gap-2.5→gap-2（输入框往右延伸）
             第四十七轮（用户指定）：液态底距 pb-2→pb-[13px]——输入框整体再往上提一点 */}
         <div className={liquid ? 'px-2.5 pb-[13px] pt-1' : 'px-2.5 pb-[18px] pt-1'}>
+          {/* 输入框上方快捷功能条（输入框自定义 › 输入框上方功能）：把加号面板里的功能放到输入框上面；
+              点一下与点面板里那一项等效；未添加 = 不显示；「+」面板本身不受影响 */}
+          {quickItems.length > 0 && (
+            <div className="mb-1.5">
+              <ChatQuickBar items={quickItems} liquid={liquid} testPrefix="wx" />
+            </div>
+          )}
           {/* 液态输入栏（第四十四轮，用户指定）：删除大椭圆包裹——语音钮 = 玻璃圆圈内嵌黑圈、
               输入框毛玻璃椭圆、表情+加号共用一个玻璃椭圆；默认主题原样 */}
           <div className="flex items-center gap-2">
@@ -9777,7 +9809,7 @@ function ChatPage({
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorWx)}
-                  placeholderClass="pl-1 pt-[6px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
+                  placeholderClass="pl-3.5 text-[16px] text-black/30 dark:text-white/30"
                   testId="wx-chat-input"
                   className={`block max-h-[132px] w-full overflow-y-auto py-[8px] pl-3.5 pr-11 text-[16px] leading-[22px] caret-[#07C160] outline-none transition-all duration-200 selection:bg-[#07C160]/20 ${
                     liquid
@@ -9932,10 +9964,10 @@ function ChatPage({
         {plusOpen && (
           liquid ? (
             <div className="absolute bottom-full right-2.5 z-30 w-[248px]">
-              <PlusPanel onAction={handlePlusAction} liquid={liquid} visibleKeys={resolvePlusKeys('wx', chatDecorWx.plusKeys)} />
+              <PlusPanel onAction={handlePlusAction} liquid={liquid} />
             </div>
           ) : (
-            <PlusPanel onAction={handlePlusAction} visibleKeys={resolvePlusKeys('wx', chatDecorWx.plusKeys)} />
+            <PlusPanel onAction={handlePlusAction} />
           )
         )}
         {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}

@@ -21,6 +21,7 @@ import {
   normalizeChatDecorConfig,
   type ChatDecorConfig,
   type ChatDecorSettings,
+  type DecorAppId,
 } from './chat-decor';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
@@ -383,7 +384,7 @@ interface SettingsState {
   /** 液态玻璃主题皮肤自定义（本轮新增：顶栏名字区模式/分类标签文字/会话列表小组件；三 App 隔离；
    *  持久化 settings.liquidSkin，只在液态主题下生效） */
   liquidSkin: LiquidSkinConfig;
-  /** 聊天输入框自定义（输入框占位文字 + 加号面板功能；三 App 隔离；
+  /** 聊天输入框自定义（输入框占位文字 + 输入框上方快捷功能；微信/QQ 两 App 隔离，信息 App 不接入；
    *  持久化 settings.chatDecor，默认/液态两种界面主题下都生效） */
   chatDecor: ChatDecorConfig;
   loaded: boolean;
@@ -401,7 +402,7 @@ interface SettingsState {
   /** 更新液态玻璃皮肤设置（patch 合并到对应 App；立即持久化，页面实时响应） */
   setLiquidSkin: (app: BubbleAppId, patch: Partial<LiquidSkinSettings>) => void;
   /** 更新聊天输入框自定义（patch 合并到对应 App；立即持久化，聊天页实时响应） */
-  setChatDecor: (app: BubbleAppId, patch: Partial<ChatDecorSettings>) => void;
+  setChatDecor: (app: DecorAppId, patch: Partial<ChatDecorSettings>) => void;
 
   load: () => Promise<void>;
   /** 锁屏总开关：关闭时同时停用密码并立即回到主屏幕 */

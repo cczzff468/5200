@@ -239,7 +239,8 @@ import { MomentsSettingsPage } from './moments-settings';
 import { ThemeStylePage } from './bubble-style-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
-import { chatPlaceholder, resolvePlusKeys } from '@/lib/ios/chat-decor';
+import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
+import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -6770,10 +6771,12 @@ function ChatPage({
       },
     },
   ];
-  // 输入框设置 › 加号面板功能：按勾选顺序显示（空 = 默认全部）
-  const plusItems = resolvePlusKeys('qq', chatDecorQq.plusKeys)
+  // 输入框上方快捷功能（输入框自定义 › 输入框上方功能）：把加号面板里的功能放到输入框上面，
+  // 点一下直接触发（与点加号面板里那一项同一条 onClick）；未添加 = 不显示；「+」面板本身不受影响
+  const quickItems: QuickBarItem[] = resolveQuickKeys('qq', chatDecorQq.quickKeys)
     .map((k) => plusAllItems.find((it) => it.key === k))
-    .filter((x): x is { key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void } => !!x);
+    .filter((x): x is { key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void } => !!x)
+    .map((it) => ({ key: it.key, label: it.label, icon: it.icon, onClick: it.onClick }));
 
   // 聊天设置：置顶 / 免打扰 / 聊天背景 / 查找聊天记录
 
@@ -7775,6 +7778,13 @@ function ChatPage({
             </div>
           </div>
         )}
+        {/* 输入框上方快捷功能条（输入框自定义 › 输入框上方功能）：把加号面板里的功能放到输入框上面；
+            点一下与点面板里那一项等效；未添加 = 不显示；「+」面板本身不受影响 */}
+        {quickItems.length > 0 && (
+          <div className="px-3 pt-2">
+            <ChatQuickBar items={quickItems} liquid={liquid} testPrefix="qq" />
+          </div>
+        )}
         {/* 液态玻璃（用户指定）：删除输入行后面的大椭圆胶囊——行本身无包裹，输入框改毛玻璃椭圆（lg-input rounded-full），
             下方六个工具按钮每个单独 lg-chip 椭圆包裹；默认主题原样 */}
         <div className="flex items-end gap-2 px-3 pb-1 pt-3">
@@ -7804,7 +7814,7 @@ function ChatPage({
               }}
               enterKeyHint={enterSend ? 'send' : undefined}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorQq)}
-              placeholderClass="pl-3.5 pt-[9px] text-[15px] leading-[22px] text-black/25 dark:text-white/25"
+              placeholderClass="pl-3.5 text-[15px] text-black/25 dark:text-white/25"
               ariaLabel={`发送消息给${peer.name}`}
               testId="qq-chat-input"
               className={
@@ -7962,7 +7972,7 @@ function ChatPage({
                 className="lg-sheet mb-2.5 rounded-[20px] py-[4px]"
                 style={{ animation: 'qqPanelIn 0.24s ease-out' }}
               >
-                <QqPlusGrid items={plusItems} liquid={liquid} />
+                <QqPlusGrid items={plusAllItems} liquid={liquid} />
               </div>
             </div>
           ) : (
@@ -7971,7 +7981,7 @@ function ChatPage({
               className="px-5 pt-5 border-t border-black/[0.05] pb-6 dark:border-white/[0.06]"
               style={{ animation: 'qqPanelIn 0.24s ease-out' }}
             >
-              <QqPlusGrid items={plusItems} />
+              <QqPlusGrid items={plusAllItems} />
             </div>
           )
         ) : null}

@@ -101,7 +101,7 @@ interface ChatRichInputProps {
   onChange: (v: string) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
   placeholder?: string;
-  /** placeholder 叠层的对齐类（按各端 padding/字号传入，如 "pl-2 pt-[7px] text-[16px] leading-[22px]"） */
+  /** placeholder 叠层的对齐类（只需给水平内边距/字号/颜色，垂直方向自动居中；如 "pl-3.5 text-[15px] text-black/25 dark:text-white/25"） */
   placeholderClass?: string;
   ariaLabel?: string;
   testId?: string;
@@ -200,7 +200,8 @@ export const ChatRichInput = forwardRef<ChatRichInputHandle, ChatRichInputProps>
         className={className}
       />
       {!value && placeholder ? (
-        <span aria-hidden className={`pointer-events-none absolute top-0 ${placeholderClass ?? ''}`}>
+        /* 占位灰字：铺满输入框叠层 + flex 垂直居中（上下都在中间，与各端输入框高度无关） */
+        <span aria-hidden className={`pointer-events-none absolute inset-0 flex items-center ${placeholderClass ?? ''}`}>
           {placeholder}
         </span>
       ) : null}

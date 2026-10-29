@@ -37,7 +37,6 @@ import { useSettings, useUI } from '@/lib/ios/store';
 // 聊天气泡装扮（信息 App 接入）：bubbleVisual 计算每条消息的覆盖样式（背景/文字色/尾巴），
 // 与微信/QQ 完全隔离（bubbleStyle.sms 独立槽位）；设置入口 = 聊天设置 › 主题
 import { BUBBLE_KIND_LABEL, bubbleVisual, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
-import { chatPlaceholder, resolvePlusKeys } from '@/lib/ios/chat-decor';
 import { ThemeStylePage } from './bubble-style-settings';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
@@ -908,23 +907,20 @@ function readSmsImageFile(file: File, max = 720): Promise<string> {
   });
 }
 
-/** 加号面板（输入栏下方弹出；相机/图片/文字图片三宫格，瓷贴样式对齐微信端）。
- *  visibleKeys：输入框设置 › 加号面板功能勾选后的显示顺序（空 = 默认全部） */
-function SmsPlusPanel({ onAction, visibleKeys }: { onAction: (a: SmsPlusAction) => void; visibleKeys?: readonly string[] }) {
+/** 加号面板（输入栏下方弹出；相机/图片/文字图片三宫格，瓷贴样式对齐微信端）。信息 App 保持原生（不可自定义） */
+function SmsPlusPanel({ onAction }: { onAction: (a: SmsPlusAction) => void }) {
   const all: Array<{ key: SmsPlusAction; label: string; icon: React.ReactNode }> = [
     { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'textcard', label: '文字图片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
-  // 输入框设置：勾选后的功能按所选顺序显示（visibleKeys 空 = 默认全部）
-  const items = visibleKeys?.length ? visibleKeys.map((k) => all.find((it) => it.key === k)).filter((x): x is { key: SmsPlusAction; label: string; icon: React.ReactNode } => !!x) : all;
   return (
     <div
       className="z-20 shrink-0 border-t border-white/60 bg-white/60 px-2 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
       data-testid="sms-plus-panel"
     >
       <div className="grid grid-cols-3">
-        {items.map((it) => (
+        {all.map((it) => (
           <button
             key={it.key}
             type="button"
@@ -1121,8 +1117,6 @@ function ChatView({
   const [themeOpen, setThemeOpen] = useState(false);
   /** 聊天气泡装扮配置（信息 App 独立槽位，与微信/QQ 隔离）：全部气泡（文本/语音/输入中指示器+尾巴）实时跟随 */
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
-  /** 聊天输入框自定义（本轮新增）：输入框占位文字 + 加号面板功能（信息 App 独立槽位，实时跟随） */
-  const chatDecorSms = useSettings((s) => s.chatDecor.sms);
   /* 第五十三轮（用户指定）：删除「新版」主题——信息 App 聊天页回归唯一默认主题 */
   /** 关系本地显示值（多账号关系感知）：保存后乐观更新（重进会话/切号后重读） */
   const [relationLocal, setRelationLocal] = useState<string | null>(null);
@@ -3747,7 +3741,7 @@ function ChatView({
                   guardEnterToSend(e, enterSend, () => e.currentTarget.form?.requestSubmit());
                 }}
                 enterKeyHint={enterSend ? 'send' : undefined}
-                placeholder={ttsSend ? '输入文字，发送后转为语音' : chatPlaceholder(chatDecorSms) || 'iMessage信息'}
+                placeholder={ttsSend ? '输入文字，发送后转为语音' : 'iMessage信息'}
                 aria-label="消息输入框"
                 className="max-h-[110px] min-h-[22px] w-full resize-none overflow-y-auto bg-transparent py-[7px] pr-10 text-[15px] leading-[22px] outline-none placeholder:text-muted-foreground/50"
               />
@@ -3833,8 +3827,8 @@ function ChatView({
           </p>
         </div>
       )}
-      {/* 加号面板（相机/图片/文字图片）+ 原生相机/相册隐藏入口 */}
-      {plusOpen && <SmsPlusPanel onAction={handlePlusAction} visibleKeys={resolvePlusKeys('sms', chatDecorSms.plusKeys)} />}
+      {/* 加号面板（相机/图片/文字图片）+ 原生相机/相册隐藏入口（信息 App 不接入输入框自定义，保持原生） */}
+      {plusOpen && <SmsPlusPanel onAction={handlePlusAction} />}
       <input
         ref={cameraInputRef}
         type="file"
