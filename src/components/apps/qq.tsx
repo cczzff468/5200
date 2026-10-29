@@ -1685,29 +1685,34 @@ const qqMarkPeerRead = (list: QQMsg[]): QQMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
 /** 元信息小字统一样式（已读未读 / 时间）；已读浅灰 / 未读深灰（用户指定：未读弃品牌色）。
- *  自定义文字不限字数：可换行防溢出（左右延伸的同一条行内自然换行） */
-const qqMetaText = 'break-words text-[10px] leading-[1.35]';
+ *  nowrap：每段文字永不内部折行（用户指定：左右延伸、不上下堆叠） */
+const qqMetaText = 'whitespace-nowrap text-[10px] leading-[1.35]';
 const qqMetaReadCls = 'text-black/35 dark:text-white/40';
 const qqMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
-/** 显示设置 › 已读未读 + 时间：头像下方横排（左右延伸不上下堆叠；已读在前、时间在后；
- *  超出头像宽度时向两侧延伸，最长 64px 再换行） */
+/** 显示设置 › 已读未读 + 时间：头像下方单行横排（用户指定：左右延伸、永不上下堆叠；
+ *  已读在前、时间在后；超宽时向屏幕内侧延伸——TA 的（头像在左）左缘对齐向右延、
+ *  我的（头像在右）右缘对齐向左延，长日期模板（如 yyyy/MM/dd HH:mm）也不折行不出屏） */
 function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && qqMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && qqMetaOk(m);
   if (!showRead && !showTime) return null;
   return (
-    <span className="mt-[3px] flex w-max max-w-[64px] flex-row flex-wrap items-center justify-center gap-x-[3px] gap-y-[1px] leading-none">
+    <span
+      className={`mt-[3px] flex w-max flex-row items-center gap-x-[3px] leading-none ${
+        m.role === 'me' ? 'self-end' : 'self-start'
+      }`}
+    >
       {showRead && (
         <span
           data-testid={`qq-read-${m.id}`}
-          className={`max-w-full break-words ${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
+          className={`${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
-        <span data-testid={`qq-time-${m.id}`} className={`max-w-full break-words ${qqMetaText}`}>
+        <span data-testid={`qq-time-${m.id}`} className={qqMetaText}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
         </span>
       )}
@@ -1717,6 +1722,8 @@ function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
 
 /** 显示设置 › 已读未读 + 时间：气泡下方横排——靠气泡末尾（远离头像的一侧：我的=左下、TA的=右下）；
  *  同显时左右横向排在同一行（已读在前、时间在后，用户指定：不上下堆叠）。
+ *  子项 nowrap：日期模板（yyyy/MM/dd HH:mm）等长格式也不内部折行，
+ *  列宽随内容扩到单行宽；行保留 flex-wrap 仅作超长自定义文字的极端保命。
  *  仅挂在文本气泡列（最常见消息形态） */
 function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'bubble' && qqMetaOk(m);
@@ -1731,13 +1738,13 @@ function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
       {showRead && (
         <span
           data-testid={`qq-read-${m.id}`}
-          className={`max-w-full break-words ${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
+          className={`${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
-        <span data-testid={`qq-time-${m.id}`} className={`max-w-full break-words ${qqMetaText}`}>
+        <span data-testid={`qq-time-${m.id}`} className={qqMetaText}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
         </span>
       )}

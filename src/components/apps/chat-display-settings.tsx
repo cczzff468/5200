@@ -180,14 +180,18 @@ function PreviewRow({
   const showTime = cfg.timeEnabled;
   const avatarMeta =
     showRead || showTime ? (
-      <span className="mt-[2px] flex w-max max-w-[64px] flex-row flex-wrap items-center justify-center gap-x-[3px] gap-y-[1px] leading-none">
+      <span
+        className={`mt-[2px] flex w-max flex-row items-center gap-x-[3px] leading-none ${
+          side === 'mine' ? 'self-end' : 'self-start'
+        }`}
+      >
         {showRead && cfg.readPosition === 'avatar' && (
-          <span className={`max-w-full break-words text-[8.5px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}>
+          <span className={`whitespace-nowrap text-[8.5px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}>
             {readTextOf(cfg, read)}
           </span>
         )}
         {showTime && cfg.timePosition === 'avatar' && (
-          <span className="max-w-full break-words text-[8.5px] leading-[1.3] text-black/40 dark:text-white/40">
+          <span className="whitespace-nowrap text-[8.5px] leading-[1.3] text-black/40 dark:text-white/40">
             {time}
           </span>
         )}
@@ -201,12 +205,12 @@ function PreviewRow({
         }`}
       >
         {showRead && cfg.readPosition === 'bubble' && (
-          <span className={`max-w-full break-words text-[9px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}>
+          <span className={`whitespace-nowrap text-[9px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}>
             {readTextOf(cfg, read)}
           </span>
         )}
         {showTime && cfg.timePosition === 'bubble' && (
-          <span className="max-w-full break-words text-[9px] leading-[1.3] text-black/40 dark:text-white/40">
+          <span className="whitespace-nowrap text-[9px] leading-[1.3] text-black/40 dark:text-white/40">
             {time}
           </span>
         )}
