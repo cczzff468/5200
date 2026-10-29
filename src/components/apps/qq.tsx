@@ -241,7 +241,7 @@ import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '
 import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
-import { ShrinkText } from './shrink-text';
+import { StackFitText } from './shrink-text';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -1688,14 +1688,16 @@ const qqMarkPeerRead = (list: QQMsg[]): QQMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
 /** 元信息小字统一样式（已读未读 / 时间）；已读浅灰 / 未读深灰（用户指定：未读弃品牌色）。
- *  每段永不折行；头像下位置超宽时字号自动变小（ShrinkText），缩进头像列宽内 */
+ *  气泡下：nowrap 单行永不内部折行；头像下用 avatar 版（无 nowrap——StackFitText 兜底换行需要），
+ *  超宽先缩字、放不下按空格/自然断点堆叠（日期一行、时间一行），绝不裁字 */
 const qqMetaText = 'whitespace-nowrap text-[10px] leading-[1.35]';
+const qqMetaAvatarText = 'text-[10px] leading-[1.35]';
 const qqMetaReadCls = 'text-black/35 dark:text-white/40';
 const qqMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
 /** 显示设置 › 已读未读 + 时间：头像下方上下两行（已读未读在上、时间在下）。
- *  用户指定（本轮）：文字超宽时字号自动变小、永不折第二行——两行各自缩到头像列宽（40px）内，
- *  不再向屏幕内侧延伸；对齐沿袭原锚定边（我的右对齐、TA 的左对齐） */
+ *  用户指定：文字超宽时字号自动变小、不向屏幕内侧延伸；对齐沿袭原锚定边（我的右对齐、TA 的左对齐）。
+ *  长日期模板（yyyy/MM/dd HH:mm 等）缩到下限仍放不下时按空格/自然断点拆行堆叠，绝不裁字 */
 function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && qqMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && qqMetaOk(m);
@@ -1707,17 +1709,17 @@ function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
       }`}
     >
       {showRead && (
-        <ShrinkText
+        <StackFitText
           testId={`qq-read-${m.id}`}
-          className={`block w-full ${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
+          className={`block w-full ${qqMetaAvatarText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
-        </ShrinkText>
+        </StackFitText>
       )}
       {showTime && (
-        <ShrinkText testId={`qq-time-${m.id}`} className={`block w-full ${qqMetaText}`}>
+        <StackFitText testId={`qq-time-${m.id}`} className={`block w-full ${qqMetaAvatarText}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
-        </ShrinkText>
+        </StackFitText>
       )}
     </span>
   );

@@ -240,7 +240,7 @@ import { BubbleTail } from './bubble-tail';
 import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
-import { ShrinkText } from './shrink-text';
+import { StackFitText } from './shrink-text';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
 // 第三十四轮：添加账号弹层（AccountAddSheet）删除——「添加账号」改为直接用账号密码登录（LoginScreen）
@@ -1999,7 +1999,7 @@ const markPeerRead = (list: WxMsg[]): WxMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
 /** 元信息小字统一样式（已读未读 / 时间；颜色由 style 覆盖未读态）。
- *  每段永不折行：超宽时字号自动变小（ShrinkText），缩进所在盒宽内 */
+ *  头像下：超宽先缩字、放不下按自然断点堆叠（StackFitText）；气泡下：nowrap 单行不内部折行 */
 const wxMetaText = 'text-[10px] leading-[1.35] text-black/40 dark:text-white/40';
 
 /** 元信息小字：已读浅灰 / 未读深灰（用户指定：未读弃品牌色，灰色系双阶区分） */
@@ -2007,8 +2007,9 @@ const wxMetaReadCls = 'text-black/35 dark:text-white/40';
 const wxMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
 /** 显示设置 › 已读未读 + 时间：头像下方上下两行（已读未读在上、时间在下）。
- *  用户指定（本轮）：文字超宽时字号自动变小、永不折第二行——两行各自缩到头像列宽（38px）内，
- *  不再向屏幕内侧延伸；对齐沿袭原锚定边（我的右对齐、TA 的左对齐） */
+ *  用户指定：文字超宽时字号自动变小、不向屏幕内侧延伸；对齐沿袭原锚定边（我的右对齐、TA 的左对齐）。
+ *  长日期模板（yyyy/MM/dd HH:mm 等）缩到下限仍放不下时改用 StackFitText——
+ *  按空格/自然断点拆行堆叠（日期一行、时间一行），每行独立缩字，绝不裁字「显示不全」 */
 function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && wxMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && wxMetaOk(m);
@@ -2020,17 +2021,17 @@ function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
       }`}
     >
       {showRead && (
-        <ShrinkText
+        <StackFitText
           testId={`wx-read-${m.id}`}
           className={`block w-full ${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
-        </ShrinkText>
+        </StackFitText>
       )}
       {showTime && (
-        <ShrinkText testId={`wx-time-${m.id}`} className={`block w-full ${wxMetaText}`}>
+        <StackFitText testId={`wx-time-${m.id}`} className={`block w-full ${wxMetaText}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
-        </ShrinkText>
+        </StackFitText>
       )}
     </span>
   );
@@ -2053,13 +2054,13 @@ function WxMetaUnderBubble({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
       {showRead && (
         <span
           data-testid={`wx-read-${m.id}`}
-          className={`${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
+          className={`whitespace-nowrap ${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
         >
           {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
-        <span data-testid={`wx-time-${m.id}`} className={wxMetaText}>
+        <span data-testid={`wx-time-${m.id}`} className={`whitespace-nowrap ${wxMetaText}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
         </span>
       )}

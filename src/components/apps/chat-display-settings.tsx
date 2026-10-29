@@ -14,6 +14,7 @@
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronDown, RotateCcw } from 'lucide-react';
+import { StackFitText } from './shrink-text';
 import {
   DEFAULT_CHAT_DISPLAY,
   chatDisplaySummary,
@@ -161,6 +162,9 @@ function PreviewAvatar({ app, cfg, side, size = 26 }: { app: ChatDisplayAppId; c
   );
 }
 
+/** 预览头像列宽（与真实聊天页一致：wx 38 / qq 40）——头像下元信息在此宽度内堆叠，所见即所得 */
+const PREVIEW_AVATAR_COL: Record<ChatDisplayAppId, number> = { wx: 38, qq: 40 };
+
 function PreviewRow({
   app,
   cfg,
@@ -178,22 +182,29 @@ function PreviewRow({
 }) {
   const showRead = cfg.readEnabled;
   const showTime = cfg.timeEnabled;
+  /* 头像下元信息：与真实聊天同构——列宽内堆叠缩字（长模板拆行不裁字）、我的右对齐 / TA 左对齐 */
   const avatarMeta =
     showRead || showTime ? (
       <span
-        className={`mt-[2px] flex w-max flex-col gap-y-[1px] leading-none ${
-          side === 'mine' ? 'self-end items-end' : 'self-start items-start'
+        className={`mt-[2px] flex w-full flex-col gap-y-[1px] leading-none ${
+          side === 'mine' ? 'text-right' : 'text-left'
         }`}
       >
         {showRead && cfg.readPosition === 'avatar' && (
-          <span className={`whitespace-nowrap text-[8.5px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}>
+          <StackFitText
+            min={5}
+            className={`block w-full text-[8.5px] leading-[1.3] ${read ? READ_CLS : UNREAD_CLS}`}
+          >
             {readTextOf(cfg, read)}
-          </span>
+          </StackFitText>
         )}
         {showTime && cfg.timePosition === 'avatar' && (
-          <span className="whitespace-nowrap text-[8.5px] leading-[1.3] text-black/40 dark:text-white/40">
+          <StackFitText
+            min={5}
+            className="block w-full text-[8.5px] leading-[1.3] text-black/40 dark:text-white/40"
+          >
             {time}
-          </span>
+          </StackFitText>
         )}
       </span>
     ) : null;
@@ -218,7 +229,7 @@ function PreviewRow({
     ) : null;
   return (
     <div className={`flex items-start gap-2 ${side === 'mine' ? 'flex-row-reverse' : ''}`}>
-      <div className="flex w-[26px] shrink-0 flex-col items-center">
+      <div className="flex shrink-0 flex-col items-center" style={{ width: PREVIEW_AVATAR_COL[app] }}>
         <PreviewAvatar app={app} cfg={cfg} side={side} />
         {avatarMeta}
       </div>
