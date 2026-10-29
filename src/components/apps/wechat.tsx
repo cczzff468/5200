@@ -127,6 +127,7 @@ import {
   WxIcWorks,
   WxIcSticker,
   WxIcTheme,
+  WxIcDisplay,
   WxIcSettings,
   WxTabCompassIcon,
 } from './wx-icons';
@@ -230,6 +231,8 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
+import { ChatDisplayPage } from './chat-display-settings';
+import { fmtMsgTime, READ_ACCENT, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { BubbleTail } from './bubble-tail';
 import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
@@ -447,6 +450,8 @@ interface WxMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
+  /** 已读未读回执（显示设置）：发送/投递时 true，对方回话时转 false；undefined = 旧数据，视为已读 */
+  unread?: boolean;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；relcard = 亲密关系卡片（恋人空间邀请卡/成功卡）；
    *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片；tbpay = 淘宝代付卡片（请求/完成）；tbshare = 淘宝订单分享动态卡片 */
   kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard' | 'pactcard' | 'examcard' | 'lettercard' | 'giftcard';
@@ -1948,9 +1953,20 @@ function WxTileIcon({ bg, children }: { bg: string; children: React.ReactNode })
   );
 }
 
-/** 头像：微信风格「正方形圆角」（有图用图，无图用灰底剪影，绝不出现在圆形） */
-export function WxAvatar({ src, alt, size = 44 }: { src: string | null; alt: string; size?: number }) {
-  const radius = Math.max(4, Math.round(size * 0.11));
+/** 头像：默认微信风格「正方形圆角」（有图用图，无图用灰底剪影）；shape='circle' = 圆形
+ *  （显示设置 › 头像样式，仅聊天页传入；其余调用点保持微信原生圆角方形） */
+export function WxAvatar({
+  src,
+  alt,
+  size = 44,
+  shape,
+}: {
+  src: string | null;
+  alt: string;
+  size?: number;
+  shape?: 'rounded' | 'circle';
+}) {
+  const radius = shape === 'circle' ? size / 2 : Math.max(4, Math.round(size * 0.11));
   const style: React.CSSProperties = { width: size, height: size, borderRadius: radius };
   if (src) {
     return <img src={src} alt={alt} className="shrink-0 bg-muted object-cover" style={style} />;
@@ -1966,6 +1982,71 @@ export function WxAvatar({ src, alt, size = 44 }: { src: string | null; alt: str
         <path d="M12 14.1c-4.7 0-8.1 2.7-8.1 6.3 0 .9.7 1.6 1.6 1.6h13c.9 0 1.6-.7 1.6-1.6 0-3.6-3.4-6.3-8.1-6.3z" />
       </svg>
     </div>
+  );
+}
+
+/** 显示设置元信息适用性：系统类胶囊（sys/notice/拉黑申请）与已撤回消息不参与已读/时间显示 */
+const wxMetaOk = (m: WxMsg) => !m.recalled && m.kind !== 'sys' && m.kind !== 'notice' && m.kind !== 'blockreq';
+
+/** 显示设置 › 已读回执：我发消息 = 我读了 TA 的全部未读消息（append 前统一走这里，纯函数） */
+const markPeerRead = (list: WxMsg[]): WxMsg[] =>
+  list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
+
+/** 元信息小字统一样式（已读未读 / 时间；颜色由 style 覆盖未读态） */
+const wxMetaText = 'whitespace-nowrap text-[10px] leading-[1.35] text-black/40 dark:text-white/40';
+
+/** 显示设置 › 已读未读 + 时间：头像下方堆叠块（与头像同宽居中；同显时已读在上、时间在下） */
+function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
+  const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && wxMetaOk(m);
+  const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && wxMetaOk(m);
+  if (!showRead && !showTime) return null;
+  return (
+    <span className="mt-[3px] flex flex-col items-center gap-[1px] leading-none">
+      {showRead && (
+        <span
+          data-testid={`wx-read-${m.id}`}
+          className={wxMetaText}
+          style={m.unread ? { color: READ_ACCENT.wx } : undefined}
+        >
+          {m.unread ? '未读' : '已读'}
+        </span>
+      )}
+      {showTime && (
+        <span data-testid={`wx-time-${m.id}`} className={wxMetaText}>
+          {fmtMsgTime(m.time, cfg.timeFormat)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** 显示设置 › 已读未读 + 时间：气泡下方块——靠气泡末尾（远离头像的一侧：我的=左下、TA的=右下）；
+ *  同显时已读在上、时间在下（用户指定）。仅挂在文本气泡列（最常见消息形态） */
+function WxMetaUnderBubble({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
+  const showRead = cfg.readEnabled && cfg.readPosition === 'bubble' && wxMetaOk(m);
+  const showTime = cfg.timeEnabled && cfg.timePosition === 'bubble' && wxMetaOk(m);
+  if (!showRead && !showTime) return null;
+  return (
+    <span
+      className={`mt-[3px] flex flex-col gap-[1px] leading-none ${
+        m.role === 'me' ? 'self-start items-start' : 'self-end items-end'
+      }`}
+    >
+      {showRead && (
+        <span
+          data-testid={`wx-read-${m.id}`}
+          className={wxMetaText}
+          style={m.unread ? { color: READ_ACCENT.wx } : undefined}
+        >
+          {m.unread ? '未读' : '已读'}
+        </span>
+      )}
+      {showTime && (
+        <span data-testid={`wx-time-${m.id}`} className={wxMetaText}>
+          {fmtMsgTime(m.time, cfg.timeFormat)}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -4903,6 +4984,8 @@ function ChatPage({
   const apiConfig = useSettings((s) => s.apiConfig);
   // 第十七轮聊天气泡装扮：订阅全局配置（装扮页修改 → 聊天气泡实时跟随）
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
+  // 聊天显示设置（「我」页 › 显示）：头像形状 / 已读未读回执 / 时间显示（配置页修改 → 聊天实时跟随）
+  const chatDisplay = useSettings((s) => s.chatDisplay.wx);
   // 液态玻璃主题（气泡样式设置 › 界面主题）：只接管页面铭件（根底色/顶栏胶囊/输入胶囊/输入框），
   // 气泡仍由上方 bubbleStyle 装扮系统管、聊天背景层一行不动；默认主题全部走原类（像素级保持现状）
   const liquid = isLiquidTheme(bubbleStyle, 'wx');
@@ -5815,9 +5898,16 @@ function ChatPage({
   }, []);
 
   /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成 + 未读角标（模块层调用，与页面是否存活无关） */
-  const deliverAiMsg = (m: WxMsg) => {
+  const deliverAiMsg = (raw: WxMsg) => {
+    // 显示设置 › 已读回执：AI 消息本身未读（我回话时转已读）；
+    // AI 回复落地 = TA 读了我说的话——我的全部未读消息转已读（磁盘为权威，UI 由投递订阅同步）
+    const m: WxMsg = { ...raw, unread: true };
+    const base = loadMsgs(peer.id);
+    const cleared = base.some((x) => x.role === 'me' && x.unread)
+      ? base.map((x) => (x.role === 'me' && x.unread ? { ...x, unread: false } : x))
+      : base;
     // #35：有插入边界时（用户在上一轮投递中插话）插到边界用户消息之前，落库顺序即对话时序
-    saveMsgs(peer.id, appendWithBoundary(sessionKey, loadMsgs(peer.id), m));
+    saveMsgs(peer.id, appendWithBoundary(sessionKey, cleared, m));
     // 语音频率：每条文字消息独立判定（命中 → 通知直接显示[语音]；未命中 → 常规文字预览）
     const voiceTurn =
       (m.kind === undefined || m.kind === 'text') &&
@@ -7455,10 +7545,12 @@ function ChatPage({
     // 组合发送（输入框文字 + 待发图片一起发）：文字消息在前、图片在后全部上屏+落盘，只触发一轮 AI 回复
     //（runAiTurn 的 base 按 id 去重，(userMsg, created) 两个都进上下文——文字、图片同一轮被 AI 读到）
     const userMsg: WxMsg | null = text
-      ? { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined }
+      ? { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined, unread: true }
       : null;
-    const created: WxMsg[] = pendingImgs.map((p) => ({ id: uid(), role: 'me', content: '', time: Date.now(), kind: 'image' as const, img: { src: p.src } }));
+    const created: WxMsg[] = pendingImgs.map((p) => ({ id: uid(), role: 'me', content: '', time: Date.now(), kind: 'image' as const, img: { src: p.src }, unread: true }));
     const batch = [...(userMsg ? [userMsg] : []), ...created];
+    // 显示设置 › 已读回执：markPeerRead（模块级）—— append 时把 TA 的未读全部转已读；
+    // 我的新消息已带 unread: true（TA 回复落地时转已读）
     // 拉黑方向修正：用户说「我要拉黑你」类明确宣言 → 系统直接执行「用户拉黑对方」
     //（此前 AI 会误解成让它拉黑用户，方向反了；现在系统代为执行，AI 回合守卫自动转
     // 「仅申请解除拉黑」口径，AI 按人设反应；拉黑跃迁同时触发跨 App 找人/来电钩子）
@@ -7481,7 +7573,7 @@ function ChatPage({
     // #35：标记投递插入边界——上一轮还在队列里的回复落库时插到这条新消息之前（时序归属上一轮）
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       clearComposer();
-      setMsgs((prev) => [...prev, ...batch]);
+      setMsgs((prev) => [...markPeerRead(prev), ...batch]);
       markDeliverBoundary(sessionKey, batch[0].id);
       wxQueueAdd(peer.id);
       // 37-a：按钮流式中不再禁用，排队补跑统一给 toast 反馈（消息已上屏但回复要等上一轮走完）
@@ -7491,17 +7583,17 @@ function ChatPage({
     clearComposer();
     // 给自己发消息（「我」详情页「发消息」入口）：只记录，不触发 AI 回复
     if (peer.id === me.id) {
-      setMsgs((prev) => [...prev, ...batch]);
+      setMsgs((prev) => [...markPeerRead(prev), ...batch]);
       return;
     }
     // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
     if (sentenceSend) {
-      setMsgs((prev) => [...prev, ...batch]);
+      setMsgs((prev) => [...markPeerRead(prev), ...batch]);
       setPendingDispatch(true);
       markPendingBatch(sessionKey, true);
       return;
     }
-    setMsgs((prev) => [...prev, ...batch]);
+    setMsgs((prev) => [...markPeerRead(prev), ...batch]);
     // Task 49 定时提醒：用户消息像「定时发消息」指令时先解析（LLM 两级兜底；正则闸未命中零开销）；
     // 落任务后：聊天里落灰色系统行（确定性反馈）+ 本轮 sysEvent 带确认提示（AI 自然确认）
     if (userMsg && reminderHintHit(userMsg.content)) {
@@ -7544,8 +7636,8 @@ function ChatPage({
       const voice: VoiceMsgData = hasText
         ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
         : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, stt: 'pending' };
-      const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'voice', voice };
-      setMsgs((prev) => [...prev, msg]);
+      const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'voice', voice, unread: true };
+      setMsgs((prev) => [...markPeerRead(prev), msg]);
       // 给自己发消息（「我」详情页入口）：只记录，不触发 AI 回复
       if (peer.id === me.id) return;
       /** 触发 AI 回复（对方正在回复——流式或连发投递中——则排队补跑）；转写完成后再触发，AI 才能读到语音内容 */
@@ -7586,23 +7678,24 @@ function ChatPage({
         onToast('对方已将你拉黑，无法发送');
         return;
       }
-      const userMsg: WxMsg = { id: uid(), role: 'me', content: text, time: Date.now() };
+      const userMsg: WxMsg = { id: uid(), role: 'me', content: text, time: Date.now(), unread: true };
       if (peer.id === me.id) {
-        setMsgs((prev) => [...prev, userMsg]);
+        setMsgs((prev) => [...markPeerRead(prev), userMsg]);
         return;
       }
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-        setMsgs((prev) => [...prev, userMsg]);
+        setMsgs((prev) => [...markPeerRead(prev), userMsg]);
         markDeliverBoundary(sessionKey, userMsg.id); // #35
         wxQueueAdd(peer.id);
         return;
       }
       if (sentenceSend) {
-        setMsgs((prev) => [...prev, userMsg]);
+        setMsgs((prev) => [...markPeerRead(prev), userMsg]);
         setPendingDispatch(true);
         markPendingBatch(sessionKey, true);
         return;
       }
+      setMsgs((prev) => [...markPeerRead(prev), userMsg]);
       runAiTurnRef.current?.(userMsg);
     },
     onSendVoice: (clip) => {
@@ -8395,13 +8488,13 @@ function ChatPage({
     }
     // 发送提示音（表情也走「发送消息」分类）
     playNotifySound('send');
-    const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: s.url, meaning: s.meaning } };
+    const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: s.url, meaning: s.meaning }, unread: true };
     if (peer.id === me.id) {
-      setMsgs((prev) => [...prev, msg]);
+      setMsgs((prev) => [...markPeerRead(prev), msg]);
       return;
     }
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-      setMsgs((prev) => [...prev, msg]);
+      setMsgs((prev) => [...markPeerRead(prev), msg]);
       markDeliverBoundary(sessionKey, msg.id);
       wxQueueAdd(peer.id);
       onToast('表情已发出，对方回完这轮就聊');
@@ -8808,8 +8901,9 @@ function ChatPage({
               highlightId === m.id ? 'bg-[#07C160]/15 ring-1 ring-[#07C160]/50' : ''
             }`}
           >
-            {/* 时间分隔（截图样式：居中半透明胶囊；液态主题 = 参考图纯文字浮层） */}
-            {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && (
+            {/* 时间分隔（截图样式：居中半透明胶囊；液态主题 = 参考图纯文字浮层）；
+                显示设置 › 时间开启后每条消息单独显示时间，此间隔条退场（冗余） */}
+            {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && !chatDisplay.timeEnabled && (
               <div className="py-2 text-center">
                 <span
                   className={
@@ -8911,41 +9005,48 @@ function ChatPage({
                 </span>
               )}
               {m.role === 'me' ? (
-                /* Task 30 拍一拍：双击自己的头像 = 拍一拍自己（微信同款彩蛋）；单击无动作 */
-                <button
-                  type="button"
-                  data-testid="wx-me-avatar"
-                  aria-label="双击拍一拍自己"
-                  className="shrink-0 cursor-pointer"
-                  onClick={(e) => onAvatarDoubleTap(e, true)}
-                >
-                  <WxAvatar src={me.avatar} alt={me.name} size={38} />
-                </button>
+                /* Task 30 拍一拍：双击自己的头像 = 拍一拍自己（微信同款彩蛋）；单击无动作。
+                    显示设置：外层列容器承载头像 + 头像下方元信息（已读/时间，位置=头像下面时） */
+                <div className="flex w-[38px] shrink-0 flex-col items-center">
+                  <button
+                    type="button"
+                    data-testid="wx-me-avatar"
+                    aria-label="双击拍一拍自己"
+                    className="shrink-0 cursor-pointer"
+                    onClick={(e) => onAvatarDoubleTap(e, true)}
+                  >
+                    <WxAvatar src={me.avatar} alt={me.name} size={38} shape={chatDisplay.avatarShape} />
+                  </button>
+                  <WxMetaUnderAvatar m={m} cfg={chatDisplay} />
+                </div>
               ) : (
                 /* 单击对方头像：弹出角色状态卡（延迟 260ms 等待可能的双击）；双击 = 拍一拍（取消状态卡）。
                    （多选模式下点击头像仍走勾选，由行级 onClickCapture 拦截） */
-                <button
-                  type="button"
-                  data-testid="wx-peer-avatar"
-                  aria-label={`单击查看${peer.name}的状态，双击拍一拍`}
-                  className="shrink-0 cursor-pointer transition-opacity active:opacity-70"
-                  onClick={(e) => {
-                    if (onAvatarDoubleTap(e)) {
-                      if (peerAvatarTapRef.current !== null) {
-                        window.clearTimeout(peerAvatarTapRef.current);
-                        peerAvatarTapRef.current = null;
+                <div className="flex w-[38px] shrink-0 flex-col items-center">
+                  <button
+                    type="button"
+                    data-testid="wx-peer-avatar"
+                    aria-label={`单击查看${peer.name}的状态，双击拍一拍`}
+                    className="shrink-0 cursor-pointer transition-opacity active:opacity-70"
+                    onClick={(e) => {
+                      if (onAvatarDoubleTap(e)) {
+                        if (peerAvatarTapRef.current !== null) {
+                          window.clearTimeout(peerAvatarTapRef.current);
+                          peerAvatarTapRef.current = null;
+                        }
+                        return;
                       }
-                      return;
-                    }
-                    if (peerAvatarTapRef.current !== null) window.clearTimeout(peerAvatarTapRef.current);
-                    peerAvatarTapRef.current = window.setTimeout(() => {
-                      peerAvatarTapRef.current = null;
-                      setPeerStatusOpen(true);
-                    }, 260);
-                  }}
-                >
-                  <WxAvatar src={peer.avatar} alt={peer.name} size={38} />
-                </button>
+                      if (peerAvatarTapRef.current !== null) window.clearTimeout(peerAvatarTapRef.current);
+                      peerAvatarTapRef.current = window.setTimeout(() => {
+                        peerAvatarTapRef.current = null;
+                        setPeerStatusOpen(true);
+                      }, 260);
+                    }}
+                  >
+                    <WxAvatar src={peer.avatar} alt={peer.name} size={38} shape={chatDisplay.avatarShape} />
+                  </button>
+                  <WxMetaUnderAvatar m={m} cfg={chatDisplay} />
+                </div>
               )}
               {m.kind === 'song' && m.song ? (
                 /* 歌曲卡片（Task 68 音乐 × AI）：封面+歌名+歌手+播放按钮，点击直接播放；
@@ -9305,6 +9406,8 @@ function ChatPage({
                   })()}
                   {/* 翻译开启时在气泡下方显示所选语言的译文 */}
                   {renderTranslations(m.id, m.content)}
+                  {/* 显示设置 › 已读未读/时间（位置=气泡下面）：靠气泡末尾（远离头像的一侧），已读在上、时间在下 */}
+                  <WxMetaUnderBubble m={m} cfg={chatDisplay} />
                 </div>
               )}
               {/* AI 回复失败徽标（红色 !，点击重试）优先于拉黑图标：旧版失败落库的占位行已不再渲染 */}
@@ -13462,6 +13565,7 @@ type Page =
   | 'accountSwitch'
   | 'look'
   | 'dress'
+  | 'display'
   | 'bubbles';
 
 // ---------------- 看一看页（发现页 › 看一看：轻量内容流） ----------------
@@ -15248,6 +15352,8 @@ function MainScreen({
     );
   // 气泡样式页（主题页 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
   if (page === 'bubbles') return <BubbleStylePage app="wx" onBack={() => setPage('dress')} onToast={showToast} />;
+  // 显示设置页（「我」页 › 显示，主题下方）：头像样式 / 已读未读回执 / 时间显示（实时预览）
+  if (page === 'display') return <ChatDisplayPage app="wx" onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'album') {
     // 我的主页「相册」入口：当前用户自己的相册（可增删改）
@@ -15998,6 +16104,13 @@ function MainScreen({
                 testId="wx-me-theme"
                 onClick={() => setPage('dress')}
                 icon={<WxIcTheme />}
+              />
+              {/* 显示（本轮新增）：聊天显示设置——头像样式 / 已读未读回执 / 时间显示 */}
+              <WxMenuRow
+                label="显示"
+                testId="wx-me-display"
+                onClick={() => setPage('display')}
+                icon={<WxIcDisplay />}
               />
             </div>
 

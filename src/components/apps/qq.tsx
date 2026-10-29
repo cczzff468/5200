@@ -237,6 +237,8 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, PostMoreMenu, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
+import { ChatDisplayPage } from './chat-display-settings';
+import { fmtMsgTime, READ_ACCENT, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
@@ -434,6 +436,8 @@ interface QQMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
+  /** 已读未读回执（显示设置）：发送/投递时 true，对方回话时转 false；undefined = 旧数据，视为已读 */
+  unread?: boolean;
   /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；relcard = 亲密关系卡片（恋人空间邀请卡/成功卡）；
    *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖）；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片；tbpay = 淘宝代付卡片（请求/完成）；tbshare = 淘宝订单分享动态卡片 */
   kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard' | 'pactcard' | 'examcard' | 'lettercard';
@@ -1644,21 +1648,98 @@ function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string |
 
 // ---------------- 通用小部件 ----------------
 
-/** QQ 圆形头像（有图用图，无图蓝底「Q」字兜底） */
-function QqAvatar({ src, alt, size = 44 }: { src: string | null; alt: string; size?: number }) {
-  const style: React.CSSProperties = { width: size, height: size };
+/** QQ 头像：默认圆形（有图用图，无图蓝底「Q」字兜底）；shape='rounded' = 圆角方形
+ *  （显示设置 › 头像样式，仅聊天页传入；其余调用点保持 QQ 原生圆形） */
+function QqAvatar({
+  src,
+  alt,
+  size = 44,
+  shape,
+}: {
+  src: string | null;
+  alt: string;
+  size?: number;
+  shape?: 'rounded' | 'circle';
+}) {
+  const radius = shape === 'rounded' ? Math.max(4, Math.round(size * 0.11)) : size / 2;
+  const style: React.CSSProperties = { width: size, height: size, borderRadius: radius };
   if (src) {
     // draggable=false：防止按住头像拖动触发原生图片拖拽，避免打断聊天页右滑手势
-    return <img src={src} alt={alt} draggable={false} className="shrink-0 rounded-full bg-muted object-cover" style={style} />;
+    return <img src={src} alt={alt} draggable={false} className="shrink-0 bg-muted object-cover" style={style} />;
   }
   return (
     <div
       aria-hidden="true"
-      className="flex shrink-0 items-center justify-center rounded-full bg-[#B9D9F3] font-semibold text-white"
+      className="flex shrink-0 items-center justify-center bg-[#B9D9F3] font-semibold text-white"
       style={{ ...style, fontSize: Math.round(size * 0.42) }}
     >
       Q
     </div>
+  );
+}
+
+/** 显示设置元信息适用性：系统类胶囊（sys/notice/拉黑申请）与已撤回消息不参与已读/时间显示 */
+const qqMetaOk = (m: QQMsg) => !m.recalled && m.kind !== 'sys' && m.kind !== 'notice' && m.kind !== 'blockreq';
+
+/** 显示设置 › 已读回执：我发消息 = 我读了 TA 的全部未读消息（append 前统一走这里，纯函数） */
+const qqMarkPeerRead = (list: QQMsg[]): QQMsg[] =>
+  list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
+
+/** 元信息小字统一样式（已读未读 / 时间；颜色由 style 覆盖未读态） */
+const qqMetaText = 'whitespace-nowrap text-[10px] leading-[1.35] text-black/40 dark:text-white/40';
+
+/** 显示设置 › 已读未读 + 时间：头像下方堆叠块（与头像同宽居中；同显时已读在上、时间在下） */
+function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
+  const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && qqMetaOk(m);
+  const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && qqMetaOk(m);
+  if (!showRead && !showTime) return null;
+  return (
+    <span className="mt-[3px] flex flex-col items-center gap-[1px] leading-none">
+      {showRead && (
+        <span
+          data-testid={`qq-read-${m.id}`}
+          className={qqMetaText}
+          style={m.unread ? { color: READ_ACCENT.qq } : undefined}
+        >
+          {m.unread ? '未读' : '已读'}
+        </span>
+      )}
+      {showTime && (
+        <span data-testid={`qq-time-${m.id}`} className={qqMetaText}>
+          {fmtMsgTime(m.time, cfg.timeFormat)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** 显示设置 › 已读未读 + 时间：气泡下方块——靠气泡末尾（远离头像的一侧：我的=左下、TA的=右下）；
+ *  同显时已读在上、时间在下（用户指定）。仅挂在文本气泡列（最常见消息形态） */
+function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
+  const showRead = cfg.readEnabled && cfg.readPosition === 'bubble' && qqMetaOk(m);
+  const showTime = cfg.timeEnabled && cfg.timePosition === 'bubble' && qqMetaOk(m);
+  if (!showRead && !showTime) return null;
+  return (
+    <span
+      className={`mt-[3px] flex flex-col gap-[1px] leading-none ${
+        m.role === 'me' ? 'self-start items-start' : 'self-end items-end'
+      }`}
+    >
+      {showRead && (
+        <span
+          data-testid={`qq-read-${m.id}`}
+          className={qqMetaText}
+          style={m.unread ? { color: READ_ACCENT.qq } : undefined}
+        >
+          {m.unread ? '未读' : '已读'}
+        </span>
+      )}
+      {showTime && (
+        <span data-testid={`qq-time-${m.id}`} className={qqMetaText}>
+          {fmtMsgTime(m.time, cfg.timeFormat)}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -3146,6 +3227,8 @@ function ChatPage({
   const apiConfig = useSettings((s) => s.apiConfig);
   // 第十七轮聊天气泡装扮：订阅全局配置（装扮页修改 → 聊天气泡实时跟随）
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
+  // 聊天显示设置（设置 › 聊天显示）：头像形状 / 已读未读回执 / 时间显示（配置页修改 → 聊天实时跟随）
+  const chatDisplay = useSettings((s) => s.chatDisplay.qq);
   // 液态玻璃主题（个性装扮 › 界面主题）：只接管页面铬件——页面底 lg-root + 顶栏完全透明悬浮（名字椭圆形玻璃胶囊包裹）
   // + 返回/菜单 lg-chip 椭圆 + 输入框毛玻璃胶囊 + 六工具钮 lg-chip + 语音/加号/表情面板 lg-sheet；
   // 聊天气泡仍由装扮系统（kind）管、聊天背景层完全不受主题影响（用户指定）；默认主题时零覆盖
@@ -3499,8 +3582,8 @@ function ChatPage({
     }
     pendingImgsRef.current = [];
     setPendingImgs([]);
-    const created: QQMsg[] = staged.map((p) => ({ id: uid(), role: 'me', content: p.src, time: Date.now(), kind: 'image' }));
-    for (const msg of created) setMsgs((prev) => [...prev, msg]);
+    const created: QQMsg[] = staged.map((p) => ({ id: uid(), role: 'me', content: p.src, time: Date.now(), kind: 'image', unread: true }));
+    for (const msg of created) setMsgs((prev) => [...qqMarkPeerRead(prev), msg]);
     if (peer.id === me.id) return;
     // 对方正在回复（流式/投递中）：与文字消息同口径排队补跑——本轮「流收尾且投递完毕」后自动回复图片消息
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
@@ -4230,9 +4313,16 @@ function ChatPage({
   /** 单条 AI 消息投递：落盘 + 灵动岛通知 + 语音频率判定/合成 + 未读角标（ai-delivery 调度器模块层调用，与页面是否存活无关）。
    *  runAiTurn 的投递批次与退出网页接力的后台回复（bg-turn 拉取）共用同一套管线 */
   const deliverAiMsg = useCallback(
-    (m: QQMsg) => {
+    (raw: QQMsg) => {
+      // 显示设置 › 已读回执：AI 消息本身未读（我回话时转已读）；
+      // AI 回复落地 = TA 读了我说的话——我的全部未读消息转已读（磁盘为权威，UI 由投递订阅同步）
+      const m: QQMsg = { ...raw, unread: true };
+      const base = loadMsgs(peer.id);
+      const cleared = base.some((x) => x.role === 'me' && x.unread)
+        ? base.map((x) => (x.role === 'me' && x.unread ? { ...x, unread: false } : x))
+        : base;
       // #35：有插入边界时（用户在上一轮投递中插话）插到边界用户消息之前，落库顺序即对话时序
-      saveMsgs(peer.id, appendWithBoundary(sessionKey, loadMsgs(peer.id), m));
+      saveMsgs(peer.id, appendWithBoundary(sessionKey, cleared, m));
       // 语音频率：每条文字消息独立判定（命中 → 通知直接显示[语音]；未命中 → 常规文字预览）。
       // #20 错误占位（「〔消息发送失败：…〕」等）不算 AI 发言：不参与语音频率判定、更不被合成语音
       const voiceTurn =
@@ -5770,14 +5860,15 @@ function ChatPage({
     // 组合时文字按普通文字消息发出（ttsSend 只对纯文字生效：语音气泡异步落屏会让图片/语音顺序颠倒，
     // 且语音消息会截断「从末尾向前收集连续图片」的识图窗口）
     if (staged.length > 0) {
-      const textMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined };
-      const created: QQMsg[] = staged.map((p) => ({ id: uid(), role: 'me', content: p.src, time: Date.now(), kind: 'image' }));
+      const textMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined, unread: true };
+      const created: QQMsg[] = staged.map((p) => ({ id: uid(), role: 'me', content: p.src, time: Date.now(), kind: 'image', unread: true }));
       pendingImgsRef.current = [];
       setPendingImgs([]);
       setInput('');
       clearChatDraft('qq', peer.id); // Task 40 草稿箱：发送成功清空草稿
       setQuote(null);
-      for (const msg of [textMsg, ...created]) setMsgs((prev) => [...prev, msg]);
+      // 显示设置 › 已读回执：append 时把 TA 的未读全部转已读；我的新消息已带 unread: true
+      for (const msg of [textMsg, ...created]) setMsgs((prev) => [...qqMarkPeerRead(prev), msg]);
       // 给自己发消息：只记录，不触发 AI 回复，也不计密友值
       if (peer.id === me.id) return;
       // 对方正在回复（流式接收或连发投递未清空）：文字+图片整批走排队补跑口径（与单发文字/图片一致）。
@@ -5802,7 +5893,7 @@ function ChatPage({
       sendTextAsVoiceRef.current(text);
       return;
     }
-    const userMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined };
+    const userMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now(), quote: quote ?? undefined, unread: true };
     // 对方正在回复（流式接收或连发投递未清空，投递可拖到流结束后数秒）：消息照常入列并排队，
     // 「流收尾且投递完毕」后自动补跑回复——不再静默丢弃（旧版直接 return：消息滞留输入框，
     // 看起来像「发了消息没人理」，AI 下一轮自然接不上话）。投递中也排队：否则旧回复尾部
@@ -5812,7 +5903,7 @@ function ChatPage({
       setInput('');
       clearChatDraft('qq', peer.id); // Task 40 草稿箱：消息已入列即清草稿（重进不回显）
       setQuote(null);
-      setMsgs((prev) => [...prev, userMsg]);
+      setMsgs((prev) => [...qqMarkPeerRead(prev), userMsg]);
       markDeliverBoundary(sessionKey, userMsg.id);
       qqQueueAdd(peer.id);
       // 37-a：按钮流式中不再禁用，排队补跑统一给 toast 反馈（消息已上屏但回复要等上一轮走完）
@@ -5824,12 +5915,12 @@ function ChatPage({
     setQuote(null);
     // 给自己发消息：只记录，不触发 AI 回复，也不计密友值
     if (peer.id === me.id) {
-      setMsgs((prev) => [...prev, userMsg]);
+      setMsgs((prev) => [...qqMarkPeerRead(prev), userMsg]);
       return;
     }
     // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
     if (sentenceSend) {
-      setMsgs((prev) => [...prev, userMsg]);
+      setMsgs((prev) => [...qqMarkPeerRead(prev), userMsg]);
       setPendingDispatch(true);
       markPendingBatch(sessionKey, true);
       return;
@@ -5845,6 +5936,7 @@ function ChatPage({
       runAiTurn(userMsg);
       return;
     }
+    setMsgs((prev) => [...qqMarkPeerRead(prev), userMsg]);
     // Task 49 定时提醒：用户消息像「定时发消息」指令时先解析（LLM 两级兜底；正则闸未命中零开销）；
     // 落任务后：聊天里落灰色系统行（确定性反馈）+ 本轮 sysEvent 带确认提示（AI 自然确认）
     if (reminderHintHit(userMsg.content)) {
@@ -5887,8 +5979,8 @@ function ChatPage({
       const voice: VoiceMsgData = hasText
         ? { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, transcript: presetTranscript, stt: 'done' }
         : { url: clip.dataUrl, duration: clip.duration, wave: clip.wave, localText: clip.localText, stt: 'pending' };
-      const msg: QQMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'voice', voice };
-      setMsgs((prev) => [...prev, msg]);
+      const msg: QQMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'voice', voice, unread: true };
+      setMsgs((prev) => [...qqMarkPeerRead(prev), msg]);
       // 给自己发消息（「我」详情页入口）：只记录，不触发 AI 回复
       if (peer.id === me.id) return;
       /** 触发 AI 回复（对方正在回复——流式或连发投递中——则排队补跑）；转写完成后再触发，AI 才能读到语音内容 */
@@ -5928,23 +6020,24 @@ function ChatPage({
         onToast('对方已将你拉黑，无法发送');
         return;
       }
-      const userMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now() };
+      const userMsg: QQMsg = { id: uid(), role: 'me', content: text, time: Date.now(), unread: true };
       if (peer.id === me.id) {
-        setMsgs((prev) => [...prev, userMsg]);
+        setMsgs((prev) => [...qqMarkPeerRead(prev), userMsg]);
         return;
       }
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-        setMsgs((prev) => [...prev, userMsg]);
+        setMsgs((prev) => [...qqMarkPeerRead(prev), userMsg]);
         markDeliverBoundary(sessionKey, userMsg.id); // #35
         qqQueueAdd(peer.id);
         return;
       }
       if (sentenceSend) {
-        setMsgs((prev) => [...prev, userMsg]);
+        setMsgs((prev) => [...qqMarkPeerRead(prev), userMsg]);
         setPendingDispatch(true);
         markPendingBatch(sessionKey, true);
         return;
       }
+      setMsgs((prev) => [...qqMarkPeerRead(prev), userMsg]);
       runAiTurnRef.current?.(userMsg);
     },
     onSendVoice: (clip) => {
@@ -6547,13 +6640,13 @@ function ChatPage({
       }
       // 发送提示音（表情也走「发送消息」分类）
       playNotifySound('send');
-      const msg: QQMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: st.url, meaning: st.meaning } };
+      const msg: QQMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: st.url, meaning: st.meaning }, unread: true };
       if (peer.id === me.id) {
-        setMsgs((prev) => [...prev, msg]);
+        setMsgs((prev) => [...qqMarkPeerRead(prev), msg]);
         return;
       }
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
-        setMsgs((prev) => [...prev, msg]);
+        setMsgs((prev) => [...qqMarkPeerRead(prev), msg]);
         markDeliverBoundary(sessionKey, msg.id);
         qqQueueAdd(peer.id);
         onToast('表情已发出，对方回完这轮就聊');
@@ -6867,7 +6960,8 @@ function ChatPage({
         {msgs.map((m, i) => {
           // 错误占位消息（旧版失败落库文案）：新版失败改由触发消息上的红色 ! 徽标表达，不再渲染占位文字行
           if (m.error) return null;
-          const showTime = i === 0 || m.time - msgs[i - 1].time > 5 * 60_000;
+          // 显示设置 › 时间开启后每条消息单独显示时间，此间隔条退场（冗余）
+          const showTime = (i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && !chatDisplay.timeEnabled;
           const mine = m.role === 'me';
           // 第十七轮聊天气泡装扮：按消息序号计算本条气泡视觉（七彩=序号递增循环取色；原生默认时零覆盖直通）
           const bvis = bubbleVisual(mine ? 'mine' : 'theirs', bubbleStyle, i, 'qq');
@@ -7000,29 +7094,33 @@ function ChatPage({
                 )}
                 {!mine && (
                   /* 单击对方头像：弹出角色状态卡（延迟 260ms 等待可能的双击）；双击 = 拍一拍（取消状态卡）。
-                     （多选模式下点击头像仍走勾选，由行级 onClickCapture 拦截） */
-                  <button
-                    type="button"
-                    data-testid="qq-peer-avatar"
-                    aria-label={`单击查看${peer.name}的状态，双击拍一拍`}
-                    className="shrink-0 cursor-pointer transition-opacity active:opacity-70"
-                    onClick={(e) => {
-                      if (onAvatarDoubleTap(e)) {
-                        if (peerAvatarTapRef.current !== null) {
-                          window.clearTimeout(peerAvatarTapRef.current);
-                          peerAvatarTapRef.current = null;
+                     （多选模式下点击头像仍走勾选，由行级 onClickCapture 拦截）
+                     显示设置：外层列容器承载头像 + 头像下方元信息（已读/时间，位置=头像下面时） */
+                  <div className="flex w-[40px] shrink-0 flex-col items-center">
+                    <button
+                      type="button"
+                      data-testid="qq-peer-avatar"
+                      aria-label={`单击查看${peer.name}的状态，双击拍一拍`}
+                      className="shrink-0 cursor-pointer transition-opacity active:opacity-70"
+                      onClick={(e) => {
+                        if (onAvatarDoubleTap(e)) {
+                          if (peerAvatarTapRef.current !== null) {
+                            window.clearTimeout(peerAvatarTapRef.current);
+                            peerAvatarTapRef.current = null;
+                          }
+                          return;
                         }
-                        return;
-                      }
-                      if (peerAvatarTapRef.current !== null) window.clearTimeout(peerAvatarTapRef.current);
-                      peerAvatarTapRef.current = window.setTimeout(() => {
-                        peerAvatarTapRef.current = null;
-                        setPeerStatusOpen(true);
-                      }, 260);
-                    }}
-                  >
-                    <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
-                  </button>
+                        if (peerAvatarTapRef.current !== null) window.clearTimeout(peerAvatarTapRef.current);
+                        peerAvatarTapRef.current = window.setTimeout(() => {
+                          peerAvatarTapRef.current = null;
+                          setPeerStatusOpen(true);
+                        }, 260);
+                      }}
+                    >
+                      <QqAvatar src={peer.avatar} alt={peer.name} size={40} shape={chatDisplay.avatarShape} />
+                    </button>
+                    <QqMetaUnderAvatar m={m} cfg={chatDisplay} />
+                  </div>
                 )}
                 {/* 拉黑图标（红色 ! 圆点）：我的消息在气泡左侧；AI 回复失败徽标（点击重试）优先于拉黑图标 */}
                 {mine && m.replyFail ? (
@@ -7347,19 +7445,25 @@ function ChatPage({
                     </div>
                     {/* 翻译开启时在气泡下方显示所选语言的译文 */}
                     {renderTranslations(m.id, m.content)}
+                    {/* 显示设置 › 已读未读/时间（位置=气泡下面）：靠气泡末尾（远离头像的一侧），已读在上、时间在下 */}
+                    <QqMetaUnderBubble m={m} cfg={chatDisplay} />
                   </div>
                 )}
                 {mine && (
-                  /* Task 30 拍一拍：双击自己的头像 = 拍一拍自己（QQ 同款互动）；单击无动作 */
-                  <button
-                    type="button"
-                    data-testid="qq-me-avatar"
-                    aria-label="双击拍一拍自己"
-                    className="shrink-0 cursor-pointer"
-                    onClick={(e) => onAvatarDoubleTap(e, true)}
-                  >
-                    <QqAvatar src={me.avatar} alt={me.name} size={40} />
-                  </button>
+                  /* Task 30 拍一拍：双击自己的头像 = 拍一拍自己（QQ 同款互动）；单击无动作。
+                     显示设置：外层列容器承载头像 + 头像下方元信息（已读/时间，位置=头像下面时） */
+                  <div className="flex w-[40px] shrink-0 flex-col items-center">
+                    <button
+                      type="button"
+                      data-testid="qq-me-avatar"
+                      aria-label="双击拍一拍自己"
+                      className="shrink-0 cursor-pointer"
+                      onClick={(e) => onAvatarDoubleTap(e, true)}
+                    >
+                      <QqAvatar src={me.avatar} alt={me.name} size={40} shape={chatDisplay.avatarShape} />
+                    </button>
+                    <QqMetaUnderAvatar m={m} cfg={chatDisplay} />
+                  </div>
                 )}
                 {/* 拉黑图标（红色 ! 圆点）：对方的消息在气泡右侧 */}
                 {!mine && blockedIconOf(m)}
@@ -14534,6 +14638,7 @@ function SettingsPage({
   onBack,
   onOpenSecurity,
   onOpenDress,
+  onOpenDisplay,
   onLogout,
   onToast,
 }: {
@@ -14542,6 +14647,8 @@ function SettingsPage({
   onOpenSecurity: () => void;
   /** 第十七轮：个性装扮与特权外显 → 聊天气泡装扮设置页 */
   onOpenDress: () => void;
+  /** 聊天显示设置页（头像样式 / 已读未读回执 / 时间显示） */
+  onOpenDisplay: () => void;
   onLogout: () => void;
   onToast: (m: string) => void;
 }) {
@@ -14565,6 +14672,7 @@ function SettingsPage({
     { icon: <Bell className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '消息通知', onClick: () => onToast('消息通知暂未开放') },
     { icon: <SlidersHorizontal className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '模式选择', hint: '普通模式', onClick: () => onToast('模式选择暂未开放') },
     { icon: <Shirt className="h-5 w-5" strokeWidth={1.9} />, color: '#F0479C', label: '个性装扮与特权外显', onClick: onOpenDress },
+    { icon: <Eye className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '聊天显示', hint: '头像 · 已读 · 时间', onClick: onOpenDisplay, testid: 'qq-settings-display' },
     { icon: <Sparkles className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '头像双击动作', hint: clapShown, onClick: openClap, testid: 'qq-settings-clap' },
     { icon: <Settings className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '通用', onClick: () => onToast('通用设置暂未开放') },
   ];
@@ -16996,6 +17104,7 @@ type MainRoute =
   | { page: 'momentsSettings' }
   | { page: 'dress' }
   | { page: 'bubbles' }
+  | { page: 'display' }
   | { page: 'settings' }
   | { page: 'security' }
   | { page: 'stickers' }
@@ -17633,6 +17742,9 @@ function MainScreen({
       ) : route.page === 'bubbles' ? (
         // 气泡样式页（个性装扮 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
         <BubbleStylePage app="qq" onBack={() => setRoute({ page: 'dress' })} onToast={showToast} />
+      ) : route.page === 'display' ? (
+        // 显示设置页（设置 › 聊天显示）：头像样式 / 已读未读回执 / 时间显示（实时预览）
+        <ChatDisplayPage app="qq" onBack={() => setRoute({ page: 'settings' })} onToast={showToast} />
       ) : route.page === 'momentsSettings' ? (
         <MomentsSettingsPage
           app="qq"
@@ -17655,6 +17767,7 @@ function MainScreen({
           onBack={() => openTabs('消息')}
           onOpenSecurity={() => setRoute({ page: 'security' })}
           onOpenDress={() => setRoute({ page: 'dress' })}
+          onOpenDisplay={() => setRoute({ page: 'display' })}
           onLogout={onLogout}
           onToast={showToast}
         />
