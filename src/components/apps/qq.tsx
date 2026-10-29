@@ -238,7 +238,7 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { ThemeStylePage } from './bubble-style-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
-import { bubbleVisual, isLiquidTheme, isRetroTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT, RETRO_BEAK_CLIP_LEFT, RETRO_BEAK_CLIP_RIGHT } from '@/lib/ios/bubble-style';
+import { bubbleVisual, isLiquidTheme, isRetroTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT, RETRO_BEAK_CLIP_LEFT, RETRO_BEAK_CLIP_RIGHT, RETRO_BEAK_CLIP_TYPING_LEFT } from '@/lib/ios/bubble-style';
 import { ChatSkinProvider } from '@/lib/ios/chat-skin';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
@@ -7272,7 +7272,15 @@ function ChatPage({
                   </div>
                 )
               ) : (
-              <div className={`mb-3 flex ${m.kind === 'voice' ? 'items-start' : 'items-end'} ${m.kind === 'image' || m.kind === 'sticker' || m.kind === 'textcard' ? 'gap-[3px]' : 'gap-2'} ${mine ? 'justify-end' : 'justify-start'}`}>
+              <div className={`mb-3 flex ${m.kind === 'voice' ? 'items-start' : 'items-end'} ${
+                m.kind === 'image' || m.kind === 'sticker' || m.kind === 'textcard'
+                  ? 'gap-[3px]'
+                  : /* 第六十轮：古早文本泡带 15px 凸出的喙状 beak——行距加宽到 18px 给尾巴让位
+                       （参考图同款：头像与泡身间距 > 尾巴凸出量，尾巴尖不碰头像） */
+                    retro && (!m.kind || m.kind === 'text')
+                  ? 'gap-[18px]'
+                  : 'gap-2'
+              } ${mine ? 'justify-end' : 'justify-start'}`}>
                 {selectMode && isSelectable(m) && !mine && (
                   /* 多选模式勾选圈（对方消息在行左侧） */
                   <span
@@ -7546,10 +7554,7 @@ function ChatPage({
                         decorated={bvis.override}
                         style={
                           bvis.override
-                            ? bvis.tail === 'retro'
-                              ? // 古早语音气泡无 beak：四角统一 8px（盖掉文本气泡的尾巴侧方角）
-                                { ...bvis.style, borderRadius: '8px' }
-                              : bvis.style
+                            ? bvis.style /* 古早四角统一 12px（retroQqRadius），语音泡无 beak 无需盖角 */
                             : m.role === 'me'
                               ? { backgroundColor: '#0099FF' }
                               : undefined
@@ -7592,12 +7597,11 @@ function ChatPage({
                       {/* 气泡小尾巴（第五十一轮，用户指定：QQ 换色/七彩气泡变成信息 App 同款）：
                           装扮 solid/七彩 = 信息 App 同款底部弯钩剪影尾巴（14×18px，随 tailColor 上色，
                           我方右侧/对方左侧，与头像底端对齐）；毛玻璃/液态胶囊无尾巴。
-                          第五十九轮（用户指定「QQ 气泡添加上小尾巴，跟我发给你的一样」）：
-                          古早回归参考图1 同款顶部尖角 beak——剪影随 .rt-beak-* CSS 类渐变上色
-                          （深色自适应；自定义色时 tailColor 平色），尖角指向头像一侧（我方右上/对方左上），
-                          尾巴侧顶角为方角（bubbleVisual 已返回 retroQqRadius）；
-                          -±8px 定位补 .bub-retro 1px 描边（绝对定位基准是 padding box），
-                          实际尖角露出 7px 与气泡顶边无缝衔接 */}
+                          第六十轮（用户指定「QQ古早气泡再美化，尤其是小尾巴」）：古早 beak 参考
+                          图逐像素测量重制为喙状悬出式——顶边从顶角圆弧下 8px 处水平向头像侧
+                          伸出 15px，尖端圆润，下缘 ~31° 斜切回泡身（几何见 RETRO_BEAK_CLIP_* 头注释）；
+                          渐变随 .rt-beak-* CSS 类对齐泡身色带（深色自适应；自定义色时 tailColor 平色）。
+                          QQ 泡已去描边（.bub-retro-qq border-width:0），绝对定位基准=边框盒无需补偿 */}
                       {bvis.tail === 'im' && (
                         <span
                           aria-hidden="true"
@@ -7608,7 +7612,7 @@ function ChatPage({
                       {bvis.tail === 'retro' && (
                         <span
                           aria-hidden="true"
-                          className={`absolute top-0 ${mine ? '-right-[8px]' : '-left-[8px]'} h-[15px] w-[11px] ${
+                          className={`absolute top-[8px] ${mine ? '-right-[15px]' : '-left-[15px]'} h-[29px] w-[19px] ${
                             bvis.tailColor ? '' : mine ? 'rt-beak-mine' : 'rt-beak-theirs'
                           }`}
                           style={{
@@ -7757,7 +7761,7 @@ function ChatPage({
                 {stream.visionNotice}
               </p>
             )}
-            <div className="mb-3 flex items-end justify-start gap-2">
+            <div className={`mb-3 flex items-end justify-start ${retro ? 'gap-[15px]' : 'gap-2'}`}>
               <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
               <div
                 className={`relative max-w-[calc(100%-96px)] px-3.5 py-[9px] ${
@@ -7781,12 +7785,13 @@ function ChatPage({
                   />
                 )}
                 {tvis.tail === 'retro' && (
-                  /* 古早 beak（第五十九轮）：正在输入指示是对方气泡——左侧尖角，
-                     颜色/定位与正文气泡同口径（-8px 补 1px 描边） */
+                  /* 古早 beak（第六十轮喙状同款）：正在输入指示是对方气泡——左侧迷你版
+                     （指示泡较矮，全尺寸 29px 会溢出泡底，按同款几何缩至 15×22）；
+                     QQ 泡无描边，定位无补偿 */
                   <span
                     aria-hidden="true"
-                    className={`absolute top-0 -left-[8px] h-[15px] w-[11px] ${tvis.tailColor ? '' : 'rt-beak-theirs'}`}
-                    style={{ clipPath: RETRO_BEAK_CLIP_LEFT, ...(tvis.tailColor ? { background: tvis.tailColor } : {}) }}
+                    className={`absolute top-[7px] -left-[12px] h-[22px] w-[15px] ${tvis.tailColor ? '' : 'rt-beak-theirs'}`}
+                    style={{ clipPath: RETRO_BEAK_CLIP_TYPING_LEFT, ...(tvis.tailColor ? { background: tvis.tailColor } : {}) }}
                   />
                 )}
                 <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">

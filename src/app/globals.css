@@ -1353,7 +1353,12 @@
   color: #E8E8EC !important;
 }
 /* QQ 浅色：垂直渐变（图1 实测：灰泡顶 #D0D0D0→底 #B9B9B9；蓝泡顶 #C2D8EC→底 #A9C9E5）。
-   双类选择器特异性高于宿主的 bg-white，且 inline 不再携带 backgroundColor */
+   双类选择器特异性高于宿主的 bg-white，且 inline 不再携带 backgroundColor。
+   第六十轮美化：QQ 泡去 1px 描边（参考图实测边缘干净无描边线，只剩 1-2px 极淡投影）——
+   beak 尾巴与泡身衔接处不再受描边断色影响，整体更柔和 */
+.bub-retro-qq {
+  border-width: 0;
+}
 .bub-retro-qq.bub-retro-mine {
   background: linear-gradient(180deg, #D0D0D0 0%, #C4C4C4 55%, #B9B9B9 100%);
 }
@@ -1398,13 +1403,15 @@
   right: -5px;
   top: 12px;
 }
-/* 古早 QQ 顶部尖角 beak 尾巴（第五十九轮回归，参考图1 同款）：渐变与气泡同源
-   （beak 贴着气泡顶部，取同走向渐变；深色成对切换——.dark 用平色 background 接管） */
+/* 古早 QQ 顶部喙状 beak 尾巴（第六十轮美化，参考图逐像素测量）：
+   尾巴从顶角圆弧下 8px 处悬出（宿主 span top:8px），覆盖气泡 y=8..36 色带——
+   渐变取该色带两端的插值色（42px 单行泡折算），与泡身过渡视觉无缝；
+   深色成对切换——.dark 用平色 background 接管（与泡身同色对） */
 .rt-beak-mine {
-  background: linear-gradient(180deg, #D0D0D0 0%, #C4C4C4 100%);
+  background: linear-gradient(180deg, #CBCBCB 0%, #BEBEBE 100%);
 }
 .rt-beak-theirs {
-  background: linear-gradient(180deg, #C2D8EC 0%, #B4CDE7 100%);
+  background: linear-gradient(180deg, #BDD4EA 0%, #AFCBE6 100%);
 }
 .dark .rt-beak-mine {
   background: #4E4E57;

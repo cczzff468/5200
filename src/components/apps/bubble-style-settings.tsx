@@ -125,10 +125,11 @@ function AuraLayer() {
 /** 单条迷你预览气泡：override 时用装扮样式，否则 App 原生配色
  *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 信息 App 同款底部弯钩剪影（第五十一轮，迷你版 12×10px 随色）；
  *   微信/信息 = 原生小方块随色（第五十八轮：古早微信同款小三角，tailClass 深浅自适应）；胶囊无尾巴；
- *   第五十九轮：QQ 古早 = 迷你版顶部尖角 beak（颜色走 .rt-beak-* 类，与聊天页同款语言）） */
-/** 迷你 beak 剪影（全尺寸 11×15 × 0.7：span 8×11px，尖角同样指向头像一侧） */
-const RETRO_BEAK_MINI_RIGHT = 'path("M0 0 L7.7 1.4 C5.25 2.94, 2.24 5.95, 0.42 10.5 L0 10.5 Z")';
-const RETRO_BEAK_MINI_LEFT = 'path("M7.7 0 L0 1.4 C2.45 2.94, 5.46 5.95, 7.28 10.5 L7.7 10.5 Z")';
+ *   第六十轮：QQ 古早 = 迷你版喙状 beak（顶边平伸 + 圆润尖端 + 斜切下缘，
+ *   颜色走 .rt-beak-* 类，与聊天页同款造型语言）） */
+/** 迷你 beak 剪影（第六十轮，全尺寸 19×29 的缩影：span 9×13px，凸出 5px 适配预览行 6px 头像间距） */
+const RETRO_BEAK_MINI_RIGHT = 'path("M0 0 L7.2 0 Q9 0.25 8.55 2.4 L3.8 11.6 Q3 13.2 1 12.7 L0 12.7 Z")';
+const RETRO_BEAK_MINI_LEFT = 'path("M9 0 L1.8 0 Q0 0.25 0.45 2.4 L5.2 11.6 Q6 13.2 8 12.7 L9 12.7 Z")';
 function PreviewBubble({
   app,
   cfg,
@@ -180,11 +181,11 @@ function PreviewBubble({
         );
       })()}
       {vis.tail === 'retro' && (
-        /* QQ 古早（第五十九轮）：迷你版顶部尖角 beak——颜色走 .rt-beak-* 类
-           （深色自适应；自定义色时 tailColor 平色），-±5px 补 1px 描边（同聊天页口径） */
+        /* QQ 古早（第六十轮喙状同款）：迷你版 beak——颜色走 .rt-beak-* 类
+           （深色自适应；自定义色时 tailColor 平色）；预览泡较矮，top:4px 悬于顶角圆弧下 */
         <span
           aria-hidden="true"
-          className={`absolute top-0 ${side === 'mine' ? '-right-[5px]' : '-left-[5px]'} h-[11px] w-[8px] ${
+          className={`absolute top-[4px] ${side === 'mine' ? '-right-[5px]' : '-left-[5px]'} h-[13px] w-[9px] ${
             vis.tailColor ? '' : side === 'mine' ? 'rt-beak-mine' : 'rt-beak-theirs'
           }`}
           style={{
