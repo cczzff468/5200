@@ -182,7 +182,7 @@ function PreviewRow({
     showRead || showTime ? (
       <span
         className={`mt-[2px] flex w-max flex-col gap-y-[1px] leading-none ${
-          side === 'mine' ? 'self-end items-end' : 'self-start items-start'
+          side === 'mine' ? 'self-end items-end -mr-1' : 'self-start items-start -ml-1'
         }`}
       >
         {showRead && cfg.readPosition === 'avatar' && (
@@ -201,7 +201,7 @@ function PreviewRow({
     showRead || showTime ? (
       <span
         className={`mt-[2px] flex flex-col self-stretch gap-y-[1px] leading-none ${
-          side === 'mine' ? 'items-end' : 'items-start'
+          side === 'mine' ? 'items-start' : 'items-end'
         }`}
       >
         {showRead && cfg.readPosition === 'bubble' && (

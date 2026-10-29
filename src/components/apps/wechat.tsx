@@ -1998,9 +1998,10 @@ const wxMetaText = 'whitespace-nowrap text-[10px] leading-[1.35] text-black/40 d
 const wxMetaReadCls = 'text-black/35 dark:text-white/40';
 const wxMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
-/** 显示设置 › 已读未读 + 时间：头像下方上下两行（用户指定：已读未读在上、时间在下）；
- *  超宽行向屏幕内侧延伸——TA 的（头像在左）左缘对齐向右延、
- *  我的（头像在右）右缘对齐向左延，长日期模板（如 yyyy/MM/dd HH:mm）也不折行不出屏 */
+/** 显示设置 › 已读未读 + 时间：头像下方上下两行（已读未读在上、时间在下）；
+ *  用户指定：往屏幕边缘靠一点点——负 margin 突破聊天区 px-3（12px）padding，
+ *  -ml/-mr-2（8px）后距屏幕边缘约 4px；长行仍向屏幕内侧延伸（TA 的右延、我的左延），
+ *  长日期模板（如 yyyy/MM/dd HH:mm）也不折行不出屏 */
 function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && wxMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && wxMetaOk(m);
@@ -2008,7 +2009,7 @@ function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   return (
     <span
       className={`mt-[3px] flex w-max flex-col gap-y-[1px] leading-none ${
-        m.role === 'me' ? 'self-end items-end' : 'self-start items-start'
+        m.role === 'me' ? 'self-end items-end -mr-2' : 'self-start items-start -ml-2'
       }`}
     >
       {showRead && (
@@ -2028,8 +2029,8 @@ function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   );
 }
 
-/** 显示设置 › 已读未读 + 时间：气泡下方上下两行——靠屏幕边缘（贴头像的一侧：我的=右、TA的=左，
- *  用户指定：往边缘靠）；同显时上下堆叠（已读未读在上、时间在下）。
+/** 显示设置 › 已读未读 + 时间：气泡下方上下两行——靠气泡末尾（远离头像的一侧：我的=左下、TA的=右下，
+ *  原生样式）；同显时上下堆叠（用户指定：已读未读在上、时间在下）。
  *  子项 nowrap：日期模板（yyyy/MM/dd HH:mm）等长格式也不内部折行。
  *  仅挂在文本气泡列（最常见消息形态） */
 function WxMetaUnderBubble({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
@@ -2039,7 +2040,7 @@ function WxMetaUnderBubble({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   return (
     <span
       className={`mt-[3px] flex flex-col self-stretch gap-y-[1px] leading-none ${
-        m.role === 'me' ? 'items-end' : 'items-start'
+        m.role === 'me' ? 'items-start' : 'items-end'
       }`}
     >
       {showRead && (
