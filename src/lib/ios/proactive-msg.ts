@@ -1401,7 +1401,7 @@ export async function fireProactiveNudge(
     const blk = loadBlock(app, cid);
     if (blk.byUser) return false; // 用户拉黑时不打扰
     // 正在通话中不打扰（与 tickInner 守卫同思路；主动消息调度已有互斥，这里轻量跳过）
-    if (useIncomingCall.getState().active || useGlobalCall.getState().session) return false;
+    if (useIncomingCall.getState().call || useGlobalCall.getState().session) return false;
     // 生成 + 投递（fireProactive 自带去重/重试/兜底）
     const npcExtra = buildNpcPromptExtra(contact, all) as unknown as Record<string, unknown> | null;
     await fireProactive(app, contact, { kind: 'event', eventName: opts.context }, npcExtra);
