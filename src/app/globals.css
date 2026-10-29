@@ -1371,6 +1371,33 @@
   border-color: #365171 !important;
   color: #E6EDF6 !important;
 }
+/* 古早微信小尾巴（第五十八轮：用户指定回归默认气泡同款方形小三角）：
+   颜色跟随古早色板深浅自适应（与 .bub-retro-mine/-theirs 同色对）——
+   深色模式下 .dark 色板 !important 会盖掉 inline 气泡底色，尾巴若走 inline
+   tailColor 会与气泡脱色，故尾巴颜色也走 CSS 类成对切换 */
+.rt-tail-mine {
+  background-color: #9EE75A;
+}
+.dark .rt-tail-mine {
+  background-color: #5E9E3C;
+}
+.rt-tail-theirs {
+  background-color: #FFFFFF;
+}
+.dark .rt-tail-theirs {
+  background-color: #3A3A42;
+}
+/* 古早实心图标色板（retro-icons.tsx RtPlus* 系列：加号面板 + 输入框上方快捷条共用）：
+   浅色 = 深灰实心 + 白色镂空细节（参考图实测 #6E7474）；深色成对切换为
+   浅灰实心 + 深色细节，保证 14px 快捷条小图标在深色输入栏上也清晰 */
+:root {
+  --rt-ic-body: #6E7474;
+  --rt-ic-detail: #FFFFFF;
+}
+.dark {
+  --rt-ic-body: #C6CAD1;
+  --rt-ic-detail: #26262E;
+}
 
 /* ---------------------------------------------------------------------------
  * 古早主题全局接管（第五十五轮：用户指定「所有界面都变化、全部面板全部按钮都变化」）

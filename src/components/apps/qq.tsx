@@ -264,7 +264,21 @@ import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, cle
 import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, createContact, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 // 古早主题（retro）：复古 Tab 图标 + 拟物图标底座 + 配色表（QQ 版）
-import { RtBellIcon, RtUsersIcon, RtStarIcon, RetroIc, RETRO_ICON_TONES } from './retro-icons';
+import {
+  RtBellIcon,
+  RtUsersIcon,
+  RtStarIcon,
+  RetroIc,
+  RETRO_ICON_TONES,
+  RtPlusVoice,
+  RtPlusVideo,
+  RtPlusRedPacket,
+  RtPlusTransfer,
+  RtPlusLocation,
+  RtPlusTextCard,
+  RtPlusTogether,
+  RtPlusExpress,
+} from './retro-icons';
 import { listAlbums, listAlbumsForChat, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { ensureAlbumDescs } from '@/lib/ios/album-vision';
 import { buildAvatarBlock, ensureAvatarDesc, noteAvatarChanged } from '@/lib/ios/avatar-ai';
@@ -2367,13 +2381,15 @@ export function QqStickerBubble({
 
 /** 加号面板宫格（单聊/群聊共用：彩色圆角瓷贴 + 白色图标，对照新版 QQ 更多面板）。
  *  液态玻璃主题（liquid）：竖向单列列表——图标左 + 文字右，黑图标黑字（参考图同款）；群聊不传保持彩色宫格。
- *  古早主题（retro，第五十五轮）：无彩色瓷贴的平铺灰色图标 + 灰字（微信图1 同款语言） */
+ *  古早主题（retro，第五十五轮）：无彩色瓷贴的平铺灰色图标 + 灰字（微信图1 同款语言）。
+ *  第五十八轮（用户指定「加号面板功能图标变成古早主题图标」）：古早改用 RtPlus*
+ *  实心剪影图标（与微信加号面板同语言，颜色走 --rt-ic-* 深浅自适应） */
 export function QqPlusGrid({
   items,
   liquid = false,
   retro = false,
 }: {
-  items: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }>;
+  items: Array<{ key: string; label: string; color: string; icon: React.ReactNode; retroIcon?: React.ReactNode; onClick: () => void }>;
   liquid?: boolean;
   retro?: boolean;
 }) {
@@ -2406,9 +2422,9 @@ export function QqPlusGrid({
             onClick={it.onClick}
             className="flex flex-col items-center gap-2 transition-transform active:scale-95"
           >
-            {/* 古早（图1 同款语言）：无瓷贴平铺灰色图标 + 灰字 */}
-            <span className="flex h-[52px] w-[52px] items-center justify-center text-[#5A5E68] dark:text-white/70" aria-hidden="true">
-              {it.icon}
+            {/* 古早（第五十八轮）：RtPlus* 实心剪影（白镂空细节，深浅自适应）；群聊等未提供时回退原线稿 */}
+            <span className="flex h-[52px] w-[52px] items-center justify-center" aria-hidden="true">
+              {retro ? (it.retroIcon ?? it.icon) : it.icon}
             </span>
             <span className="text-[12px] text-[#6A6E78] dark:text-white/60">{it.label}</span>
           </button>
@@ -2444,17 +2460,19 @@ export function QqPlusGrid({
  * 输入框上方快捷功能条（QQ 端）图标/文案（用户指定「图标再美化，变成黑白色」）：
  * 黑白单色 lucide 线描（currentColor，浅色黑 / 深色白，尺寸由快捷条容器统一压 14px）；
  * 行为不在此定义——点击取加号面板同名项的 onClick（与面板完全等效，面板本身不动）。
+ * 第五十八轮（用户指定「输入框上面的功能图标变成古早主题图标」）：每项携带
+ * retroIcon 古早实心剪影（与加号面板同语言），古早主题时由快捷条选用。
  * 单聊与群聊共用（qq-group 仅命中其面板实际有的功能，其余自动排除）。
  */
-export const QQ_QUICK_META: Record<string, { label: string; icon: React.ReactNode }> = {
-  call: { label: '语音通话', icon: <Phone className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  video: { label: '视频通话', icon: <Video className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  rp: { label: '红包', icon: <Gift className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  loc: { label: '位置', icon: <MapPin className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  textcard: { label: '文字图片', icon: <Sparkles className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  together: { label: '一起听', icon: <Headphones className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  express: { label: '快递', icon: <Package className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+export const QQ_QUICK_META: Record<string, { label: string; icon: React.ReactNode; retroIcon: React.ReactNode }> = {
+  call: { label: '语音通话', icon: <Phone className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusVoice /> },
+  video: { label: '视频通话', icon: <Video className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusVideo /> },
+  rp: { label: '红包', icon: <Gift className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusRedPacket /> },
+  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusTransfer /> },
+  loc: { label: '位置', icon: <MapPin className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusLocation /> },
+  textcard: { label: '文字图片', icon: <Sparkles className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusTextCard /> },
+  together: { label: '一起听', icon: <Headphones className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusTogether /> },
+  express: { label: '快递', icon: <Package className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusExpress /> },
 };
 
 /**
@@ -6741,13 +6759,15 @@ function ChatPage({
     richInputRef.current?.insertEmoji(s.meaning, s.url);
   };
 
-  // 加号面板宫格（语音通话/视频通话/红包/转账/位置/文字图片；图片入口已移除）
-  const plusAllItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
+  // 加号面板宫格（语音通话/视频通话/红包/转账/位置/文字图片；图片入口已移除）。
+  // 第五十八轮：每项携带 retroIcon（RtPlus* 古早实心剪影，古早主题时 QqPlusGrid 选用）
+  const plusAllItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; retroIcon?: React.ReactNode; onClick: () => void }> = [
     {
       key: 'call',
       label: '语音通话',
       color: '#2FBF71',
       icon: <Phone className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      retroIcon: <RtPlusVoice />,
       onClick: () => {
         setPlusOpen(false);
         openVoiceCall('out');
@@ -6759,6 +6779,7 @@ function ChatPage({
       label: '视频通话',
       color: '#1B9FF0',
       icon: <Video className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      retroIcon: <RtPlusVideo />,
       onClick: () => {
         setPlusOpen(false);
         openVoiceCall('out', { media: 'video' });
@@ -6769,6 +6790,7 @@ function ChatPage({
       label: '红包',
       color: '#F5455C',
       icon: <RpIcon className="h-[26px] w-[26px]" />,
+      retroIcon: <RtPlusRedPacket />,
       onClick: () => {
         setPlusOpen(false);
         setLayer({ view: 'redpacket' });
@@ -6779,6 +6801,7 @@ function ChatPage({
       label: '转账',
       color: '#12B7F5',
       icon: <ArrowLeftRight className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      retroIcon: <RtPlusTransfer />,
       onClick: () => {
         setPlusOpen(false);
         setLayer({ view: 'transfer' });
@@ -6789,6 +6812,7 @@ function ChatPage({
       label: '位置',
       color: '#F0605C',
       icon: <MapPin className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      retroIcon: <RtPlusLocation />,
       onClick: () => {
         setPlusOpen(false);
         setLayer({ view: 'location' });
@@ -6799,6 +6823,7 @@ function ChatPage({
       label: '文字图片',
       color: '#0099FF',
       icon: <Sparkles className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      retroIcon: <RtPlusTextCard />,
       onClick: () => {
         // 文字图片（Task 13 卡片版，无生图依赖）：AI 按人设+聊天记录代笔或用户代写，以卡片消息发到聊天
         setPlusOpen(false);
@@ -6813,6 +6838,7 @@ function ChatPage({
       label: '一起听',
       color: '#EC4141',
       icon: <Headphones className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      retroIcon: <RtPlusTogether />,
       onClick: () => {
         setPlusOpen(false);
         if (peer.kind !== 'char') {
@@ -6828,6 +6854,7 @@ function ChatPage({
       label: '快递',
       color: '#FF6A1E',
       icon: <Package className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      retroIcon: <RtPlusExpress />,
       onClick: () => {
         setPlusOpen(false);
         setStickerOpen(false);
@@ -6837,14 +6864,15 @@ function ChatPage({
   ];
   // 输入框上方快捷功能（输入框自定义 › 输入框上方功能）：把加号面板里的功能放到输入框上面，
   // 点一下直接触发（与点加号面板里那一项同一条 onClick）；未添加 = 不显示；「+」面板本身不受影响。
-  // 图标/文案用 QQ_QUICK_META（黑白单色 lucide，用户指定「图标美化成黑白色」）；
+  // 图标/文案用 QQ_QUICK_META；第五十八轮：古早主题选 retroIcon（RtPlus* 实心剪影，
+  // 与加号面板同语言），默认/液态 = 现代线稿（液态在 lg-chip 玻璃胶囊内）；
   // 行为取 plusAllItems 同名项的 onClick（与面板点击完全等效）
   const quickItems: QuickBarItem[] = resolveQuickKeys('qq', chatDecorQq.quickKeys)
     .map((k): QuickBarItem | null => {
       const meta = QQ_QUICK_META[k];
       const panel = plusAllItems.find((it) => it.key === k);
       if (!meta || !panel) return null;
-      return { key: k, label: meta.label, icon: meta.icon, onClick: panel.onClick };
+      return { key: k, label: meta.label, icon: retro ? meta.retroIcon : meta.icon, onClick: panel.onClick };
     })
     .filter((x): x is QuickBarItem => x !== null);
 
@@ -7518,10 +7546,7 @@ function ChatPage({
                         decorated={bvis.override}
                         style={
                           bvis.override
-                            ? bvis.tail === 'retro'
-                              ? // 古早语音气泡无 beak：四角统一 8px（盖掉文本气泡的尾巴侧方角）
-                                { ...bvis.style, borderRadius: '8px' }
-                              : bvis.style
+                            ? bvis.style
                             : m.role === 'me'
                               ? { backgroundColor: '#0099FF' }
                               : undefined
@@ -7564,31 +7589,14 @@ function ChatPage({
                       {/* 气泡小尾巴（第五十一轮，用户指定：QQ 换色/七彩气泡变成信息 App 同款）：
                           装扮 solid/七彩 = 信息 App 同款底部弯钩剪影尾巴（14×18px，随 tailColor 上色，
                           我方右侧/对方左侧，与头像底端对齐）；毛玻璃/液态胶囊无尾巴。
-                          第五十六轮（古早参考图1）：kind='retro' = 顶部尖角小 beak——
-                          尖角指向头像一侧（我方右上/对方左上），尾巴侧顶角为方角（bubbleVisual
-                          已返回 8px 0 8px 8px / 0 8px 8px 8px），填色 = 渐变顶色 tailColor */}
+                          第五十八轮（用户指定「小尾巴变成默认气泡样式的」）：古早也无尾巴
+                          （QQ 默认气泡无尾巴），四角统一 8px（bub-retro 色 rb.radius） */}
                       {bvis.tail === 'im' && (
                         <span
                           aria-hidden="true"
                           className={`absolute bottom-0 ${mine ? '-right-[6px]' : '-left-[6px]'} h-[18px] w-[14px]`}
                           style={{ clipPath: mine ? TAIL_CLIP_RIGHT : TAIL_CLIP_LEFT, backgroundColor: bvis.tailColor }}
                         />
-                      )}
-                      {bvis.tail === 'retro' && (
-                        <svg
-                          aria-hidden="true"
-                          viewBox="0 0 11 15"
-                          className={`absolute top-0 ${mine ? '-right-[7px]' : '-left-[7px]'} h-[15px] w-[11px]`}
-                          fill={bvis.tailColor}
-                        >
-                          {mine ? (
-                            /* 我方：尖角在右上指向头像；上缘从气泡顶边扫向尖点，下缘弧线收回气泡身 */
-                            <path d="M0 0 L11 2 C7.5 4.2, 3.2 8.5, 0.6 15 L0 15 Z" />
-                          ) : (
-                            /* 对方：镜像，尖角在左上指向头像 */
-                            <path d="M11 0 L0 2 C3.5 4.2, 7.8 8.5, 10.4 15 L11 15 Z" />
-                          )}
-                        </svg>
                       )}
                       {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方）。
                           第十九轮修订：紧凑化（更小的内边距/字号，引用卡不再占大半个气泡）+ 引用文字用
@@ -7885,7 +7893,7 @@ function ChatPage({
             点一下与点面板里那一项等效；未添加 = 不显示；「+」面板本身不受影响 */}
         {quickItems.length > 0 && (
           <div className="px-3 pt-2">
-            <ChatQuickBar items={quickItems} liquid={liquid} testPrefix="qq" />
+            <ChatQuickBar items={quickItems} liquid={liquid} retro={retro} testPrefix="qq" />
           </div>
         )}
         {/* 液态玻璃（用户指定）：删除输入行后面的大椭圆胶囊——行本身无包裹，输入框改毛玻璃椭圆（lg-input rounded-full），

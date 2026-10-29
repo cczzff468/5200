@@ -315,11 +315,13 @@ export function RtWShop({ className }: { className?: string }) {
 
 /* ---------------------------------------------------------------------------
  * 微信加号面板实心复古图标（第五十六轮参考图2 同款：深灰 #6E7474 实心剪影 +
- * 白色镂空细节，无瓷贴直接坐在浅灰面板上；参考图实测图标色 ≈ #6E7474）
- * 统一 24 viewBox，默认 30px。
+ * 白色镂空细节，无瓷贴直接坐在浅灰面板上；参考图实测图标色 ≈ #6E7474）。
+ * 第五十八轮：颜色改走 CSS 变量（--rt-ic-body / --rt-ic-detail，深色模式成对切换）
+ * ——快捷条 14px 小图标在深色输入栏上也能看清；统一 24 viewBox，默认 30px。
  * ------------------------------------------------------------------------- */
 
-const PLUS_ICON_COLOR = '#6E7474';
+const PLUS_ICON_COLOR = 'var(--rt-ic-body)';
+const PLUS_ICON_DETAIL = 'var(--rt-ic-detail)';
 
 function PBase({ children, className = 'h-[30px] w-[30px]' }: { children: React.ReactNode; className?: string }) {
   return (
@@ -334,8 +336,8 @@ export function RtPlusCamera({ className }: { className?: string }) {
   return (
     <PBase className={className}>
       <path d="M8.6 4.6 L9.8 3 H14.2 L15.4 4.6 H18.4 C19.8 4.6 21 5.8 21 7.2 V17.4 C21 18.8 19.8 20 18.4 20 H5.6 C4.2 20 3 18.8 3 17.4 V7.2 C3 5.8 4.2 4.6 5.6 4.6 Z" fill={PLUS_ICON_COLOR} />
-      <circle cx="12" cy="12.4" r="4" fill="none" stroke="#FFFFFF" strokeWidth={2.2} />
-      <circle cx="18.2" cy="8.4" r="1.1" fill="#FFFFFF" />
+      <circle cx="12" cy="12.4" r="4" fill="none" stroke={PLUS_ICON_DETAIL} strokeWidth={2.2} />
+      <circle cx="18.2" cy="8.4" r="1.1" fill={PLUS_ICON_DETAIL} />
     </PBase>
   );
 }
@@ -365,8 +367,8 @@ export function RtPlusRedPacket({ className }: { className?: string }) {
   return (
     <PBase className={className}>
       <path d="M5.4 3.4 H18.6 C19.4 3.4 20 4 20 4.8 V19.2 C20 20 19.4 20.6 18.6 20.6 H5.4 C4.6 20.6 4 20 4 19.2 V4.8 C4 4 4.6 3.4 5.4 3.4 Z" fill={PLUS_ICON_COLOR} />
-      <path d="M4 3.4 C6 6.4 8.8 8 12 8 C15.2 8 18 6.4 20 3.4 L20 6.6 C17.8 9 15.1 10.2 12 10.2 C8.9 10.2 6.2 9 4 6.6 Z" fill="#FFFFFF" />
-      <circle cx="12" cy="14.2" r="2.6" fill="none" stroke="#FFFFFF" strokeWidth={1.8} />
+      <path d="M4 3.4 C6 6.4 8.8 8 12 8 C15.2 8 18 6.4 20 3.4 L20 6.6 C17.8 9 15.1 10.2 12 10.2 C8.9 10.2 6.2 9 4 6.6 Z" fill={PLUS_ICON_DETAIL} />
+      <circle cx="12" cy="14.2" r="2.6" fill="none" stroke={PLUS_ICON_DETAIL} strokeWidth={1.8} />
     </PBase>
   );
 }
@@ -376,7 +378,7 @@ export function RtPlusTransfer({ className }: { className?: string }) {
   return (
     <PBase className={className}>
       <circle cx="12" cy="12" r="9.2" fill={PLUS_ICON_COLOR} />
-      <path d="M8.4 7.4 L11.6 11.3 L14.8 7.4 M9.7 12 H14.3 M11.6 11.3 V16.8 M9.4 14.3 H13.8" stroke="#FFFFFF" strokeWidth={1.9} fill="none" strokeLinecap="round" />
+      <path d="M8.4 7.4 L11.6 11.3 L14.8 7.4 M9.7 12 H14.3 M11.6 11.3 V16.8 M9.4 14.3 H13.8" stroke={PLUS_ICON_DETAIL} strokeWidth={1.9} fill="none" strokeLinecap="round" />
     </PBase>
   );
 }
@@ -386,7 +388,7 @@ export function RtPlusLocation({ className }: { className?: string }) {
   return (
     <PBase className={className}>
       <path d="M12 2.6 C16.4 2.6 20 6.2 20 10.6 C20 15.9 14.4 20 12 21.6 C9.6 20 4 15.9 4 10.6 C4 6.2 7.6 2.6 12 2.6 Z" fill={PLUS_ICON_COLOR} />
-      <circle cx="12" cy="10.4" r="3.2" fill="none" stroke="#FFFFFF" strokeWidth={2.2} />
+      <circle cx="12" cy="10.4" r="3.2" fill="none" stroke={PLUS_ICON_DETAIL} strokeWidth={2.2} />
     </PBase>
   );
 }
@@ -405,7 +407,7 @@ export function RtPlusTextCard({ className }: { className?: string }) {
   return (
     <PBase className={className}>
       <rect x="4" y="3" width="16" height="18" rx="2.4" fill={PLUS_ICON_COLOR} />
-      <path d="M8 7.6 H16 M12 7.6 V16.4 M9.6 16.4 H14.4" stroke="#FFFFFF" strokeWidth={1.9} fill="none" strokeLinecap="round" />
+      <path d="M8 7.6 H16 M12 7.6 V16.4 M9.6 16.4 H14.4" stroke={PLUS_ICON_DETAIL} strokeWidth={1.9} fill="none" strokeLinecap="round" />
     </PBase>
   );
 }
@@ -424,18 +426,31 @@ export function RtPlusGift({ className }: { className?: string }) {
   return (
     <PBase className={className}>
       <path d="M4 8.4 H20 V11 H4 Z M5.2 12.4 H18.8 V19.4 C18.8 20 18.4 20.4 17.8 20.4 H6.2 C5.6 20.4 5.2 20 5.2 19.4 Z" fill={PLUS_ICON_COLOR} />
-      <path d="M10.9 8.4 V20.4 H13.1 V8.4 Z" fill="#FFFFFF" />
+      <path d="M10.9 8.4 V20.4 H13.1 V8.4 Z" fill={PLUS_ICON_DETAIL} />
       <path d="M12 8.4 C9.2 8.4 7 7.4 7 5.7 C7 4.4 8 3.6 9.1 3.6 C10.8 3.6 11.7 5.4 12 8.4 C12.3 5.4 13.2 3.6 14.9 3.6 C16 3.6 17 4.4 17 5.7 C17 7.4 14.8 8.4 12 8.4 Z" fill="none" stroke={PLUS_ICON_COLOR} strokeWidth={1.9} />
     </PBase>
   );
 }
 
-/** 视频聊天（底部宽按钮内白色图标） */
-export function RtPlusVideoWhite({ className = 'h-[20px] w-[20px]' }: { className?: string }) {
+/** 视频通话：实心摄相机机身 + 实心梯形镜头盖 + 白色播放三角（第五十八轮：
+ *  视频通话从底部深色宽按钮移回宫格，与其他项同一语言） */
+export function RtPlusVideo({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="#FFFFFF" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="2.6" y="6.4" width="12.6" height="11.2" rx="2.4" fill="#FFFFFF" stroke="none" />
-      <path d="M15.2 10.6 L21 7.4 V16.6 L15.2 13.4 Z" fill="#FFFFFF" stroke="none" />
-    </svg>
+    <PBase className={className}>
+      <rect x="2.8" y="6" width="13" height="12" rx="2.6" fill={PLUS_ICON_COLOR} />
+      <path d="M16.6 10.4 L21.2 7.6 V16.4 L16.6 13.6 Z" fill={PLUS_ICON_COLOR} />
+      <path d="M7 9.6 L12 12 L7 14.4 Z" fill={PLUS_ICON_DETAIL} />
+    </PBase>
+  );
+}
+
+/** 快递：实心包裹箱 + 白色箱盖接缝与垂直胶带（QQ 加号面板「快递」项） */
+export function RtPlusExpress({ className }: { className?: string }) {
+  return (
+    <PBase className={className}>
+      <path d="M12 2.8 L20.2 6.6 V17.4 L12 21.2 L3.8 17.4 V6.6 Z" fill={PLUS_ICON_COLOR} />
+      <path d="M3.8 6.6 L12 10.4 L20.2 6.6" stroke={PLUS_ICON_DETAIL} strokeWidth={1.9} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 10.4 V21.2" stroke={PLUS_ICON_DETAIL} strokeWidth={1.9} fill="none" strokeLinecap="round" />
+    </PBase>
   );
 }

@@ -164,7 +164,7 @@ import {
   RtPlusTextCard,
   RtPlusTogether,
   RtPlusGift,
-  RtPlusVideoWhite,
+  RtPlusVideo,
 } from './retro-icons';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import {
@@ -3886,8 +3886,9 @@ function RedPacketIcon() {
 
 /** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方）。
  *  液态玻璃主题（用户指定）：竖向乳白玻璃列表（图标左 + 文字右，lg-menu-row）。
- *  古早主题（第五十五轮，图1 同款）：白底平铺灰色图标（无彩色瓷贴）+ 底部深色宽「视频聊天」按钮
- *  （视频通话从宫格提到底部宽按钮，功能不变，还原老微信 5.0 布局）。
+ *  古早主题（第五十五轮，图1 同款）：白底平铺灰色图标（无彩色瓷贴）。
+ *  第五十八轮（用户指定「视频聊天变成和其他一样」）：视频通话从底部深色宽按钮
+ *  移回宫格，与其他项同一布局同一图标语言（RtPlusVideo）。
  *  面板保持原生全部功能（用户指定「加号面板里面的功能不要动」）；自定义只影响输入框上方快捷条 */
 function PlusPanel({ onAction, liquid, retro }: { onAction: (a: PlusAction) => void; liquid?: boolean; retro?: boolean }) {
   // 第五十六轮（参考图2 同款）：古早加号面板用深灰实心剪影图标（白镂空细节）——
@@ -3897,7 +3898,7 @@ function PlusPanel({ onAction, liquid, retro }: { onAction: (a: PlusAction) => v
     { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} />, retroIcon: <RtPlusCamera /> },
     { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} />, retroIcon: <RtPlusImage /> },
     { key: 'voicecall', label: '语音通话', icon: <Phone className="h-[25px] w-[25px]" strokeWidth={1.6} />, retroIcon: <RtPlusVoice /> },
-    { key: 'videocall', label: '视频通话', icon: <Video className="h-[25px] w-[25px]" strokeWidth={1.6} />, retroIcon: <RtPlusVideoWhite className="h-[25px] w-[25px]" /> },
+    { key: 'videocall', label: '视频通话', icon: <Video className="h-[25px] w-[25px]" strokeWidth={1.6} />, retroIcon: <RtPlusVideo /> },
     { key: 'redpacket', label: '红包', icon: <RedPacketIcon />, retroIcon: <RtPlusRedPacket /> },
     { key: 'transfer', label: '转账', icon: <ArrowLeftRight className="h-[25px] w-[25px]" strokeWidth={1.6} />, retroIcon: <RtPlusTransfer /> },
     { key: 'location', label: '位置', icon: <MapPin className="h-[26px] w-[26px]" strokeWidth={1.6} />, retroIcon: <RtPlusLocation /> },
@@ -3906,8 +3907,6 @@ function PlusPanel({ onAction, liquid, retro }: { onAction: (a: PlusAction) => v
     { key: 'together', label: '一起听', icon: <Headphones className="h-[25px] w-[25px]" strokeWidth={1.6} />, retroIcon: <RtPlusTogether /> },
     { key: 'gift', label: '礼物', icon: <Gift className="h-[25px] w-[25px]" strokeWidth={1.6} />, retroIcon: <RtPlusGift /> },
   ];
-  // 古早：视频通话从宫格提到底部深色宽按钮（功能不变，图1 同款布局）
-  const retroGrid = retro ? all.filter((it) => it.key !== 'videocall') : all;
   return (
     <div
       className={`shrink-0 ${
@@ -3939,7 +3938,7 @@ function PlusPanel({ onAction, liquid, retro }: { onAction: (a: PlusAction) => v
         </div>
       ) : retro ? (
         <div className="grid grid-cols-4">
-          {retroGrid.map((it) => (
+          {all.map((it) => (
             <button
               key={it.key}
               type="button"
@@ -3947,21 +3946,12 @@ function PlusPanel({ onAction, liquid, retro }: { onAction: (a: PlusAction) => v
               onClick={() => onAction(it.key)}
               className="flex flex-col items-center gap-[9px] py-2.5 active:bg-black/[0.05] dark:active:bg-white/[0.06]"
             >
-              {/* 图2 同款：无瓷贴的深灰实心剪影图标（白镂空细节）+ 深灰小字 */}
-              <span className="flex h-[42px] w-[42px] items-center justify-center text-[#5A5E68] dark:text-white/70">{it.retroIcon}</span>
+              {/* 图2 同款：无瓷贴的深灰实心剪影图标（白镂空细节）+ 深灰小字；
+                  视频通话同在宫格（第五十八轮用户指定「变成和其他一样」） */}
+              <span className="flex h-[42px] w-[42px] items-center justify-center">{it.retroIcon}</span>
               <span className="text-[12px] text-[#6A6E78] dark:text-white/60">{it.label}</span>
             </button>
           ))}
-          {/* 底部深色宽「视频聊天」按钮（图2 同款：黑色实心 + 白字白图标；视频通话功能在此，功能不变） */}
-          <button
-            type="button"
-            data-testid="wx-plus-videocall"
-            onClick={() => onAction('videocall')}
-            className="col-span-4 mx-auto mt-2 flex h-[46px] w-[64%] items-center justify-center gap-2 rounded-[6px] bg-[#1E1E22] text-[15px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_2px_5px_rgba(0,0,0,0.28)] active:opacity-80 dark:bg-[#0F0F12]"
-          >
-            <RtPlusVideoWhite />
-            视频聊天
-          </button>
         </div>
       ) : (
         <div className="grid grid-cols-4">
@@ -3986,19 +3976,22 @@ function PlusPanel({ onAction, liquid, retro }: { onAction: (a: PlusAction) => v
 }
 
 /** 输入框上方快捷功能条的图标/文案（与加号面板同源同文案；点击直接走 handlePlusAction，
- *  与点加号面板里那一项完全等效；面板本身不动） */
-const WX_QUICK_META: Record<string, { label: string; icon: React.ReactNode }> = {
-  camera: { label: '相机', icon: <Camera className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  image: { label: '图片', icon: <ImageIcon className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  voicecall: { label: '语音通话', icon: <Phone className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  videocall: { label: '视频通话', icon: <Video className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  redpacket: { label: '红包', icon: <RedPacketIcon /> },
-  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  location: { label: '位置', icon: <MapPin className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  offline: { label: '线下', icon: <Star className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  textcard: { label: '文字图片', icon: <Sparkles className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  together: { label: '一起听', icon: <Headphones className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
-  gift: { label: '礼物', icon: <Gift className="h-[14px] w-[14px]" strokeWidth={2.2} /> },
+ *  与点加号面板里那一项完全等效；面板本身不动）。
+ *  第五十八轮（用户指定「输入框上面的功能图标变成古早主题图标」）：每项携带三主题图标——
+ *  icon = 默认/液态玻璃共用现代线稿（液态在玻璃胶囊内），retroIcon = 古早实心剪影
+ *  （与加号面板同语言，颜色走 --rt-ic-* 深浅自适应）；快捷条按主题选用 */
+const WX_QUICK_META: Record<string, { label: string; icon: React.ReactNode; retroIcon: React.ReactNode }> = {
+  camera: { label: '相机', icon: <Camera className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusCamera /> },
+  image: { label: '图片', icon: <ImageIcon className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusImage /> },
+  voicecall: { label: '语音通话', icon: <Phone className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusVoice /> },
+  videocall: { label: '视频通话', icon: <Video className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusVideo /> },
+  redpacket: { label: '红包', icon: <RedPacketIcon />, retroIcon: <RtPlusRedPacket /> },
+  transfer: { label: '转账', icon: <ArrowLeftRight className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusTransfer /> },
+  location: { label: '位置', icon: <MapPin className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusLocation /> },
+  offline: { label: '线下', icon: <Star className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusOffline /> },
+  textcard: { label: '文字图片', icon: <Sparkles className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusTextCard /> },
+  together: { label: '一起听', icon: <Headphones className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusTogether /> },
+  gift: { label: '礼物', icon: <Gift className="h-[14px] w-[14px]" strokeWidth={2.2} />, retroIcon: <RtPlusGift /> },
 };
 
 /** 支付方式选择底部弹层（零钱 / 银行卡 / 我收到的亲属卡；发红包/转账页用；单聊/群聊共用） */
@@ -8740,12 +8733,14 @@ function ChatPage({
   };
 
   /** 输入框上方快捷功能条（输入框自定义 › 输入框上方功能）：把加号面板里的功能放到输入框上面，
-   *  点一下直接触发（与点面板里那一项等效）；未添加 = 不显示；「+」面板本身不受影响 */
+   *  点一下直接触发（与点面板里那一项等效）；未添加 = 不显示；「+」面板本身不受影响。
+   *  第五十八轮：图标跟随主题——古早 = RtPlus* 实心剪影（与加号面板同语言），
+   *  默认/液态 = 现代线稿（液态在 lg-chip 玻璃胶囊内） */
   const quickItems: QuickBarItem[] = resolveQuickKeys('wx', chatDecorWx.quickKeys)
     .map((k): QuickBarItem | null => {
       const meta = WX_QUICK_META[k];
       if (!meta) return null;
-      return { key: k, label: meta.label, icon: meta.icon, onClick: () => handlePlusAction(k as PlusAction) };
+      return { key: k, label: meta.label, icon: retro ? meta.retroIcon : meta.icon, onClick: () => handlePlusAction(k as PlusAction) };
     })
     .filter((x): x is QuickBarItem => x !== null);
 
@@ -9422,7 +9417,7 @@ function ChatPage({
                       theme="wx"
                       bubbleClassName={bvis.override ? bvis.className : undefined}
                       decorated={bvis.override}
-                      hideTail={bvis.override && (bvis.tail === 'none' || bvis.tail === 'retro')}
+                      hideTail={bvis.override && bvis.tail === 'none'}
                       style={bvis.override ? bvis.style : undefined}
                       decorApp="wx"
                       msgIndex={i}
@@ -9554,9 +9549,8 @@ function ChatPage({
                   >
                     {/* 气泡小尾巴：装扮纯色/七彩 = 微信原生小三角随色（用户指定不变）；
                         QQ 弯钩在 qq.tsx；毛玻璃/液态胶囊无尾巴；无装扮 = 原生绿/白三角。
-                        第五十六轮（古早参考图2）：kind='retro' = 顶部圆润小 nub——
-                        半椭圆凸起（约 7×13px，一半叠进气泡内同色无缝），靠近头像一侧顶角下方
-                        （参考图实测：绿泡/白泡右、左缘各有一个平滑凸起，非尖角三角） */}
+                        第五十八轮（用户指定「古早小尾巴变成默认气泡样式的」）：古早 = 同款默认
+                        小三角，颜色走 tailClass（.rt-tail-*，古早色板深浅自适应） */}
                     {bvis.tail === 'hook' ? (
                       /* 防御分支：微信装扮永不返回 hook（原生小三角），仅类型完备性保留
                          （第二十轮与 qq.tsx 同步：尾巴中心与头像顶端平行） */
@@ -9566,18 +9560,16 @@ function ChatPage({
                         aria-hidden="true"
                         className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
                           m.role === 'me' ? '-right-[3px]' : '-left-[3px]'
-                        } ${bvis.tailColor ? '' : m.role === 'me' ? 'bg-[#95EC69] dark:bg-[#3EB575]' : 'bg-white dark:bg-[#1E1E1E]'}`}
-                        style={bvis.tailColor ? { backgroundColor: bvis.tailColor } : undefined}
-                      />
-                    ) : bvis.tail === 'retro' ? (
-                      /* 古早 nub：圆润半椭圆（rounded-full 7×13px，凸出约 3.5px），
-                         顶角下方 12px 处，与气泡同色无缝衔接（参考图实测形状） */
-                      <span
-                        aria-hidden="true"
-                        className={`absolute top-[12px] h-[13px] w-[7px] rounded-full ${
-                          m.role === 'me' ? '-right-[3px]' : '-left-[3px]'
+                        } ${
+                          bvis.tailClass
+                            ? /* 古早：尾巴颜色跟随古早色板（CSS 类深浅自适应） */ bvis.tailClass
+                            : bvis.tailColor
+                            ? ''
+                            : m.role === 'me'
+                            ? 'bg-[#95EC69] dark:bg-[#3EB575]'
+                            : 'bg-white dark:bg-[#1E1E1E]'
                         }`}
-                        style={{ backgroundColor: bvis.tailColor }}
+                        style={bvis.tailColor && !bvis.tailClass ? { backgroundColor: bvis.tailColor } : undefined}
                       />
                     ) : null}
                     {bubbleContent ? (
@@ -9834,7 +9826,7 @@ function ChatPage({
               点一下与点面板里那一项等效；未添加 = 不显示；「+」面板本身不受影响 */}
           {quickItems.length > 0 && (
             <div className="mb-1.5">
-              <ChatQuickBar items={quickItems} liquid={liquid} testPrefix="wx" />
+              <ChatQuickBar items={quickItems} liquid={liquid} retro={retro} testPrefix="wx" />
             </div>
           )}
           {/* 液态输入栏（第四十四轮，用户指定）：删除大椭圆包裹——语音钮 = 玻璃圆圈内嵌黑圈、

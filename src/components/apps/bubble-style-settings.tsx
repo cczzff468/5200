@@ -124,7 +124,7 @@ function AuraLayer() {
 
 /** 单条迷你预览气泡：override 时用装扮样式，否则 App 原生配色
  *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 信息 App 同款底部弯钩剪影（第五十一轮，迷你版 12×10px 随色）；
- *   微信/信息 = 原生小方块随色；胶囊无尾巴） */
+ *   微信/信息 = 原生小方块随色（第五十八轮：古早微信同款小三角，tailClass 深浅自适应）；胶囊无尾巴） */
 function PreviewBubble({
   app,
   cfg,
@@ -160,34 +160,14 @@ function PreviewBubble({
           style={{ clipPath: side === 'mine' ? TAIL_CLIP_RIGHT : TAIL_CLIP_LEFT, backgroundColor: vis.tailColor || native }}
         />
       )}
-      {vis.tail === 'retro' && app === 'wx' && (
-        /* 古早微信（第五十六轮参考图2）：顶部圆润小 nub（迷你版半椭圆，随 tailColor） */
-        <span
-          aria-hidden="true"
-          className={`absolute top-[8px] h-[9px] w-[5px] rounded-full ${side === 'mine' ? '-right-[2px]' : '-left-[2px]'}`}
-          style={{ backgroundColor: vis.tailColor || native }}
-        />
-      )}
-      {vis.tail === 'retro' && app === 'qq' && (
-        /* 古早 QQ（第五十六轮参考图1）：顶部尖角小 beak（迷你版，随 tailColor） */
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 11 15"
-          className={`absolute top-0 ${side === 'mine' ? '-right-[5px]' : '-left-[5px]'} h-[11px] w-[8px]`}
-          fill={vis.tailColor || native}
-        >
-          {side === 'mine' ? (
-            <path d="M0 0 L11 2 C7.5 4.2, 3.2 8.5, 0.6 15 L0 15 Z" />
-          ) : (
-            <path d="M11 0 L0 2 C3.5 4.2, 7.8 8.5, 10.4 15 L11 15 Z" />
-          )}
-        </svg>
-      )}
       {vis.tail === 'native' && app !== 'qq' && (
         <span
           aria-hidden="true"
-          className={`absolute top-[7px] h-[6px] w-[6px] rotate-45 ${side === 'mine' ? '-right-[2px]' : '-left-[2px]'}`}
-          style={{ backgroundColor: vis.tailColor || native }}
+          className={`absolute top-[7px] h-[6px] w-[6px] rotate-45 ${side === 'mine' ? '-right-[2px]' : '-left-[2px]'} ${
+            /* 古早（第五十八轮）：尾巴色走 .rt-tail-* 类深浅自适应（与聊天页同款） */
+            vis.tailClass ?? ''
+          }`}
+          style={vis.tailClass ? undefined : { backgroundColor: vis.tailColor || native }}
         />
       )}
       {children}
