@@ -2365,13 +2365,16 @@ export function QqStickerBubble({
 }
 
 /** 加号面板宫格（单聊/群聊共用：彩色圆角瓷贴 + 白色图标，对照新版 QQ 更多面板）。
- *  液态玻璃主题（liquid）：竖向单列列表——图标左 + 文字右，黑图标黑字（参考图同款）；群聊不传保持彩色宫格 */
+ *  液态玻璃主题（liquid）：竖向单列列表——图标左 + 文字右，黑图标黑字（参考图同款）；群聊不传保持彩色宫格。
+ *  古早主题（retro，第五十五轮）：无彩色瓷贴的平铺灰色图标 + 灰字（微信图1 同款语言） */
 export function QqPlusGrid({
   items,
   liquid = false,
+  retro = false,
 }: {
   items: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }>;
   liquid?: boolean;
+  retro?: boolean;
 }) {
   if (liquid) {
     return (
@@ -2386,6 +2389,27 @@ export function QqPlusGrid({
           >
             <span className="flex h-[20px] w-[20px] shrink-0 items-center justify-center text-black/80 dark:text-white/85 [&_svg]:h-[20px] [&_svg]:w-[20px]">{it.icon}</span>
             {it.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  if (retro) {
+    return (
+      <div className="grid grid-cols-3 gap-y-6">
+        {items.map((it) => (
+          <button
+            key={it.key}
+            type="button"
+            data-testid={`qq-plus-${it.key}`}
+            onClick={it.onClick}
+            className="flex flex-col items-center gap-2 transition-transform active:scale-95"
+          >
+            {/* 古早（图1 同款语言）：无瓷贴平铺灰色图标 + 灰字 */}
+            <span className="flex h-[52px] w-[52px] items-center justify-center text-[#5A5E68] dark:text-white/70" aria-hidden="true">
+              {it.icon}
+            </span>
+            <span className="text-[12px] text-[#6A6E78] dark:text-white/60">{it.label}</span>
           </button>
         ))}
       </div>
@@ -8029,7 +8053,7 @@ function ChatPage({
                 className="lg-sheet mb-2.5 rounded-[20px] py-[4px]"
                 style={{ animation: 'qqPanelIn 0.24s ease-out' }}
               >
-                <QqPlusGrid items={plusAllItems} liquid={liquid} />
+                <QqPlusGrid items={plusAllItems} liquid={liquid} retro={retro} />
               </div>
             </div>
           ) : (
@@ -8038,7 +8062,7 @@ function ChatPage({
               className="px-5 pt-5 border-t border-black/[0.05] pb-6 dark:border-white/[0.06]"
               style={{ animation: 'qqPanelIn 0.24s ease-out' }}
             >
-              <QqPlusGrid items={plusAllItems} />
+              <QqPlusGrid items={plusAllItems} retro={retro} />
             </div>
           )
         ) : null}
@@ -17669,6 +17693,12 @@ function MainScreen({
       data-liquid-theme={liquid ? 'true' : 'false'}
       data-rt-theme={retro ? 'true' : 'false'}
     >
+      {/* 古早主题状态栏银灰条（第五十五轮，用户指定「状态栏后面的背景也变化」）：
+          三 tab 主界面顶部 54px 空档铺拟物导航条；子页由各自的页面底接管（scoped CSS），
+          聊天页顶栏自带 rt-dark 覆盖本条 */}
+      {retro && (route.page === 'tabs' || route.page === 'chat' || route.page === 'group-chat') && (
+        <div aria-hidden="true" className="rt-bar pointer-events-none absolute inset-x-0 top-0 z-[5] h-[54px]" />
+      )}
       {route.page === 'chat' && chatPeer ? (
         <ChatPage
           key={chatPeer.id}
@@ -18336,6 +18366,12 @@ function purgeQqSessionData(): void {
 // ---------------- App 入口 ----------------
 
 export default function QQApp() {
+  // 第五十五轮（用户指定「所有界面都变化」）：主题作用域挂到 App 根 wrapper——
+  // data-rt-theme / data-liquid-theme 触发 globals.css 里的 scoped 批量接管，
+  // 覆盖主界面/聊天页/全部子页与弹层（页面底/白色卡/按钮/菜单），子页无需逐个改 JSX
+  const bubbleStyleRoot = useSettings((s) => s.bubbleStyle);
+  const retroRoot = isRetroTheme(bubbleStyleRoot, 'qq');
+  const liquidRoot = isLiquidTheme(bubbleStyleRoot, 'qq');
   const [booting, setBooting] = useState(true);
   const [user, setUser] = useState<QQUser | null>(null);
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
@@ -18582,7 +18618,11 @@ export default function QQApp() {
 
   // key={accReloadKey}：切换 QQ 账号后 remount 主界面——route 归位消息 tab、子页全关、各页挂载重读当前账号数据
   return (
-    <div className="relative h-full w-full">
+    <div
+      className="relative h-full w-full"
+      data-rt-theme={retroRoot ? 'true' : 'false'}
+      data-liquid-theme={liquidRoot ? 'true' : 'false'}
+    >
       <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} onLoginAccount={handleLogin} />
       {/* 账号切换提示（规则五.1）：挂在根组件，remount 后依然可见 */}
       {switchToast && <QqToast text={switchToast} />}

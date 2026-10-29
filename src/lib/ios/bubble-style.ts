@@ -116,16 +116,16 @@ export const NATIVE_BUBBLE: Record<BubbleAppId, { mine: string; theirs: string }
   sms: { mine: '#007AFF', theirs: '#E9E9EB' },
 };
 
-/** 古早气泡色板（参考用户上传的三张 2012-2014 年代截图逐像素提取）：
- *  微信我方 = 老安卓深草绿 #8BC44E（截图1 绿气泡实测 #88C54E）；
- *  QQ 我方 = 老版淡蓝 #D0E0F0（截图3 实测）；对方均纯白 + 1px 描边小圆角（4px）。 */
+/** 古早气泡色板（第五十五轮：两张参考图逐像素精修）：
+ *  微信（图1）：我方亮绿 #9EE75A、深橄榄字、无边框软阴影小圆角 5px；对方近白 #F8F8F9 细灰边。
+ *  QQ（图2）：我方灰泡 #BEBEBE 黑字（老版 QQ 同款）；对方浅蓝 #B1D0E8 深蓝灰字；大圆角 14px。 */
 export const RETRO_BUBBLE: Record<
   BubbleAppId,
-  { mine: string; mineBorder: string; mineText: string; theirs: string; theirsBorder: string; theirsText: string }
+  { mine: string; mineBorder: string; mineText: string; theirs: string; theirsBorder: string; theirsText: string; radius: string }
 > = {
-  wx: { mine: '#8BC44E', mineBorder: '#6E9E3C', mineText: '#20330E', theirs: '#FFFFFF', theirsBorder: '#C6C8CD', theirsText: '#2E2E33' },
-  qq: { mine: '#D3E2F0', mineBorder: '#AEC9E0', mineText: '#27384A', theirs: '#FFFFFF', theirsBorder: '#C6C8CD', theirsText: '#2E2E33' },
-  sms: { mine: '#CFE3F5', mineBorder: '#A9C7E4', mineText: '#1F3347', theirs: '#FFFFFF', theirsBorder: '#C6C8CD', theirsText: '#2E2E33' },
+  wx: { mine: '#9EE75A', mineBorder: '#9EE75A', mineText: '#33511E', theirs: '#F8F8F9', theirsBorder: '#DBDBDF', theirsText: '#33352E', radius: '5px' },
+  qq: { mine: '#BEBEBE', mineBorder: '#ABABB0', mineText: '#1F1F1F', theirs: '#B1D0E8', theirsBorder: '#9FBEDB', theirsText: '#333C45', radius: '14px' },
+  sms: { mine: '#CFE3F5', mineBorder: '#A9C7E4', mineText: '#1F3347', theirs: '#F8F8F9', theirsBorder: '#DBDBDF', theirsText: '#33352E', radius: '14px' },
 };
 
 export const DEFAULT_BUBBLE_STYLE: BubbleStyleConfig = {
@@ -421,7 +421,7 @@ export function transcriptVisual(
   }
 
   if (kind === 'retro') {
-    // 古早面板：与古早气泡同语言（小圆角 + 1px 描边平色底；深色模式由 .dark 类接管）
+    // 古早面板：与古早气泡同语言（小圆角 + 描边平色底；深色模式由 .dark 类接管）
     const rb = RETRO_BUBBLE[app];
     const mine = side === 'mine';
     const sideCls = color
@@ -430,13 +430,16 @@ export function transcriptVisual(
     return {
       override: true,
       className: sideCls,
-      style: color
-        ? { backgroundColor: color, color: yiqTextOn(color), borderColor: color }
-        : mine
-          ? { backgroundColor: rb.mine, color: rb.mineText, borderColor: rb.mineBorder }
-          : { backgroundColor: rb.theirs, color: rb.theirsText, borderColor: rb.theirsBorder },
+      style: {
+        ...(color
+          ? { backgroundColor: color, color: yiqTextOn(color), borderColor: color }
+          : mine
+            ? { backgroundColor: rb.mine, color: rb.mineText, borderColor: rb.mineBorder }
+            : { backgroundColor: rb.theirs, color: rb.theirsText, borderColor: rb.theirsBorder }),
+        borderRadius: rb.radius,
+      },
       textClass: '',
-      radius: '4px',
+      radius: rb.radius,
     };
   }
 
@@ -569,11 +572,12 @@ export function bubbleVisual(
   }
 
   if (kind === 'retro') {
-    // 古早气泡（参考用户上传的 2012-2014 年代截图）：小圆角 4px + 1px 细描边 + 平色底——
-    // 微信我方老安卓深草绿、QQ 我方老版淡蓝、信息老版淡蓝；对方纯白灰边。
-    // 深色模式由 .dark .bub-retro-mine/-theirs 类接管（复古夜间色板，!important 盖内联）；
-    // 自定义色 = bub-retro-custom（深色不覆盖，跟随内联色）。
-    // 尾巴：微信保持原生小三角（随色）；QQ/信息复古无尾巴（老版 QQ 就是方角无尾）。
+    // 古早气泡（第五十五轮两张参考图逐像素精修）：
+    //  微信（图1）我方亮绿 #9EE75A + 深橄榄字，无边框（边色同底色）小圆角 5px；对方近白细灰边；
+    //  QQ（图2）我方灰泡 #BEBEBE 黑字、对方浅蓝 #B1D0E8 深蓝灰字，大圆角 14px。
+    //  深色模式由 .dark .bub-retro-mine/-theirs 类接管（复古夜间色板，!important 盖内联）；
+    //  自定义色 = bub-retro-custom（深色不覆盖，跟随内联色）。
+    //  尾巴：微信保持原生小三角（随色）；QQ/信息复古无尾巴（老版 QQ 方角无尾）。
     const rb = RETRO_BUBBLE[app];
     const mine = side === 'mine';
     const sideCls = color
@@ -587,6 +591,7 @@ export function bubbleVisual(
           backgroundColor: color,
           color: yiqTextOn(color),
           borderColor: color,
+          borderRadius: rb.radius,
         },
         tail: app === 'wx' ? 'native' : 'none',
         tailColor: color,
@@ -595,9 +600,12 @@ export function bubbleVisual(
     return {
       override: true,
       className: sideCls,
-      style: mine
-        ? { backgroundColor: rb.mine, color: rb.mineText, borderColor: rb.mineBorder }
-        : { backgroundColor: rb.theirs, color: rb.theirsText, borderColor: rb.theirsBorder },
+      style: {
+        ...(mine
+          ? { backgroundColor: rb.mine, color: rb.mineText, borderColor: rb.mineBorder }
+          : { backgroundColor: rb.theirs, color: rb.theirsText, borderColor: rb.theirsBorder }),
+        borderRadius: rb.radius,
+      },
       tail: app === 'wx' ? 'native' : 'none',
       tailColor: mine ? rb.mine : rb.theirs,
     };

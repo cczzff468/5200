@@ -1131,9 +1131,10 @@
   background: linear-gradient(180deg, #232327 0%, #1B1B1F 55%, #16161A 100%);
 }
 
-/* 复古聊天页底色（截图1 灰底 #D2D2D2；仅主题接管默认底色，自定义聊天背景不受影响） */
+/* 复古聊天页底色（第五十五轮：图1实测 #EBEBEB / 图2实测 #E1E2E5，取中间值；
+   仅主题接管默认底色，自定义聊天背景不受影响） */
 .rt-chat-bg {
-  background: #D2D2D2;
+  background: #E8E9EC;
 }
 .dark .rt-chat-bg {
   background: #1C1C1F;
@@ -1318,17 +1319,23 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 古早气泡（kind='retro'）：4px 小圆角 + 1px 细描边平色底——
- * 侧别色由 bubbleVisual 内联给出（微信我方深草绿 #8BC44E / QQ 我方淡蓝 #D3E2F0 /
- * 对方纯白 #FFF）；深色模式用 .dark 类 !important 盖内联（复古夜间色板）。
+ * 古早气泡（kind='retro'，第五十五轮两张参考图逐像素精修）：
+ *  微信（图1）：我方亮绿 #9EE75A 无边框软阴影小圆角 5px，对方近白细灰边；
+ *  QQ（图2）：我方灰泡 #BEBEBE，对方浅蓝 #B1D0E8，大圆角 14px（圆角/描边由内联携带）。
+ *  深色模式用 .dark 类 !important 盖内联（复古夜间色板）。
  * ------------------------------------------------------------------------- */
 .bub-retro {
-  border-radius: 4px;
   border: 1px solid transparent;
+  /* 老安卓气泡的软投影（图1 绿泡边缘 4-5px 柔和过渡即此物质） */
+  box-shadow: 0 1px 2.5px rgba(24, 28, 44, 0.16);
 }
+.dark .bub-retro {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+/* 微信：我方亮绿 / 对方近白 */
 .dark .bub-retro-mine {
-  background-color: #5E8F3E !important;
-  border-color: #4A7330 !important;
+  background-color: #5E9E3C !important;
+  border-color: #4C8230 !important;
   color: #EFF5E2 !important;
 }
 .dark .bub-retro-theirs {
@@ -1336,9 +1343,141 @@
   border-color: #50505A !important;
   color: #E8E8EC !important;
 }
-/* QQ 古早我方深色用复古深蓝（微信绿不跨 App）——由宿主在气泡元素上补 .bub-retro-qq 类 */
+/* QQ 深色覆盖：我方灰泡 / 对方复古蓝（微信绿不跨 App） */
 .dark .bub-retro-qq.bub-retro-mine {
-  background-color: #5A7BA6 !important;
-  border-color: #46648C !important;
-  color: #EAF0F8 !important;
+  background-color: #4E4E57 !important;
+  border-color: #3A3A42 !important;
+  color: #EDEDF0 !important;
+}
+.dark .bub-retro-qq.bub-retro-theirs {
+  background-color: #46648C !important;
+  border-color: #365171 !important;
+  color: #E6EDF6 !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * 古早主题全局接管（第五十五轮：用户指定「所有界面都变化、全部面板全部按钮都变化」）
+ * ---------------------------------------------------------------------------
+ *  作用域 = App 根容器 data-rt-theme="true"（微信/QQ 根 wrapper，覆盖主界面/聊天页/
+ *  全部子页/弹层）。子页无需逐个改 JSX，在这里按 Tailwind 类名批量接管：
+ *   - 页面底（含状态栏后方顶区）→ 复古纸感渐变；
+ *   - 白色分组卡 → 复古硬边白卡（iOS 6 分组表格语言）；
+ *   - 绿/蓝主按钮 → 拟物渐变凸起；
+ *   - 深色下拉菜单 → 白底硬边拟物 popover。
+ *  !important 盖过 dark: 变体（复古有自己的夜间色板）。
+ * ------------------------------------------------------------------------- */
+
+/* ① 页面底：各子页根的灰底 → 复古纸感渐变（状态栏后方同此变化） */
+[data-rt-theme='true'] .bg-\[\#EDEDED\],
+[data-rt-theme='true'] .bg-\[\#F5F6F7\],
+[data-rt-theme='true'] .bg-\[\#F6F7F9\],
+[data-rt-theme='true'] .bg-\[\#F7F7F7\],
+[data-rt-theme='true'] .bg-\[\#FAFAFC\],
+[data-rt-theme='true'] .bg-\[\#F2F2F2\] {
+  background: linear-gradient(180deg, #EDEEF2 0%, #E7EAEF 55%, #E2E6EC 100%) !important;
+}
+.dark [data-rt-theme='true'] .bg-\[\#EDEDED\],
+.dark [data-rt-theme='true'] .bg-\[\#F5F6F7\],
+.dark [data-rt-theme='true'] .bg-\[\#F6F7F9\],
+.dark [data-rt-theme='true'] .bg-\[\#F7F7F7\],
+.dark [data-rt-theme='true'] .bg-\[\#FAFAFC\],
+.dark [data-rt-theme='true'] .bg-\[\#F2F2F2\] {
+  background: linear-gradient(180deg, #26262B 0%, #212126 55%, #1D1D22 100%) !important;
+}
+
+/* ② 白色分组卡 → 复古硬边白卡（1px 硬描边 + 轻投影；圆角沿用元素自带） */
+[data-rt-theme='true'] .bg-white {
+  background: #ffffff !important;
+  box-shadow:
+    inset 0 0 0 1px #c3c5cc,
+    0 1px 2px rgba(24, 28, 44, 0.07);
+}
+.dark [data-rt-theme='true'] .bg-white {
+  background: #35353d !important;
+  box-shadow:
+    inset 0 0 0 1px #4d4d57,
+    0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* ③ 绿色主按钮（微信系确认/发送/保存）→ 复古绿拟物渐变 */
+[data-rt-theme='true'] .bg-\[\#07C160\] {
+  background: linear-gradient(180deg, #a4e468 0%, #8ac94c 52%, #79b540 100%) !important;
+}
+.dark [data-rt-theme='true'] .bg-\[\#07C160\] {
+  background: linear-gradient(180deg, #5fa848 0%, #529a3c 52%, #468a32 100%) !important;
+}
+
+/* ④ QQ 蓝主按钮 → 复古蓝拟物渐变 */
+[data-rt-theme='true'] .bg-\[\#0099FF\],
+[data-rt-theme='true'] .bg-\[\#1E6FFF\] {
+  background: linear-gradient(180deg, #8fb4e4 0%, #6e9bd4 52%, #5a87c4 100%) !important;
+}
+.dark [data-rt-theme='true'] .bg-\[\#0099FF\],
+.dark [data-rt-theme='true'] .bg-\[\#1E6FFF\] {
+  background: linear-gradient(180deg, #4a6da0 0%, #3e5f90 52%, #345281 100%) !important;
+}
+
+/* ⑤ 深色下拉菜单 → 白底硬边拟物 popover（含子项按下态） */
+[data-rt-theme='true'] .bg-\[\#4C4C4C\],
+[data-rt-theme='true'] .bg-\[\#383838\] {
+  background: #ffffff !important;
+  color: #2e2e33;
+  box-shadow:
+    inset 0 0 0 1px #9a9ca6,
+    0 3px 10px rgba(24, 28, 44, 0.22);
+}
+.dark [data-rt-theme='true'] .bg-\[\#4C4C4C\],
+.dark [data-rt-theme='true'] .bg-\[\#383838\] {
+  background: #3a3a44 !important;
+  color: #e8e8ec;
+  box-shadow:
+    inset 0 0 0 1px #50505a,
+    0 3px 10px rgba(0, 0, 0, 0.4);
+}
+/* 白底菜单上的子项按下态（原生 active:bg-white/10 在白底不可见 → 浅灰） */
+[data-rt-theme='true'] .bg-\[\#4C4C4C\] .active\:bg-white\/10:active {
+  background-color: rgba(0, 0, 0, 0.07) !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * 液态玻璃主题全局接管（第五十五轮：用户指定液态也覆盖所有界面）
+ * ---------------------------------------------------------------------------
+ *  作用域 = App 根容器 data-liquid-theme="true"。子页批量接管：
+ *   - 页面底 → 液态根渐变（含状态栏后方顶区）；
+ *   - 白色分组卡 → 玻璃卡（半透白 + blur + 发丝描边，与 lg-panel 同语言）。
+ *  品牌色按钮（绿/蓝）保持液态既有口径不变（现代语言）。
+ * ------------------------------------------------------------------------- */
+
+/* ① 页面底 → 液态根渐变 */
+[data-liquid-theme='true'] .bg-\[\#EDEDED\],
+[data-liquid-theme='true'] .bg-\[\#F5F6F7\],
+[data-liquid-theme='true'] .bg-\[\#F6F7F9\],
+[data-liquid-theme='true'] .bg-\[\#F7F7F7\],
+[data-liquid-theme='true'] .bg-\[\#FAFAFC\],
+[data-liquid-theme='true'] .bg-\[\#F2F2F2\] {
+  background: linear-gradient(180deg, #f4f4f8 0%, #ececf1 100%) !important;
+}
+.dark [data-liquid-theme='true'] .bg-\[\#EDEDED\],
+.dark [data-liquid-theme='true'] .bg-\[\#F5F6F7\],
+.dark [data-liquid-theme='true'] .bg-\[\#F6F7F9\],
+.dark [data-liquid-theme='true'] .bg-\[\#F7F7F7\],
+.dark [data-liquid-theme='true'] .bg-\[\#FAFAFC\],
+.dark [data-liquid-theme='true'] .bg-\[\#F2F2F2\] {
+  background: linear-gradient(180deg, #101014 0%, #0c0c10 100%) !important;
+}
+
+/* ② 白色分组卡 → 玻璃卡（与 lg-panel 同材质） */
+[data-liquid-theme='true'] .bg-white {
+  background: rgba(255, 255, 255, 0.62) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.75),
+    0 8px 28px rgba(31, 38, 135, 0.07);
+}
+.dark [data-liquid-theme='true'] .bg-white {
+  background: rgba(28, 28, 34, 0.62) !important;
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.12),
+    0 8px 28px rgba(0, 0, 0, 0.38);
 }

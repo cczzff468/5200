@@ -3853,8 +3853,10 @@ function RedPacketIcon() {
 
 /** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方）。
  *  液态玻璃主题（用户指定）：竖向乳白玻璃列表（图标左 + 文字右，lg-menu-row）。
+ *  古早主题（第五十五轮，图1 同款）：白底平铺灰色图标（无彩色瓷贴）+ 底部深色宽「视频聊天」按钮
+ *  （视频通话从宫格提到底部宽按钮，功能不变，还原老微信 5.0 布局）。
  *  面板保持原生全部功能（用户指定「加号面板里面的功能不要动」）；自定义只影响输入框上方快捷条 */
-function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; liquid?: boolean }) {
+function PlusPanel({ onAction, liquid, retro }: { onAction: (a: PlusAction) => void; liquid?: boolean; retro?: boolean }) {
   const all: Array<{ key: PlusAction; label: string; icon: React.ReactNode }> = [
     { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
@@ -3868,6 +3870,8 @@ function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; li
     { key: 'together', label: '一起听', icon: <Headphones className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'gift', label: '礼物', icon: <Gift className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
+  // 古早：视频通话从宫格提到底部深色宽按钮（功能不变，图1 同款布局）
+  const retroGrid = retro ? all.filter((it) => it.key !== 'videocall') : all;
   return (
     <div
       className={`shrink-0 ${
@@ -3875,6 +3879,9 @@ function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; li
           ? /* 液态玻璃（第四十六轮变小：行 44/字 14.5/图标 20/圆角 20；第四十七轮删 mx 横向外边距——
              宽度由外层包裹容器右锚定 248px 控制）竖向乳白玻璃列表 */
             'lg-sheet mb-2.5 rounded-[20px] py-[4px]'
+          : retro
+          ? /* 古早（图1）：白底 + 硬边顶线，无彩色瓷贴 */
+            'border-t border-[#C9CBD2] bg-[#F5F5F7] px-2 pt-4 pb-[max(16px,env(safe-area-inset-bottom))] dark:border-[#3A3A44] dark:bg-[#232329]'
           : 'px-2 pt-4 border-t border-black/[0.05] bg-[#F7F7F7] pb-[max(16px,env(safe-area-inset-bottom))] dark:border-white/[0.06] dark:bg-[#161616]'
       }`}
       data-testid="wx-plus-panel"
@@ -3893,6 +3900,32 @@ function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; li
               {it.label}
             </button>
           ))}
+        </div>
+      ) : retro ? (
+        <div className="grid grid-cols-4">
+          {retroGrid.map((it) => (
+            <button
+              key={it.key}
+              type="button"
+              data-testid={`wx-plus-${it.key}`}
+              onClick={() => onAction(it.key)}
+              className="flex flex-col items-center gap-[9px] py-2.5 active:bg-black/[0.05] dark:active:bg-white/[0.06]"
+            >
+              {/* 图1 同款：无瓷贴的平铺灰色图标 + 灰色小字 */}
+              <span className="flex h-[42px] w-[42px] items-center justify-center text-[#5A5E68] dark:text-white/70">{it.icon}</span>
+              <span className="text-[12px] text-[#6A6E78] dark:text-white/60">{it.label}</span>
+            </button>
+          ))}
+          {/* 底部深色宽「视频聊天」按钮（图1 同款：深灰渐变 + 白字；视频通话功能在此，功能不变） */}
+          <button
+            type="button"
+            data-testid="wx-plus-videocall"
+            onClick={() => onAction('videocall')}
+            className="col-span-4 mx-auto mt-2 flex h-[46px] w-[64%] items-center justify-center gap-2 rounded-[6px] bg-gradient-to-b from-[#5A5A64] via-[#444450] to-[#2E2E38] text-[15px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.14),inset_0_0_0_1px_rgba(0,0,0,0.45),0_2px_5px_rgba(0,0,0,0.28)] active:opacity-80"
+          >
+            <Video className="h-[20px] w-[20px]" strokeWidth={1.9} />
+            视频聊天
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-4">
@@ -9984,10 +10017,10 @@ function ChatPage({
         {plusOpen && (
           liquid ? (
             <div className="absolute bottom-full right-2.5 z-30 w-[248px]">
-              <PlusPanel onAction={handlePlusAction} liquid={liquid} />
+              <PlusPanel onAction={handlePlusAction} liquid={liquid} retro={retro} />
             </div>
           ) : (
-            <PlusPanel onAction={handlePlusAction} />
+            <PlusPanel onAction={handlePlusAction} retro={retro} />
           )
         )}
         {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}
@@ -16794,6 +16827,12 @@ function MainScreen({
 
 export default function WeChatApp() {
   const closeApp = useUI((s) => s.closeApp);
+  // 第五十五轮（用户指定「所有界面都变化」）：主题作用域挂到 App 根 wrapper——
+  // data-rt-theme / data-liquid-theme 触发 globals.css 里的 scoped 批量接管，
+  // 覆盖主界面/聊天页/全部子页与弹层（页面底/白色卡/按钮/菜单），子页无需逐个改 JSX
+  const bubbleStyleRoot = useSettings((s) => s.bubbleStyle);
+  const retroRoot = isRetroTheme(bubbleStyleRoot, 'wx');
+  const liquidRoot = isLiquidTheme(bubbleStyleRoot, 'wx');
   const [booting, setBooting] = useState(true);
   const [user, setUser] = useState<WxUser | null>(null);
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
@@ -17019,7 +17058,11 @@ export default function WeChatApp() {
   }
 
   return (
-    <div className="relative h-full w-full">
+    <div
+      className="relative h-full w-full"
+      data-rt-theme={retroRoot ? 'true' : 'false'}
+      data-liquid-theme={liquidRoot ? 'true' : 'false'}
+    >
       <MainScreen
         me={user}
         contacts={contacts}
