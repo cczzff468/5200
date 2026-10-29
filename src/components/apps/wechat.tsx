@@ -61,7 +61,6 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
-  Music2,
   Pause,
   Play,
   SkipBack,
@@ -14182,7 +14181,9 @@ function mmss(sec: number): string {
 
 /** 网易云音乐小组件（连接音乐 App）：真实读取全局播放器状态（当前歌/进度/播放暂停），
  *  预览/切歌/暂停直接驱动音乐引擎，点歌曲区跳进音乐 App 播放页；
- *  顶部身份（头像+昵称）可跟随微信登录账号，也可在 主题›液态玻璃设置 里自定义 */
+ *  顶部身份（头像+昵称）可跟随微信登录账号，也可在 主题›液态玻璃设置 里自定义。
+ *  用户后续要求：右上角「网易云音乐」品牌角标与「正在听」呼吸标识已删除；
+ *  无歌时保持与播放态同尺寸的占位版式（占位不缩水），控制键空队列时安全 no-op */
 function WxWidgetMusic({ me }: { me: WxUser }) {
   const skin = useSettings((s) => s.liquidSkin.wx);
   const switchToApp = useUI((s) => s.switchToApp);
@@ -14226,17 +14227,10 @@ function WxWidgetMusic({ me }: { me: WxUser }) {
 
   return (
     <div data-testid="wx-widget-music" className="lg-card relative overflow-hidden rounded-[22px] p-3">
-      {/* 顶部身份行：头像 + 昵称（跟随微信/自定义） + 右侧网易云品牌角标 */}
+      {/* 顶部身份行：头像 + 昵称（跟随微信/自定义；品牌角标已按用户要求删除） */}
       <div className="flex items-center gap-2">
         <WxAvatar src={dispAvatar} alt={dispName} size={26} shape="circle" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-black/75 dark:text-white/80">{dispName}</span>
-        <span
-          aria-hidden="true"
-          className="flex shrink-0 items-center gap-1 rounded-full bg-[#C20C0C]/[0.08] px-2 py-[3px] text-[10px] font-semibold text-[#C20C0C] dark:bg-[#FF5A5A]/[0.14] dark:text-[#FF6B6B]"
-        >
-          <Music2 className="h-[11px] w-[11px]" strokeWidth={2.6} />
-          网易云音乐
-        </span>
       </div>
 
       {current ? (
@@ -14255,17 +14249,6 @@ function WxWidgetMusic({ me }: { me: WxUser }) {
               <span className="mt-1 block truncate text-[12px] font-medium leading-tight text-black/45 dark:text-white/45">
                 {buffering ? '缓冲中…' : playError || artistLine}
               </span>
-              {/* 正在听标识：小红点呼吸 */}
-              {playing && !buffering && (
-                <span className="mt-1.5 flex items-center gap-1 text-[10px] font-medium text-[#C20C0C] dark:text-[#FF6B6B]">
-                  <span
-                    aria-hidden="true"
-                    className="h-[5px] w-[5px] rounded-full bg-[#C20C0C] dark:bg-[#FF6B6B]"
-                    style={{ animation: 'wxWidgetPulse 1.6s ease-in-out infinite' }}
-                  />
-                  正在听
-                </span>
-              )}
             </span>
             {/* 黑胶唱片：播放中旋转，中心 = 真实封面 */}
             <span className="relative flex h-[78px] w-[78px] shrink-0 items-center justify-center" aria-hidden="true">
@@ -14330,29 +14313,72 @@ function WxWidgetMusic({ me }: { me: WxUser }) {
           </div>
         </>
       ) : (
-        /* 空态：还没播过歌 —— 引导去音乐 App 挑一首 */
-        <button
-          type="button"
-          data-testid="wx-widget-music-open"
-          onClick={openMusic}
-          className="mt-2.5 flex w-full items-center gap-3 rounded-[16px] bg-black/[0.035] px-3 py-3 text-left active:opacity-70 dark:bg-white/[0.06]"
-        >
-          <span className="grid h-[42px] w-[42px] shrink-0 place-items-center rounded-full bg-[#C20C0C]/[0.10] text-[#C20C0C] dark:bg-[#FF5A5A]/[0.16] dark:text-[#FF6B6B]">
-            <Music2 className="h-[20px] w-[20px]" strokeWidth={2.2} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[14px] font-semibold leading-tight text-black/80 dark:text-white/85">还没有在听的歌</span>
-            <span className="mt-0.5 block text-[11.5px] leading-tight text-black/40 dark:text-white/40">去音乐 App 挑一首，这里同步显示</span>
-          </span>
-          <ChevronRight className="h-[16px] w-[16px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2.2} />
-        </button>
+        /* 空态占位（用户要求：无歌时同样占位，不缩水）——与播放态同版式同尺寸：
+           灰显占位歌名 + 引导副行 + 静态黑胶唱片 + 0% 进度条 + 三键控制行
+           （控制键直连音乐引擎，空队列时安全 no-op） */
+        <>
+          <button
+            type="button"
+            data-testid="wx-widget-music-open"
+            onClick={openMusic}
+            className="mt-2.5 flex w-full items-center gap-3.5 text-left active:opacity-70"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[17px] font-bold leading-tight text-black/30 dark:text-white/30">还没有在听的歌</span>
+              <span className="mt-1 block truncate text-[12px] font-medium leading-tight text-black/30 dark:text-white/30">
+                去音乐 App 挑一首，这里同步显示
+              </span>
+            </span>
+            {/* 黑胶唱片占位：静态渐变盘心 + 唱针（无歌不旋转） */}
+            <span className="relative flex h-[78px] w-[78px] shrink-0 items-center justify-center" aria-hidden="true">
+              <span
+                className="relative block h-full w-full rounded-full opacity-50 shadow-[0_5px_16px_rgba(0,0,0,0.30)]"
+                style={{ background: 'repeating-radial-gradient(circle at center, #17171A 0px, #1F1F24 1.5px, #17171A 3px)' }}
+              >
+                <span className="absolute left-1/2 top-1/2 h-[42px] w-[42px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-[#F6D9E5] via-[#DCC7EC] to-[#B9C7F2]" />
+                <span className="absolute left-1/2 top-1/2 h-[8px] w-[8px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#0D0D0F] ring-1 ring-white/30" />
+              </span>
+              {/* 唱针（静态装饰） */}
+              <span className="absolute -right-0.5 -top-1 h-[32px] w-[2px] origin-top rotate-[28deg] rounded-full bg-black/45 dark:bg-white/50" />
+            </span>
+          </button>
+
+          {/* 进度条占位：0% + --:-- */}
+          <div className="mt-2">
+            <div className="h-[4px] w-full overflow-hidden rounded-full bg-black/[0.08] dark:bg-white/[0.14]" />
+            <div className="mt-1 flex justify-between text-[10px] tabular-nums text-black/35 dark:text-white/40">
+              <span>--:--</span>
+              <span>--:--</span>
+            </div>
+          </div>
+
+          {/* 控制行占位：三键同款（真实驱动；空队列时安全 no-op） */}
+          <div className="mt-1.5 flex items-center justify-center gap-8 text-black/80 dark:text-white/90">
+            <button type="button" aria-label="上一首" onClick={() => void prev()} className="p-1 active:opacity-50">
+              <SkipBack className="h-[19px] w-[19px]" strokeWidth={2.2} fill="currentColor" />
+            </button>
+            <button
+              type="button"
+              aria-label="播放"
+              data-testid="wx-widget-music-toggle"
+              onClick={toggle}
+              className="grid h-[38px] w-[38px] place-items-center rounded-full bg-black/[0.06] ring-1 ring-black/[0.06] transition-transform active:scale-95 dark:bg-white/[0.12] dark:ring-white/[0.12]"
+            >
+              <Play className="ml-[2px] h-[18px] w-[18px]" strokeWidth={2.2} fill="currentColor" />
+            </button>
+            <button type="button" aria-label="下一首" onClick={() => void next()} className="p-1 active:opacity-50">
+              <SkipForward className="h-[19px] w-[19px]" strokeWidth={2.2} fill="currentColor" />
+            </button>
+          </div>
+        </>
       )}
-      <style>{'@keyframes wxWidgetSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes wxWidgetPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}'}</style>
+      <style>{'@keyframes wxWidgetSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}'}</style>
     </div>
   );
 }
 
-/** 日历小组件：iOS 日历风——年月标题 + 今天红色胶囊 + 真实当月网格（今天红圈、周末红字、前后月补齐灰显） */
+/** 日历小组件：iOS 日历风——年月标题 + 真实当月网格（今天红圈、周末红字、前后月补齐灰显）；
+ *  右上角「今天 N」胶囊已按用户要求删除（今天日期仍在网格里红圈标出） */
 function WxWidgetCalendar() {
   const now = new Date();
   const year = now.getFullYear();
@@ -14370,14 +14396,11 @@ function WxWidgetCalendar() {
 
   return (
     <div data-testid="wx-widget-calendar" className="lg-card overflow-hidden rounded-[22px] px-3.5 pb-2.5 pt-3">
-      {/* 头部：年月标题 + 今天胶囊 */}
-      <div className="flex items-center justify-between px-1">
+      {/* 头部：年月标题（「今天 N」胶囊已按用户要求删除） */}
+      <div className="flex items-center px-1">
         <p className="text-[14px] font-bold leading-none text-black/85 dark:text-white/90">
           {year}年{month + 1}月
         </p>
-        <span className="flex items-center gap-1 rounded-full bg-[#FF453A] px-[9px] py-[3px] text-[10.5px] font-semibold leading-none text-white">
-          今天 {today}
-        </span>
       </div>
       {/* 周标题行 */}
       <div className="mt-2.5 grid grid-cols-7 text-center" aria-hidden="true">
