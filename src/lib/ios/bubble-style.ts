@@ -24,13 +24,21 @@ export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'liquid' | 're
 export const TAIL_CLIP_LEFT = 'path("M12 0 L12 6 C11 12 7 16 0 18 C4 13 6 8 6 2 L6 0 Z")';
 export const TAIL_CLIP_RIGHT = 'path("M2 0 L2 6 C3 12 7 16 14 18 C10 13 8 8 8 2 L8 0 Z")';
 
+/** 古早 QQ 顶部尖角 beak 尾巴剪影（第五十九轮回归，参考图1 同款；宿主用 11×15px span 渲染）：
+ *  尖角在顶部指向头像一侧（我方右伸/对方左伸），下缘弧线收回气泡身；
+ *  坐标系与 im 剪影同口径——path() 直接用 px，贴着气泡边从内侧抱住边缘无缝衔接 */
+export const RETRO_BEAK_CLIP_RIGHT = 'path("M0 0 L11 2 C7.5 4.2, 3.2 8.5, 0.6 15 L0 15 Z")';
+export const RETRO_BEAK_CLIP_LEFT = 'path("M11 0 L0 2 C3.5 4.2, 7.8 8.5, 10.4 15 L11 15 Z")';
+
 /** App 级界面主题（第四十二轮）：default = 现状原生；liquid = 液态玻璃主题（参考图）。
  *  主题与气泡样式相互独立：主题只接管页面铭件（导航/TabBar/列表卡/输入栏），
  *  气泡仍由 kind 管；聊天背景层不受主题影响（用户指定）。
  *  第五十三轮：删除 new（新版 iMessage 主题）——存量档的 'new' 在 normalize 时自动回退 default。
  *  古早主题（retro）：2012-2014 年代拟物风（iOS 6 银灰导航 + 安卓深灰聊天顶栏 +
  *  灰底小圆角描边气泡），仅微信/QQ 提供。第五十八轮：古早气泡尾巴回归各自 App 默认样式
- *  ——微信 = 默认小三角（颜色走 .rt-tail-* 类深浅自适应），QQ = 默认无尾巴、四角统一 8px */
+ *  ——微信 = 默认小三角（颜色走 .rt-tail-* 类深浅自适应），QQ = 默认无尾巴、四角统一 8px。
+ *  第五十九轮（用户指定「QQ 气泡添加上小尾巴，跟我发给你的一样」）：QQ 恢复参考图1 同款
+ *  顶部尖角 beak 尾巴（渐变/深色由 .rt-beak-* CSS 类携带）；微信保持默认小三角 */
 export type BubbleTheme = 'default' | 'liquid' | 'retro';
 
 /** 装扮宿主 App 标识（微信 / QQ / 信息） */
@@ -121,8 +129,8 @@ export const NATIVE_BUBBLE: Record<BubbleAppId, { mine: string; theirs: string }
  *  微信（图2）：我方亮绿 #9EE75A 近黑字、4px 方角；对方纯白 #FFFFFF 无描边近黑字
  *  （旧微信白泡直接坐在 #EBEBEB 灰底上）。
  *  QQ（图1）：我方灰泡垂直渐变（顶 #D0D0D0 → 底 #B9B9B9，旧版安卓 QQ 同款），
- *  对方浅蓝渐变（顶 #C2D8EC → 底 #A9C9E5）；圆角 8px 四角统一
- *  （第五十八轮：去掉顶部 beak 尾巴，尾巴侧顶角不再方角）。
+ *  对方浅蓝渐变（顶 #C2D8EC → 底 #A9C9E5）；圆角 8px，尾巴侧顶角方角
+ *  （第五十九轮 beak 回归：尾巴占据顶角）。
  *  mine/theirs 字段 = 渐变顶色。 */
 export const RETRO_BUBBLE: Record<
   BubbleAppId,
@@ -132,6 +140,10 @@ export const RETRO_BUBBLE: Record<
   qq: { mine: '#D0D0D0', mineBorder: '#ABABB0', mineText: '#1A1A1A', theirs: '#C2D8EC', theirsBorder: '#9FBEDB', theirsText: '#1F2A36', radius: '8px', mineBg: 'linear-gradient(180deg, #D0D0D0 0%, #C4C4C4 55%, #B9B9B9 100%)', theirsBg: 'linear-gradient(180deg, #C2D8EC 0%, #B4CDE7 55%, #A9C9E5 100%)' },
   sms: { mine: '#CFE3F5', mineBorder: '#A9C7E4', mineText: '#1F3347', theirs: '#F8F8F9', theirsBorder: '#DBDBDF', theirsText: '#33352E', radius: '10px' },
 };
+
+/** 古早 QQ 尾巴侧顶角方角（第五十九轮 beak 回归）：尾巴占据顶角——
+ *  我方右上 / 对方左上为方角，其余三角 8px（宿主 borderRadius 用） */
+export const retroQqRadius = (mine: boolean) => (mine ? '8px 0 8px 8px' : '0 8px 8px 8px');
 
 export const DEFAULT_BUBBLE_STYLE: BubbleStyleConfig = {
   wx: { kind: 'default' },
@@ -479,11 +491,15 @@ export interface BubbleVisual {
    *  - 'im'     信息 App 同款底部弯钩剪影尾巴（第五十一轮：QQ 纯色/七彩改用——气泡整体变成信息 App 同款；
    *             14×18px 剪影随 tailColor 上色，我方右侧/对方左侧，由宿主用 TAIL_CLIP_LEFT/RIGHT 渲染）
    *  - 'hook'   参考图同款弯钩尾巴（历史值：第五十一轮起 QQ 不再返回，仅类型完备性保留）
-   *  - 'none'   不渲染尾巴（毛玻璃/液态胶囊；第五十八轮起 QQ 古早也无尾巴——用户指定回归默认样式）
+   *  - 'none'   不渲染尾巴（毛玻璃/液态胶囊）
+   *  - 'retro'  古早 QQ 顶部尖角 beak 尾巴（第五十九轮回归，参考图1 同款）：11×15px 剪影
+   *             由宿主用 RETRO_BEAK_CLIP_LEFT/RIGHT 渲染；非自定义色时颜色走 .rt-beak-* CSS 类
+   *             （渐变+深色自适应），自定义色时 tailColor 携带平色。微信古早不返回此值（用 native）。
    *  第五十八轮（用户指定「古早小尾巴变成默认气泡样式的」）：微信古早 = 'native' 默认小三角
-   *  （tailClass 携带深浅自适应尾巴色）；QQ 古早 = 'none'。
+   *  （tailClass 携带深浅自适应尾巴色）；第五十九轮 QQ 古早改回 'retro' beak（用户指定
+   *  「QQ 气泡添加上小尾巴，跟我发给你的一样」）。
    */
-  tail: 'native' | 'im' | 'hook' | 'none';
+  tail: 'native' | 'im' | 'hook' | 'none' | 'retro';
   /** 尾巴填充色（hook 的 SVG fill / native 方块的 backgroundColor；无装扮时为空） */
   tailColor: string;
   /** 尾巴附加类（第五十八轮：微信古早尾巴 = .rt-tail-mine/-theirs——古早色板深浅自适应；
@@ -592,9 +608,11 @@ export function bubbleVisual(
     //  QQ（图1）我方灰渐变/对方浅蓝渐变（渐变由 .bub-retro-qq.bub-retro-mine/-theirs CSS 类携带
     //  ——深色类用 background 简写 !important 接管）。
     //  自定义色 = bub-retro-custom（inline 平色）。
-    //  第五十八轮（用户指定「小尾巴变成默认气泡样式的」）：尾巴回归各自 App 默认——
-    //  微信 = 默认小三角（'native'，非自定义色时走 tailClass 深浅自适应）；
-    //  QQ = 默认无尾巴（'none'），四角统一 rb.radius。
+    //  第五十八轮：尾巴回归各自 App 默认——微信 = 默认小三角（'native'，非自定义色时走
+    //  tailClass 深浅自适应）；QQ = 默认无尾巴（'none'）。
+    //  第五十九轮（用户指定「QQ 气泡添加上小尾巴，跟我发给你的一样」）：QQ 恢复参考图1 同款
+    //  顶部尖角 beak（'retro'，非自定义色时颜色走 .rt-beak-* CSS 类深浅自适应），
+    //  尾巴侧顶角为方角（beak 占据顶角，retroQqRadius）；微信保持默认小三角。
     const rb = RETRO_BUBBLE[app];
     const mine = side === 'mine';
     const sideCls = color
@@ -608,10 +626,10 @@ export function bubbleVisual(
           backgroundColor: color,
           color: yiqTextOn(color),
           borderColor: color,
-          borderRadius: rb.radius,
+          borderRadius: app === 'qq' ? retroQqRadius(mine) : rb.radius,
         },
-        tail: app === 'wx' ? 'native' : 'none',
-        tailColor: app === 'wx' ? color : '',
+        tail: app === 'wx' ? 'native' : 'retro',
+        tailColor: color,
       };
     }
     return {
@@ -626,13 +644,13 @@ export function bubbleVisual(
               color: mine ? rb.mineText : rb.theirsText,
               borderColor: mine ? rb.mineBorder : rb.theirsBorder,
             }),
-        borderRadius: rb.radius,
+        borderRadius: app === 'qq' ? retroQqRadius(mine) : rb.radius,
       },
       // 微信：默认小三角尾巴；颜色走 .rt-tail-* CSS 类（深色模式跟随古早色板，inline 会脱色）。
-      // QQ：默认无尾巴
+      // QQ：参考图1 同款顶部尖角 beak（颜色走 .rt-beak-* CSS 类深浅自适应）
       ...(app === 'wx'
         ? { tail: 'native' as const, tailColor: '', tailClass: mine ? 'rt-tail-mine' : 'rt-tail-theirs' }
-        : { tail: 'none' as const, tailColor: '' }),
+        : { tail: 'retro' as const, tailColor: '' }),
     };
   }
 

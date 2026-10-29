@@ -9550,27 +9550,37 @@ function ChatPage({
                     {/* 气泡小尾巴：装扮纯色/七彩 = 微信原生小三角随色（用户指定不变）；
                         QQ 弯钩在 qq.tsx；毛玻璃/液态胶囊无尾巴；无装扮 = 原生绿/白三角。
                         第五十八轮（用户指定「古早小尾巴变成默认气泡样式的」）：古早 = 同款默认
-                        小三角，颜色走 tailClass（.rt-tail-*，古早色板深浅自适应） */}
+                        小三角，颜色走 tailClass（.rt-tail-*，古早色板深浅自适应）。
+                        第五十九轮（用户指定「和默认气泡小尾巴一样大」）：.bub-retro 带 1px 描边，
+                        绝对定位以 padding box 为基准 → 古早尾巴外移/上移 1px 补偿描边厚度，
+                        露出量与默认气泡尾巴完全一致（默认 3px 露出，古早原来只露 2px 显小） */}
                     {bvis.tail === 'hook' ? (
                       /* 防御分支：微信装扮永不返回 hook（原生小三角），仅类型完备性保留
                          （第二十轮与 qq.tsx 同步：尾巴中心与头像顶端平行） */
                       <BubbleTail side={m.role === 'me' ? 'mine' : 'theirs'} color={bvis.tailColor} top="max(4px, calc(100% - 46.5px))" />
                     ) : bvis.tail === 'native' ? (
-                      <span
-                        aria-hidden="true"
-                        className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
-                          m.role === 'me' ? '-right-[3px]' : '-left-[3px]'
-                        } ${
-                          bvis.tailClass
-                            ? /* 古早：尾巴颜色跟随古早色板（CSS 类深浅自适应） */ bvis.tailClass
-                            : bvis.tailColor
-                            ? ''
-                            : m.role === 'me'
-                            ? 'bg-[#95EC69] dark:bg-[#3EB575]'
-                            : 'bg-white dark:bg-[#1E1E1E]'
-                        }`}
-                        style={bvis.tailColor && !bvis.tailClass ? { backgroundColor: bvis.tailColor } : undefined}
-                      />
+                      (() => {
+                        /* 古早气泡（含自定义色）都带 .bub-retro 的 1px 描边——绝对定位以
+                           padding box 为基准，尾巴统一外移/上移 1px 补偿，露出量与默认一致 */
+                        const retro = bvis.override && bvis.className.includes('bub-retro');
+                        return (
+                          <span
+                            aria-hidden="true"
+                            className={`absolute h-[8px] w-[8px] rotate-45 ${
+                              retro
+                                ? `top-[10px] ${m.role === 'me' ? '-right-[4px]' : '-left-[4px]'}${bvis.tailClass ? ` ${bvis.tailClass}` : ''}`
+                                : `top-[11px] ${m.role === 'me' ? '-right-[3px]' : '-left-[3px]'} ${
+                                    bvis.tailColor
+                                      ? ''
+                                      : m.role === 'me'
+                                      ? 'bg-[#95EC69] dark:bg-[#3EB575]'
+                                      : 'bg-white dark:bg-[#1E1E1E]'
+                                  }`
+                            }`}
+                            style={bvis.tailColor && !bvis.tailClass ? { backgroundColor: bvis.tailColor } : undefined}
+                          />
+                        );
+                      })()
                     ) : null}
                     {bubbleContent ? (
                       /* 文字消息：内置表情代码 [微笑] 还原为内联小图（混排小图/纯表情大图，真机同款） */
@@ -9687,15 +9697,21 @@ function ChatPage({
                 }`}
                 style={tvis.override ? tvis.style : undefined}
               >
-                {tvis.tail === 'native' && (
-                <span
-                  aria-hidden="true"
-                  className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 -left-[3px] ${
-                    tvis.tailColor ? '' : 'bg-white dark:bg-[#1E1E1E]'
-                  }`}
-                  style={tvis.tailColor ? { backgroundColor: tvis.tailColor } : undefined}
-                />
-                )}
+                {tvis.tail === 'native' && (() => {
+                  /* 与正文气泡尾巴同口径：古早（含自定义色）补 1px 描边偏移 + 颜色走古早色板 */
+                  const retro = tvis.override && tvis.className.includes('bub-retro');
+                  return (
+                    <span
+                      aria-hidden="true"
+                      className={`absolute h-[8px] w-[8px] rotate-45 ${
+                        retro
+                          ? `top-[10px] -left-[4px]${tvis.tailClass ? ` ${tvis.tailClass}` : ''}`
+                          : `top-[11px] -left-[3px] ${tvis.tailColor ? '' : 'bg-white dark:bg-[#1E1E1E]'}`
+                      }`}
+                      style={tvis.tailColor && !tvis.tailClass ? { backgroundColor: tvis.tailColor } : undefined}
+                    />
+                  );
+                })()}
                 <span className="flex h-[23px] items-center gap-1" aria-label="对方正在输入">
                   <span className={`h-[6px] w-[6px] animate-bounce rounded-full ${tvis.override ? 'bg-current' : 'bg-black/25 dark:bg-white/35'}`} />
                   <span className={`h-[6px] w-[6px] animate-bounce rounded-full ${tvis.override ? 'bg-current' : 'bg-black/25 dark:bg-white/35'} [animation-delay:150ms]`} />
@@ -16332,7 +16348,10 @@ function MainScreen({
                 </div>
               </div>
             )}
-            <div className={liquid ? 'px-2.5 pb-2' : retro ? 'mx-2 min-h-full rounded-[8px] bg-white shadow-[inset_0_0_0_1px_#C3C5CC]' : 'min-h-full bg-white dark:bg-[#1A1A1A]'}>
+            {/* 古早（第五十九轮，用户指定「白色面板太长，弄到联系人那里」）：去掉 min-h-full——
+                白色分组卡高度贴合会话行数（iOS 6 分组表格同款），底部露出淡青灰纸感底；
+                默认主题保持 min-h-full 整幅白底不变 */}
+            <div className={liquid ? 'px-2.5 pb-2' : retro ? 'mx-2 rounded-[8px] bg-white shadow-[inset_0_0_0_1px_#C3C5CC]' : 'min-h-full bg-white dark:bg-[#1A1A1A]'}>
               {(liquid ? visibleSessions : sessions).length === 0 && (
                 <div className="py-16 text-center">
                   <p className="text-[14px] text-black/35 dark:text-white/35">{liquid && cat !== 'all' ? '该分类下暂无会话' : '还没有会话'}</p>

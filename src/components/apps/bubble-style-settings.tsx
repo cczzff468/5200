@@ -124,7 +124,11 @@ function AuraLayer() {
 
 /** 单条迷你预览气泡：override 时用装扮样式，否则 App 原生配色
  *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 信息 App 同款底部弯钩剪影（第五十一轮，迷你版 12×10px 随色）；
- *   微信/信息 = 原生小方块随色（第五十八轮：古早微信同款小三角，tailClass 深浅自适应）；胶囊无尾巴） */
+ *   微信/信息 = 原生小方块随色（第五十八轮：古早微信同款小三角，tailClass 深浅自适应）；胶囊无尾巴；
+ *   第五十九轮：QQ 古早 = 迷你版顶部尖角 beak（颜色走 .rt-beak-* 类，与聊天页同款语言）） */
+/** 迷你 beak 剪影（全尺寸 11×15 × 0.7：span 8×11px，尖角同样指向头像一侧） */
+const RETRO_BEAK_MINI_RIGHT = 'path("M0 0 L7.7 1.4 C5.25 2.94, 2.24 5.95, 0.42 10.5 L0 10.5 Z")';
+const RETRO_BEAK_MINI_LEFT = 'path("M7.7 0 L0 1.4 C2.45 2.94, 5.46 5.95, 7.28 10.5 L7.7 10.5 Z")';
 function PreviewBubble({
   app,
   cfg,
@@ -160,14 +164,33 @@ function PreviewBubble({
           style={{ clipPath: side === 'mine' ? TAIL_CLIP_RIGHT : TAIL_CLIP_LEFT, backgroundColor: vis.tailColor || native }}
         />
       )}
-      {vis.tail === 'native' && app !== 'qq' && (
+      {vis.tail === 'native' && app !== 'qq' && (() => {
+        /* 古早（含自定义色）都带 1px 描边：迷你尾巴外移/上移 1px 补偿 + 颜色走 .rt-tail-* 类 */
+        const retro = vis.override && vis.className.includes('bub-retro');
+        return (
+          <span
+            aria-hidden="true"
+            className={`absolute h-[6px] w-[6px] rotate-45 ${
+              retro
+                ? `top-[6px] ${side === 'mine' ? '-right-[3px]' : '-left-[3px]'}${vis.tailClass ? ` ${vis.tailClass}` : ''}`
+                : `top-[7px] ${side === 'mine' ? '-right-[2px]' : '-left-[2px]'}`
+            }`}
+            style={vis.tailClass ? undefined : { backgroundColor: vis.tailColor || native }}
+          />
+        );
+      })()}
+      {vis.tail === 'retro' && (
+        /* QQ 古早（第五十九轮）：迷你版顶部尖角 beak——颜色走 .rt-beak-* 类
+           （深色自适应；自定义色时 tailColor 平色），-±5px 补 1px 描边（同聊天页口径） */
         <span
           aria-hidden="true"
-          className={`absolute top-[7px] h-[6px] w-[6px] rotate-45 ${side === 'mine' ? '-right-[2px]' : '-left-[2px]'} ${
-            /* 古早（第五十八轮）：尾巴色走 .rt-tail-* 类深浅自适应（与聊天页同款） */
-            vis.tailClass ?? ''
+          className={`absolute top-0 ${side === 'mine' ? '-right-[5px]' : '-left-[5px]'} h-[11px] w-[8px] ${
+            vis.tailColor ? '' : side === 'mine' ? 'rt-beak-mine' : 'rt-beak-theirs'
           }`}
-          style={vis.tailClass ? undefined : { backgroundColor: vis.tailColor || native }}
+          style={{
+            clipPath: side === 'mine' ? RETRO_BEAK_MINI_RIGHT : RETRO_BEAK_MINI_LEFT,
+            ...(vis.tailColor ? { background: vis.tailColor } : {}),
+          }}
         />
       )}
       {children}

@@ -238,7 +238,7 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { ThemeStylePage } from './bubble-style-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
-import { bubbleVisual, isLiquidTheme, isRetroTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
+import { bubbleVisual, isLiquidTheme, isRetroTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT, RETRO_BEAK_CLIP_LEFT, RETRO_BEAK_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { ChatSkinProvider } from '@/lib/ios/chat-skin';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
@@ -7546,7 +7546,10 @@ function ChatPage({
                         decorated={bvis.override}
                         style={
                           bvis.override
-                            ? bvis.style
+                            ? bvis.tail === 'retro'
+                              ? // 古早语音气泡无 beak：四角统一 8px（盖掉文本气泡的尾巴侧方角）
+                                { ...bvis.style, borderRadius: '8px' }
+                              : bvis.style
                             : m.role === 'me'
                               ? { backgroundColor: '#0099FF' }
                               : undefined
@@ -7589,13 +7592,29 @@ function ChatPage({
                       {/* 气泡小尾巴（第五十一轮，用户指定：QQ 换色/七彩气泡变成信息 App 同款）：
                           装扮 solid/七彩 = 信息 App 同款底部弯钩剪影尾巴（14×18px，随 tailColor 上色，
                           我方右侧/对方左侧，与头像底端对齐）；毛玻璃/液态胶囊无尾巴。
-                          第五十八轮（用户指定「小尾巴变成默认气泡样式的」）：古早也无尾巴
-                          （QQ 默认气泡无尾巴），四角统一 8px（bub-retro 色 rb.radius） */}
+                          第五十九轮（用户指定「QQ 气泡添加上小尾巴，跟我发给你的一样」）：
+                          古早回归参考图1 同款顶部尖角 beak——剪影随 .rt-beak-* CSS 类渐变上色
+                          （深色自适应；自定义色时 tailColor 平色），尖角指向头像一侧（我方右上/对方左上），
+                          尾巴侧顶角为方角（bubbleVisual 已返回 retroQqRadius）；
+                          -±8px 定位补 .bub-retro 1px 描边（绝对定位基准是 padding box），
+                          实际尖角露出 7px 与气泡顶边无缝衔接 */}
                       {bvis.tail === 'im' && (
                         <span
                           aria-hidden="true"
                           className={`absolute bottom-0 ${mine ? '-right-[6px]' : '-left-[6px]'} h-[18px] w-[14px]`}
                           style={{ clipPath: mine ? TAIL_CLIP_RIGHT : TAIL_CLIP_LEFT, backgroundColor: bvis.tailColor }}
+                        />
+                      )}
+                      {bvis.tail === 'retro' && (
+                        <span
+                          aria-hidden="true"
+                          className={`absolute top-0 ${mine ? '-right-[8px]' : '-left-[8px]'} h-[15px] w-[11px] ${
+                            bvis.tailColor ? '' : mine ? 'rt-beak-mine' : 'rt-beak-theirs'
+                          }`}
+                          style={{
+                            clipPath: mine ? RETRO_BEAK_CLIP_RIGHT : RETRO_BEAK_CLIP_LEFT,
+                            ...(bvis.tailColor ? { background: bvis.tailColor } : {}),
+                          }}
                         />
                       )}
                       {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方）。
@@ -7759,6 +7778,15 @@ function ChatPage({
                     aria-hidden="true"
                     className="absolute -left-[6px] bottom-0 h-[18px] w-[14px]"
                     style={{ clipPath: TAIL_CLIP_LEFT, backgroundColor: tvis.tailColor }}
+                  />
+                )}
+                {tvis.tail === 'retro' && (
+                  /* 古早 beak（第五十九轮）：正在输入指示是对方气泡——左侧尖角，
+                     颜色/定位与正文气泡同口径（-8px 补 1px 描边） */
+                  <span
+                    aria-hidden="true"
+                    className={`absolute top-0 -left-[8px] h-[15px] w-[11px] ${tvis.tailColor ? '' : 'rt-beak-theirs'}`}
+                    style={{ clipPath: RETRO_BEAK_CLIP_LEFT, ...(tvis.tailColor ? { background: tvis.tailColor } : {}) }}
                   />
                 )}
                 <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">

@@ -1387,6 +1387,31 @@
 .dark .rt-tail-theirs {
   background-color: #3A3A42;
 }
+/* 古早语音气泡尾巴（第五十九轮，用户指定「和默认气泡小尾巴一样大」）：
+   .bub-retro 的 1px 描边让伪元素的定位基准（padding box）内缩 1px——
+   尾巴外移/上移 1px 补偿，露出量与默认语音气泡尾巴（10px、top 13、±-4px）完全一致 */
+.bub-retro.wx-voice-tail-left::before {
+  left: -5px;
+  top: 12px;
+}
+.bub-retro.wx-voice-tail-right::before {
+  right: -5px;
+  top: 12px;
+}
+/* 古早 QQ 顶部尖角 beak 尾巴（第五十九轮回归，参考图1 同款）：渐变与气泡同源
+   （beak 贴着气泡顶部，取同走向渐变；深色成对切换——.dark 用平色 background 接管） */
+.rt-beak-mine {
+  background: linear-gradient(180deg, #D0D0D0 0%, #C4C4C4 100%);
+}
+.rt-beak-theirs {
+  background: linear-gradient(180deg, #C2D8EC 0%, #B4CDE7 100%);
+}
+.dark .rt-beak-mine {
+  background: #4E4E57;
+}
+.dark .rt-beak-theirs {
+  background: #46648C;
+}
 /* 古早实心图标色板（retro-icons.tsx RtPlus* 系列：加号面板 + 输入框上方快捷条共用）：
    浅色 = 深灰实心 + 白色镂空细节（参考图实测 #6E7474）；深色成对切换为
    浅灰实心 + 深色细节，保证 14px 快捷条小图标在深色输入栏上也清晰 */
