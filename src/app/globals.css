@@ -1292,7 +1292,8 @@
     0 1px 2px rgba(24, 28, 44, 0.16);
 }
 .rt-ic > svg {
-  filter: sepia(0.2) saturate(0.85) contrast(0.95);
+  /* 第五十六轮：底座内换白色 glyph 图标（不再套现代彩色线稿）——去掉做旧滤镜保白度 */
+  filter: none;
 }
 .dark .rt-ic {
   background: linear-gradient(180deg, #50505A 0%, #414149 50%, #35353D 100%);
@@ -1302,7 +1303,15 @@
     0 1px 2px rgba(0, 0, 0, 0.3);
 }
 .dark .rt-ic > svg {
-  filter: sepia(0.15) saturate(0.8) brightness(0.92);
+  filter: none;
+}
+
+/* 复古全宽白列表（第五十六轮：联系人页——旧微信通讯录是整幅白底列表，无分组卡片） */
+.rt-plain {
+  background: #ffffff;
+}
+.dark .rt-plain {
+  background: #2a2a31;
 }
 
 /* 复古时间胶囊（聊天页时间行：白底硬边小圆角，老 App 的时间戳） */
@@ -1319,20 +1328,20 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 古早气泡（kind='retro'，第五十五轮两张参考图逐像素精修）：
- *  微信（图1）：我方亮绿 #9EE75A 无边框软阴影小圆角 5px，对方近白细灰边；
- *  QQ（图2）：我方灰泡 #BEBEBE，对方浅蓝 #B1D0E8，大圆角 14px（圆角/描边由内联携带）。
- *  深色模式用 .dark 类 !important 盖内联（复古夜间色板）。
+ * 古早气泡（kind='retro'，第五十六轮参考图逐像素精修二round）：
+ *  微信（图2）：我方亮绿 #9EE75A 近黑字 4px 方角 + 顶部圆润 nub 尾巴；对方纯白无描边；
+ *  QQ（图1）：两侧顶部尖角 beak 尾巴；我方灰渐变/对方浅蓝渐变（CSS 类携带，深色用
+ *  background 简写 !important 盖掉渐变图）。
  * ------------------------------------------------------------------------- */
 .bub-retro {
   border: 1px solid transparent;
-  /* 老安卓气泡的软投影（图1 绿泡边缘 4-5px 柔和过渡即此物质） */
+  /* 老安卓气泡的软投影（图1 绿泡边缘 4-5px 柔和过渡即此物质）；微信白泡无描边只留极淡投影 */
   box-shadow: 0 1px 2.5px rgba(24, 28, 44, 0.16);
 }
 .dark .bub-retro {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
-/* 微信：我方亮绿 / 对方近白 */
+/* 微信：我方亮绿 / 对方纯白（深色色板 !important 盖内联） */
 .dark .bub-retro-mine {
   background-color: #5E9E3C !important;
   border-color: #4C8230 !important;
@@ -1343,14 +1352,22 @@
   border-color: #50505A !important;
   color: #E8E8EC !important;
 }
-/* QQ 深色覆盖：我方灰泡 / 对方复古蓝（微信绿不跨 App） */
+/* QQ 浅色：垂直渐变（图1 实测：灰泡顶 #D0D0D0→底 #B9B9B9；蓝泡顶 #C2D8EC→底 #A9C9E5）。
+   双类选择器特异性高于宿主的 bg-white，且 inline 不再携带 backgroundColor */
+.bub-retro-qq.bub-retro-mine {
+  background: linear-gradient(180deg, #D0D0D0 0%, #C4C4C4 55%, #B9B9B9 100%);
+}
+.bub-retro-qq.bub-retro-theirs {
+  background: linear-gradient(180deg, #C2D8EC 0%, #B4CDE7 55%, #A9C9E5 100%);
+}
+/* QQ 深色：background 简写（盖掉渐变图与 inline），我方灰泡 / 对方复古蓝 */
 .dark .bub-retro-qq.bub-retro-mine {
-  background-color: #4E4E57 !important;
+  background: #4E4E57 !important;
   border-color: #3A3A42 !important;
   color: #EDEDF0 !important;
 }
 .dark .bub-retro-qq.bub-retro-theirs {
-  background-color: #46648C !important;
+  background: #46648C !important;
   border-color: #365171 !important;
   color: #E6EDF6 !important;
 }

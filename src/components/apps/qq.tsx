@@ -239,6 +239,7 @@ import { MomentsSettingsPage } from './moments-settings';
 import { ThemeStylePage } from './bubble-style-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { bubbleVisual, isLiquidTheme, isRetroTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
+import { ChatSkinProvider } from '@/lib/ios/chat-skin';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
 import { StackFitText } from './shrink-text';
@@ -7515,7 +7516,16 @@ function ChatPage({
                         theme="qq"
                         bubbleClassName={bvis.override ? bvis.className : undefined}
                         decorated={bvis.override}
-                        style={bvis.override ? bvis.style : m.role === 'me' ? { backgroundColor: '#0099FF' } : undefined}
+                        style={
+                          bvis.override
+                            ? bvis.tail === 'retro'
+                              ? // 古早语音气泡无 beak：四角统一 8px（盖掉文本气泡的尾巴侧方角）
+                                { ...bvis.style, borderRadius: '8px' }
+                              : bvis.style
+                            : m.role === 'me'
+                              ? { backgroundColor: '#0099FF' }
+                              : undefined
+                        }
                         decorApp="qq"
                         msgIndex={i}
                       />
@@ -7554,13 +7564,31 @@ function ChatPage({
                       {/* 气泡小尾巴（第五十一轮，用户指定：QQ 换色/七彩气泡变成信息 App 同款）：
                           装扮 solid/七彩 = 信息 App 同款底部弯钩剪影尾巴（14×18px，随 tailColor 上色，
                           我方右侧/对方左侧，与头像底端对齐）；毛玻璃/液态胶囊无尾巴。
-                          （田第十八轮的参考图弯钩尾巴已随本轮需求替换） */}
+                          第五十六轮（古早参考图1）：kind='retro' = 顶部尖角小 beak——
+                          尖角指向头像一侧（我方右上/对方左上），尾巴侧顶角为方角（bubbleVisual
+                          已返回 8px 0 8px 8px / 0 8px 8px 8px），填色 = 渐变顶色 tailColor */}
                       {bvis.tail === 'im' && (
                         <span
                           aria-hidden="true"
                           className={`absolute bottom-0 ${mine ? '-right-[6px]' : '-left-[6px]'} h-[18px] w-[14px]`}
                           style={{ clipPath: mine ? TAIL_CLIP_RIGHT : TAIL_CLIP_LEFT, backgroundColor: bvis.tailColor }}
                         />
+                      )}
+                      {bvis.tail === 'retro' && (
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 11 15"
+                          className={`absolute top-0 ${mine ? '-right-[7px]' : '-left-[7px]'} h-[15px] w-[11px]`}
+                          fill={bvis.tailColor}
+                        >
+                          {mine ? (
+                            /* 我方：尖角在右上指向头像；上缘从气泡顶边扫向尖点，下缘弧线收回气泡身 */
+                            <path d="M0 0 L11 2 C7.5 4.2, 3.2 8.5, 0.6 15 L0 15 Z" />
+                          ) : (
+                            /* 对方：镜像，尖角在左上指向头像 */
+                            <path d="M11 0 L0 2 C3.5 4.2, 7.8 8.5, 10.4 15 L11 15 Z" />
+                          )}
+                        </svg>
                       )}
                       {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方）。
                           第十九轮修订：紧凑化（更小的内边距/字号，引用卡不再占大半个气泡）+ 引用文字用
@@ -18623,11 +18651,14 @@ export default function QQApp() {
       data-rt-theme={retroRoot ? 'true' : 'false'}
       data-liquid-theme={liquidRoot ? 'true' : 'false'}
     >
-      <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} onLoginAccount={handleLogin} />
-      {/* 账号切换提示（规则五.1）：挂在根组件，remount 后依然可见 */}
-      {switchToast && <QqToast text={switchToast} />}
-      {/* 扫一扫（+菜单 / 加好友页入口；识别网页/文本/群二维码，演示语义） */}
-      <ScanOverlayWhen flavor="qq" />
+      {/* 第五十六轮：古早/液态皮肤下发到共享子页（chat-settings 二级页 / 主动发消息等） */}
+      <ChatSkinProvider retro={retroRoot} liquid={liquidRoot}>
+        <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} onLoginAccount={handleLogin} />
+        {/* 账号切换提示（规则五.1）：挂在根组件，remount 后依然可见 */}
+        {switchToast && <QqToast text={switchToast} />}
+        {/* 扫一扫（+菜单 / 加好友页入口；识别网页/文本/群二维码，演示语义） */}
+        <ScanOverlayWhen flavor="qq" />
+      </ChatSkinProvider>
     </div>
   );
 }

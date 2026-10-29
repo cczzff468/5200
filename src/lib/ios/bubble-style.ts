@@ -116,16 +116,19 @@ export const NATIVE_BUBBLE: Record<BubbleAppId, { mine: string; theirs: string }
   sms: { mine: '#007AFF', theirs: '#E9E9EB' },
 };
 
-/** 古早气泡色板（第五十五轮：两张参考图逐像素精修）：
- *  微信（图1）：我方亮绿 #9EE75A、深橄榄字、无边框软阴影小圆角 5px；对方近白 #F8F8F9 细灰边。
- *  QQ（图2）：我方灰泡 #BEBEBE 黑字（老版 QQ 同款）；对方浅蓝 #B1D0E8 深蓝灰字；大圆角 14px。 */
+/** 古早气泡色板（第五十六轮：两张参考图逐像素精修二round）：
+ *  微信（图2）：我方亮绿 #9EE75A 近黑字、4px 方角、顶部圆润小 nub 尾巴（无描边）；
+ *  对方纯白 #FFFFFF 无描边近黑字（旧微信白泡直接坐在 #EBEBEB 灰底上）。
+ *  QQ（图1）：两侧都带顶部尖角小尾巴（beak，指向头像一侧）；我方灰泡垂直渐变
+ *  （顶 #D0D0D0 → 底 #B9B9B9，旧版安卓 QQ 同款），对方浅蓝渐变（顶 #C2D8EC → 底 #A9C9E5）；
+ *  圆角 8px 且尾巴侧顶角为方角（尾巴占据顶角）。mine/theirs 字段 = 渐变顶色（尾巴填色用）。 */
 export const RETRO_BUBBLE: Record<
   BubbleAppId,
-  { mine: string; mineBorder: string; mineText: string; theirs: string; theirsBorder: string; theirsText: string; radius: string }
+  { mine: string; mineBorder: string; mineText: string; theirs: string; theirsBorder: string; theirsText: string; radius: string; mineBg?: string; theirsBg?: string }
 > = {
-  wx: { mine: '#9EE75A', mineBorder: '#9EE75A', mineText: '#33511E', theirs: '#F8F8F9', theirsBorder: '#DBDBDF', theirsText: '#33352E', radius: '5px' },
-  qq: { mine: '#BEBEBE', mineBorder: '#ABABB0', mineText: '#1F1F1F', theirs: '#B1D0E8', theirsBorder: '#9FBEDB', theirsText: '#333C45', radius: '14px' },
-  sms: { mine: '#CFE3F5', mineBorder: '#A9C7E4', mineText: '#1F3347', theirs: '#F8F8F9', theirsBorder: '#DBDBDF', theirsText: '#33352E', radius: '14px' },
+  wx: { mine: '#9EE75A', mineBorder: 'transparent', mineText: '#1E3A0E', theirs: '#FFFFFF', theirsBorder: 'transparent', theirsText: '#26282E', radius: '4px' },
+  qq: { mine: '#D0D0D0', mineBorder: '#ABABB0', mineText: '#1A1A1A', theirs: '#C2D8EC', theirsBorder: '#9FBEDB', theirsText: '#1F2A36', radius: '8px', mineBg: 'linear-gradient(180deg, #D0D0D0 0%, #C4C4C4 55%, #B9B9B9 100%)', theirsBg: 'linear-gradient(180deg, #C2D8EC 0%, #B4CDE7 55%, #A9C9E5 100%)' },
+  sms: { mine: '#CFE3F5', mineBorder: '#A9C7E4', mineText: '#1F3347', theirs: '#F8F8F9', theirsBorder: '#DBDBDF', theirsText: '#33352E', radius: '10px' },
 };
 
 export const DEFAULT_BUBBLE_STYLE: BubbleStyleConfig = {
@@ -433,9 +436,14 @@ export function transcriptVisual(
       style: {
         ...(color
           ? { backgroundColor: color, color: yiqTextOn(color), borderColor: color }
-          : mine
-            ? { backgroundColor: rb.mine, color: rb.mineText, borderColor: rb.mineBorder }
-            : { backgroundColor: rb.theirs, color: rb.theirsText, borderColor: rb.theirsBorder }),
+          : app === 'qq'
+            ? // QQ 渐变由 .bub-retro-qq 类携带（inline 只给文字色，深色类 background 简写接管）
+              { color: mine ? rb.mineText : rb.theirsText }
+            : {
+                backgroundColor: mine ? rb.mine : rb.theirs,
+                color: mine ? rb.mineText : rb.theirsText,
+                borderColor: mine ? rb.mineBorder : rb.theirsBorder,
+              }),
         borderRadius: rb.radius,
       },
       textClass: '',
@@ -470,8 +478,10 @@ export interface BubbleVisual {
    *             14×18px 剪影随 tailColor 上色，我方右侧/对方左侧，由宿主用 TAIL_CLIP_LEFT/RIGHT 渲染）
    *  - 'hook'   参考图同款弯钩尾巴（历史值：第五十一轮起 QQ 不再返回，仅类型完备性保留）
    *  - 'none'   不渲染尾巴（毛玻璃/液态胶囊）
+   *  - 'retro'  古早主题尾巴（第五十六轮参考图）：微信 = 顶部圆润小 nub（半椭圆凸起，靠近头像一侧顶角下方）；
+   *             QQ = 顶部尖角小 beak（尖角指向头像，尾巴侧顶角为方角）。由宿主各自渲染形状
    */
-  tail: 'native' | 'im' | 'hook' | 'none';
+  tail: 'native' | 'im' | 'hook' | 'none' | 'retro';
   /** 尾巴填充色（hook 的 SVG fill / native 方块的 backgroundColor；无装扮时为空） */
   tailColor: string;
 }
@@ -572,17 +582,20 @@ export function bubbleVisual(
   }
 
   if (kind === 'retro') {
-    // 古早气泡（第五十五轮两张参考图逐像素精修）：
-    //  微信（图1）我方亮绿 #9EE75A + 深橄榄字，无边框（边色同底色）小圆角 5px；对方近白细灰边；
-    //  QQ（图2）我方灰泡 #BEBEBE 黑字、对方浅蓝 #B1D0E8 深蓝灰字，大圆角 14px。
-    //  深色模式由 .dark .bub-retro-mine/-theirs 类接管（复古夜间色板，!important 盖内联）；
-    //  自定义色 = bub-retro-custom（深色不覆盖，跟随内联色）。
-    //  尾巴：微信保持原生小三角（随色）；QQ/信息复古无尾巴（老版 QQ 方角无尾）。
+    // 古早气泡（第五十六轮两张参考图逐像素精修二round）：
+    //  微信（图2）我方亮绿 #9EE75A + 近黑字，4px 方角，顶部圆润小 nub 尾巴；对方纯白无描边；
+    //  QQ（图1）两侧顶部尖角 beak 尾巴（指向头像，尾巴侧顶角为方角）；我方灰渐变/对方浅蓝渐变
+    //  （渐变由 .bub-retro-qq.bub-retro-mine/-theirs CSS 类携带——深色类用 background 简写 !important 接管）。
+    //  自定义色 = bub-retro-custom（inline 平色，尾巴随色）。
+    //  尾巴：微信 = 'retro'（宿主渲染半椭圆 nub）；QQ = 'retro'（宿主渲染尖角 beak）；tailColor = 渐变顶色/平色。
     const rb = RETRO_BUBBLE[app];
     const mine = side === 'mine';
     const sideCls = color
       ? `bub-retro bub-retro-custom${app === 'qq' ? ' bub-retro-qq' : ''}`
       : `bub-retro bub-retro-${mine ? 'mine' : 'theirs'}${app === 'qq' ? ' bub-retro-qq' : ''}`;
+    // QQ 尾巴侧顶角为方角（beak 占据顶角）；微信四角统一 4px（nub 在顶角下方不冲突）
+    const retroRadius =
+      app === 'qq' ? (mine ? '8px 0 8px 8px' : '0 8px 8px 8px') : rb.radius;
     if (color) {
       return {
         override: true,
@@ -591,9 +604,9 @@ export function bubbleVisual(
           backgroundColor: color,
           color: yiqTextOn(color),
           borderColor: color,
-          borderRadius: rb.radius,
+          borderRadius: retroRadius,
         },
-        tail: app === 'wx' ? 'native' : 'none',
+        tail: 'retro',
         tailColor: color,
       };
     }
@@ -601,12 +614,17 @@ export function bubbleVisual(
       override: true,
       className: sideCls,
       style: {
-        ...(mine
-          ? { backgroundColor: rb.mine, color: rb.mineText, borderColor: rb.mineBorder }
-          : { backgroundColor: rb.theirs, color: rb.theirsText, borderColor: rb.theirsBorder }),
-        borderRadius: rb.radius,
+        ...(app === 'qq'
+          ? // QQ：渐变交给 CSS 类（深色类 background 简写接管）；inline 只给文字色
+            { color: mine ? rb.mineText : rb.theirsText }
+          : {
+              backgroundColor: mine ? rb.mine : rb.theirs,
+              color: mine ? rb.mineText : rb.theirsText,
+              borderColor: mine ? rb.mineBorder : rb.theirsBorder,
+            }),
+        borderRadius: retroRadius,
       },
-      tail: app === 'wx' ? 'native' : 'none',
+      tail: 'retro',
       tailColor: mine ? rb.mine : rb.theirs,
     };
   }

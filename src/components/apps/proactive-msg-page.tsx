@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BellOff, BellRing, CalendarClock, Check, ChevronLeft, History, Plus, Send, Sparkles, Timer, Trash2, Zap } from 'lucide-react';
 import { ChatToggle } from './chat-settings';
+import { useChatSkin } from '@/lib/ios/chat-skin';
 import { loadBlock } from '@/lib/ios/block-state';
 import {
   getProactiveCfg,
@@ -240,15 +241,26 @@ export function ProactiveMsgPage({
   const app = variant as ProactiveApp;
 
   // 主题 token（与 ChatSettingsPage 一致 + 玻璃 tokens）
-  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  // 第五十六轮：古早/液态皮肤（信息 App 无主题，永远默认）——古早 = 复古纸底 + 银灰导航条 +
+  // 玻璃卡换 6px 方角白卡；液态 = 液态根渐变（玻璃卡保持）
+  const skin = useChatSkin();
+  const pageCls = skin.retro
+    ? 'rt-root text-black dark:text-white'
+    : skin.liquid
+      ? 'lg-root text-black dark:text-white'
+      : wx
+        ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white'
+        : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  const barCls = skin.retro ? 'rt-bar' : '';
   const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
   const headerH = wx ? 'h-11' : 'h-12';
   const testPrefix = variant;
   const accent = wx ? '#07C160' : variant === 'sms' ? '#34C759' : '#0099FF';
 
-  // 毛玻璃 tokens（Task 51 二次美化：更轻的阴影与边框，更简约）
-  const glassCard =
-    'rounded-[18px] border border-white/55 bg-white/65 shadow-[0_6px_22px_rgba(0,0,0,0.05)] backdrop-blur-xl dark:border-white/[0.08] dark:bg-white/[0.05] dark:shadow-[0_8px_28px_rgba(0,0,0,0.3)]';
+  // 毛玻璃 tokens（Task 51 二次美化：更轻的阴影与边框，更简约）；古早换成复古硬边白卡
+  const glassCard = skin.retro
+    ? 'rounded-[6px] bg-white shadow-[inset_0_0_0_1px_#C3C5CC,0_1px_2px_rgba(24,28,44,0.07)] dark:bg-[#35353D] dark:shadow-[inset_0_0_0_1px_#4D4D57,0_1px_2px_rgba(0,0,0,0.3)]'
+    : 'rounded-[18px] border border-white/55 bg-white/65 shadow-[0_6px_22px_rgba(0,0,0,0.05)] backdrop-blur-xl dark:border-white/[0.08] dark:bg-white/[0.05] dark:shadow-[0_8px_28px_rgba(0,0,0,0.3)]';
   const chipIdle = 'bg-black/[0.055] dark:bg-white/[0.09]';
   const fieldCls =
     'h-11 w-full min-w-0 rounded-full border border-black/[0.06] bg-white/65 px-4 text-[15px] outline-none backdrop-blur placeholder:text-black/25 focus:border-black/25 dark:border-white/[0.1] dark:bg-white/[0.065] dark:placeholder:text-white/25 dark:focus:border-white/35';
@@ -382,7 +394,7 @@ export function ProactiveMsgPage({
   if (!cfg) {
     return (
       <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${pageCls}`}>
-        <div className="shrink-0 pt-[54px]">
+        <div className={`shrink-0 pt-[54px] ${barCls}`}>
           <div className={`flex ${headerH} items-center px-2`}>
             <button type="button" aria-label="返回" data-testid={`${testPrefix}-proactive-back`} onClick={onBack} className={`flex items-center rounded-full px-1 active:opacity-50 ${wx ? '' : 'p-1'}`}>
               <ChevronLeft className={wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />
@@ -402,7 +414,7 @@ export function ProactiveMsgPage({
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col overflow-hidden ${pageCls}`}>
       {/* 顶栏 */}
-      <div className="relative z-10 shrink-0 pt-[54px]">
+      <div className={`relative z-10 shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${headerH} items-center px-2`}>
           <button type="button" aria-label="返回" data-testid={`${testPrefix}-proactive-back`} onClick={onBack} className={`flex items-center rounded-full px-1 active:opacity-50 ${wx ? '' : 'p-1'}`}>
             <ChevronLeft className={wx ? 'h-7 w-7' : 'h-6 w-6'} strokeWidth={2.2} />

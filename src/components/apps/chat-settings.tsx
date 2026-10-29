@@ -40,6 +40,7 @@ import { useSettings } from '@/lib/ios/store';
 import { getBoundBookIds, loadBooks, saveBooks, type WorldBook } from '@/lib/ios/worldbook';
 import { LocalToast, useLocalToast } from './page-toast';
 import { ChatDisplaySection } from './chat-display-settings';
+import { useChatSkin } from '@/lib/ios/chat-skin';
 
 export type ChatSettingsVariant = 'wx' | 'qq' | 'sms';
 
@@ -265,8 +266,10 @@ export function ChatSettingsPage({
   const wx = variant === 'wx';
 
   // 主题 token（微信灰白 / QQ 冷灰白）
-  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
-  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const skin = useChatSkin();
+  const pageCls = skin.retro ? 'rt-root text-black dark:text-white' : skin.liquid ? 'lg-root text-black dark:text-white' : wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  const cardCls = skin.retro ? 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const barCls = skin.retro ? 'rt-bar' : '';
   const dividerCls = wx ? 'border-black/5 dark:border-white/10' : 'border-black/[0.04] dark:border-white/[0.06]';
   const rowCls = wx
     ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
@@ -287,7 +290,7 @@ export function ChatSettingsPage({
   return (
     <div className={`absolute inset-0 z-40 flex h-full w-full flex-col ${pageCls}`}>
       {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${headerH} items-center px-2`}>
           <button
             type="button"
@@ -789,8 +792,10 @@ export function ChatReplyCountPage({
   const wx = variant === 'wx';
 
   // 主题 token（与 ChatSettingsPage 一致）
-  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
-  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const skin = useChatSkin();
+  const pageCls = skin.retro ? 'rt-root text-black dark:text-white' : skin.liquid ? 'lg-root text-black dark:text-white' : wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  const cardCls = skin.retro ? 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const barCls = skin.retro ? 'rt-bar' : '';
   const dividerCls = wx ? 'border-black/5 dark:border-white/10' : 'border-black/[0.04] dark:border-white/[0.06]';
   const rowCls = wx
     ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
@@ -804,7 +809,7 @@ export function ChatReplyCountPage({
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${pageCls}`}>
       {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${headerH} items-center px-2`}>
           <button
             type="button"
@@ -883,8 +888,10 @@ export function ChatBgPage({
   const wx = variant === 'wx';
 
   // 主题 token（与 ChatSettingsPage 一致）
-  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
-  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const skin = useChatSkin();
+  const pageCls = skin.retro ? 'rt-root text-black dark:text-white' : skin.liquid ? 'lg-root text-black dark:text-white' : wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  const cardCls = skin.retro ? 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const barCls = skin.retro ? 'rt-bar' : '';
   // 选中/勾色：微信绿 / QQ 蓝
   const accent = wx ? '#07C160' : '#0099FF';
   const defaultBg = wx ? WX_CHAT_BG_DEFAULT : QQ_CHAT_BG_DEFAULT;
@@ -898,7 +905,7 @@ export function ChatBgPage({
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${pageCls}`}>
       {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${headerH} items-center px-2`}>
           <button
             type="button"
@@ -1097,8 +1104,10 @@ export function ChatSearchPage({
   const [kw, setKw] = useState('');
   const wx = variant === 'wx';
 
-  const pageCls = wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
-  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const skin = useChatSkin();
+  const pageCls = skin.retro ? 'rt-root text-black dark:text-white' : skin.liquid ? 'lg-root text-black dark:text-white' : wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  const cardCls = skin.retro ? 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const barCls = skin.retro ? 'rt-bar' : '';
   const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
   const headerH = wx ? 'h-11' : 'h-12';
   const testPrefix = variant;
@@ -1141,7 +1150,7 @@ export function ChatSearchPage({
   return (
     <div className={`absolute inset-0 z-40 flex h-full w-full flex-col ${pageCls}`}>
       {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${headerH} items-center px-2`}>
           <button
             type="button"
@@ -1156,7 +1165,12 @@ export function ChatSearchPage({
         </div>
         {/* 搜索框 */}
         <div className={`flex items-center gap-2 px-4 pb-2.5 ${wx ? 'pt-1' : 'pt-1.5'}`}>
-          <div className="flex h-[34px] flex-1 items-center gap-2 rounded-[9px] bg-black/[0.05] px-2.5 dark:bg-white/[0.08]">
+          {/* 古早 = 白底内凹硬边搜索框（rt-search）；液态/默认 = 原生灰胶囊 */}
+          <div
+            className={`flex h-[34px] flex-1 items-center gap-2 px-2.5 ${
+              skin.retro ? 'rt-search' : 'rounded-[9px] bg-black/[0.05] dark:bg-white/[0.08]'
+            }`}
+          >
             <Search className="h-[15px] w-[15px] shrink-0 text-black/35 dark:text-white/35" strokeWidth={2.2} aria-hidden="true" />
             <input
               autoFocus
@@ -1285,7 +1299,16 @@ export function ChatTranslatePage({
   /** 开关 / 选语言 / 互换 都统一回传新配置，由调用方持久化（按会话隔离） */
   onChange: (next: ChatTranslateCfg) => void;
 }) {
-  const t = translateTokens(variant);
+  // 第五十六轮：古早/液态皮肤（信息 App 无主题，永远默认）——古早 = 复古纸底 + 6px 方角白卡 + 银灰导航条；
+  // 液态 = 液态根渐变（卡片玻璃由 scoped CSS 接管 .bg-white）；默认 = 原生
+  const skin = useChatSkin();
+  const tBase = translateTokens(variant);
+  const t = skin.retro
+    ? { ...tBase, pageCls: 'rt-root text-black dark:text-white', cardCls: 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' }
+    : skin.liquid
+      ? { ...tBase, pageCls: 'lg-root text-black dark:text-white' }
+      : tBase;
+  const barCls = skin.retro ? 'rt-bar' : '';
   const testPrefix = variant;
   // 当前待设置的一侧（点上方一侧切换；默认左侧）
   const [side, setSide] = useState<'left' | 'right'>('left');
@@ -1356,7 +1379,7 @@ export function ChatTranslatePage({
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
       {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${t.headerH} items-center px-2`}>
           <button
             type="button"
@@ -1523,6 +1546,8 @@ export function SmsChatSettingsPage({
   proactiveSummary?: string;
 }) {
   const t = translateTokens('sms');
+  const skinSms = useChatSkin();
+  const barCls = skinSms.retro ? 'rt-bar' : '';
   /** 备注编辑弹窗（本地草稿，保存时交回宿主持久化） */
   const [remarkOpen, setRemarkOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
@@ -1532,7 +1557,7 @@ export function SmsChatSettingsPage({
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
       {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className="relative flex h-12 items-center px-2">
           <button
             type="button"
@@ -1946,7 +1971,16 @@ export function WorldBookPickerPage({
   /** 勾选变化（每次点选回传完整 id 列表，由调用方持久化） */
   onChange: (ids: string[]) => void;
 }) {
-  const t = translateTokens(variant);
+  // 第五十六轮：古早/液态皮肤（信息 App 无主题，永远默认）——古早 = 复古纸底 + 6px 方角白卡 + 银灰导航条；
+  // 液态 = 液态根渐变（卡片玻璃由 scoped CSS 接管 .bg-white）；默认 = 原生
+  const skin = useChatSkin();
+  const tBase = translateTokens(variant);
+  const t = skin.retro
+    ? { ...tBase, pageCls: 'rt-root text-black dark:text-white', cardCls: 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' }
+    : skin.liquid
+      ? { ...tBase, pageCls: 'lg-root text-black dark:text-white' }
+      : tBase;
+  const barCls = skin.retro ? 'rt-bar' : '';
   const testPrefix = variant;
   const bound = useMemo(() => new Set(boundIds), [boundIds]);
 
@@ -2020,7 +2054,7 @@ export function WorldBookPickerPage({
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
       {/* 顶栏（顶部氛围光斑已按需求全局移除） */}
-      <div className="relative shrink-0 pt-[54px]">
+      <div className={`relative shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${t.headerH} items-center px-2`}>
           <button
             type="button"
@@ -2166,12 +2200,21 @@ export function ChatVoiceFreqPage({
   onBack: () => void;
   onSelect: (freq: AiVoiceFreq) => void;
 }) {
-  const t = translateTokens(variant);
+  // 第五十六轮：古早/液态皮肤（信息 App 无主题，永远默认）——古早 = 复古纸底 + 6px 方角白卡 + 银灰导航条；
+  // 液态 = 液态根渐变（卡片玻璃由 scoped CSS 接管 .bg-white）；默认 = 原生
+  const skin = useChatSkin();
+  const tBase = translateTokens(variant);
+  const t = skin.retro
+    ? { ...tBase, pageCls: 'rt-root text-black dark:text-white', cardCls: 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' }
+    : skin.liquid
+      ? { ...tBase, pageCls: 'lg-root text-black dark:text-white' }
+      : tBase;
+  const barCls = skin.retro ? 'rt-bar' : '';
   const testPrefix = variant;
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
       {/* 顶栏 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${t.headerH} items-center px-2`}>
           <button
             type="button"
@@ -2256,7 +2299,16 @@ export function ChatVoicePage({
   /** 打开 AI 语音频率选择页 */
   onOpenFreq: () => void;
 }) {
-  const t = translateTokens(variant);
+  // 第五十六轮：古早/液态皮肤（信息 App 无主题，永远默认）——古早 = 复古纸底 + 6px 方角白卡 + 银灰导航条；
+  // 液态 = 液态根渐变（卡片玻璃由 scoped CSS 接管 .bg-white）；默认 = 原生
+  const skin = useChatSkin();
+  const tBase = translateTokens(variant);
+  const t = skin.retro
+    ? { ...tBase, pageCls: 'rt-root text-black dark:text-white', cardCls: 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' }
+    : skin.liquid
+      ? { ...tBase, pageCls: 'lg-root text-black dark:text-white' }
+      : tBase;
+  const barCls = skin.retro ? 'rt-bar' : '';
   const testPrefix = variant;
   const myVoices = useMyVoices((s) => s.voices);
   /** 内置声线试听状态（播放中的声线 id） */
@@ -2434,7 +2486,7 @@ export function ChatVoicePage({
   return (
     <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
       {/* 顶栏（顶部氛围光斑已按需求全局移除） */}
-      <div className="relative shrink-0 pt-[54px]">
+      <div className={`relative shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${t.headerH} items-center px-2`}>
           <button
             type="button"

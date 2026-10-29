@@ -160,6 +160,29 @@ function PreviewBubble({
           style={{ clipPath: side === 'mine' ? TAIL_CLIP_RIGHT : TAIL_CLIP_LEFT, backgroundColor: vis.tailColor || native }}
         />
       )}
+      {vis.tail === 'retro' && app === 'wx' && (
+        /* 古早微信（第五十六轮参考图2）：顶部圆润小 nub（迷你版半椭圆，随 tailColor） */
+        <span
+          aria-hidden="true"
+          className={`absolute top-[8px] h-[9px] w-[5px] rounded-full ${side === 'mine' ? '-right-[2px]' : '-left-[2px]'}`}
+          style={{ backgroundColor: vis.tailColor || native }}
+        />
+      )}
+      {vis.tail === 'retro' && app === 'qq' && (
+        /* 古早 QQ（第五十六轮参考图1）：顶部尖角小 beak（迷你版，随 tailColor） */
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 11 15"
+          className={`absolute top-0 ${side === 'mine' ? '-right-[5px]' : '-left-[5px]'} h-[11px] w-[8px]`}
+          fill={vis.tailColor || native}
+        >
+          {side === 'mine' ? (
+            <path d="M0 0 L11 2 C7.5 4.2, 3.2 8.5, 0.6 15 L0 15 Z" />
+          ) : (
+            <path d="M11 0 L0 2 C3.5 4.2, 7.8 8.5, 10.4 15 L11 15 Z" />
+          )}
+        </svg>
+      )}
       {vis.tail === 'native' && app !== 'qq' && (
         <span
           aria-hidden="true"
@@ -387,9 +410,9 @@ function ThemeLivePreview({
             <span
               aria-hidden
               className={`ml-auto flex h-[23px] w-[23px] shrink-0 items-center justify-center ${retro ? 'rounded-[4px]' : 'rounded-full'}`}
-              style={{ backgroundColor: retro ? (app === 'wx' ? '#8BC44E' : '#D3E2F0') : accent }}
+              style={{ backgroundColor: retro ? (app === 'wx' ? '#9EE75A' : '#7EA3D8') : accent }}
             >
-              <span className={`h-[8px] w-[8px] rotate-45 border-l-[2px] border-t-[2px] ${retro ? (app === 'wx' ? 'border-[#20330E]' : 'border-[#27384A]') : 'border-white/95'}`} />
+              <span className={`h-[8px] w-[8px] rotate-45 border-l-[2px] border-t-[2px] ${retro ? (app === 'wx' ? 'border-[#1E3A0E]' : 'border-[#152A42]') : 'border-white/95'}`} />
             </span>
           </div>
           {/* TabBar：液态 = 悬浮玻璃胶囊；古早 = 银灰拟物硬边条；默认 = 贴底实底条 */}
@@ -430,9 +453,13 @@ function ThemeLivePreview({
 /** 紧凑主题卡的材质缩影（~92px）：mini 顶栏条 + 两条迷你气泡 + TabBar——
  *  液态 = 玻璃材质（lg-* + 光斑）；古早 = 淡青底 + 银灰拟物件 + 描边方角气泡；
  *  默认 = 白实底。一眼区分各主题材质。 */
-function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string }) {
+function ThemeMiniThumb({ theme, accent, app }: { theme: BubbleTheme; accent: string; app?: BubbleAppId }) {
   const liquid = theme === 'liquid';
   const retro = theme === 'retro';
+  // 古早迷你泡：微信 = 亮绿/纯白；QQ = 灰渐变/浅蓝渐变（第五十六轮新色板）
+  const retroMine =
+    app === 'qq' ? 'bg-[#C4C4C4]' : 'bg-[#9EE75A]';
+  const retroTheirs = app === 'qq' ? 'bg-[#B4CDE7]' : 'bg-white';
   const solid = 'bg-white shadow-[0_1px_2px_rgba(0,0,0,0.06)] dark:bg-[#2A2B30] dark:shadow-none';
   return (
     <div
@@ -469,7 +496,7 @@ function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string 
           <span
             className={
               retro
-                ? 'h-[12px] w-[46px] rounded-[3px] border border-[#C6C8CD] bg-white'
+                ? `h-[12px] w-[46px] rounded-[3px] ${retroTheirs}`
                 : 'h-[12px] w-[46px] rounded-[4px] rounded-bl-[2px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.08)] dark:bg-[#2A2B30]'
             }
           />
@@ -478,7 +505,7 @@ function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string 
           <span
             className={
               retro
-                ? 'h-[12px] w-[54px] rounded-[3px] border border-[#6E9E3C] bg-[#8BC44E]'
+                ? `h-[12px] w-[54px] rounded-[3px] ${retroMine}`
                 : 'h-[12px] w-[54px] rounded-[4px] rounded-br-[2px]'
             }
             style={retro ? undefined : { backgroundColor: accent }}
@@ -722,7 +749,7 @@ function ThemeContent({
                 }
               >
                 <div className="relative">
-                  <ThemeMiniThumb theme={theme} accent={meta.accent} />
+                  <ThemeMiniThumb theme={theme} accent={meta.accent} app={app} />
                   {selected && (
                     <span
                       className="absolute right-1.5 top-1.5 flex h-[17px] w-[17px] items-center justify-center rounded-full text-white shadow-md"
