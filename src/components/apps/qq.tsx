@@ -1720,8 +1720,8 @@ function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   );
 }
 
-/** 显示设置 › 已读未读 + 时间：气泡下方上下两行——靠气泡列边缘（远离头像的一侧：我的=左、TA的=右）；
- *  同显时上下堆叠（用户指定：已读未读在上、时间在下）。
+/** 显示设置 › 已读未读 + 时间：气泡下方上下两行——靠屏幕边缘（贴头像的一侧：我的=右、TA的=左，
+ *  用户指定：往边缘靠）；同显时上下堆叠（已读未读在上、时间在下）。
  *  子项 nowrap：日期模板（yyyy/MM/dd HH:mm）等长格式也不内部折行。
  *  仅挂在文本气泡列（最常见消息形态） */
 function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
@@ -1731,7 +1731,7 @@ function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   return (
     <span
       className={`mt-[3px] flex flex-col self-stretch gap-y-[1px] leading-none ${
-        m.role === 'me' ? 'items-start' : 'items-end'
+        m.role === 'me' ? 'items-end' : 'items-start'
       }`}
     >
       {showRead && (

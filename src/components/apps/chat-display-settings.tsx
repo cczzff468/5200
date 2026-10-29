@@ -201,7 +201,7 @@ function PreviewRow({
     showRead || showTime ? (
       <span
         className={`mt-[2px] flex flex-col self-stretch gap-y-[1px] leading-none ${
-          side === 'mine' ? 'items-start' : 'items-end'
+          side === 'mine' ? 'items-end' : 'items-start'
         }`}
       >
         {showRead && cfg.readPosition === 'bubble' && (
