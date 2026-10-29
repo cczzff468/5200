@@ -1086,3 +1086,259 @@
 .dark .lg-top-blur {
   background: linear-gradient(180deg, rgba(16, 16, 20, 0.38) 0%, rgba(16, 16, 20, 0.12) 46%, rgba(16, 16, 20, 0) 100%);
 }
+
+/* ---------------------------------------------------------------------------
+ * 古早主题（第五十四轮）——2012-2014 年代拟物复古（微信 / QQ）
+ * ---------------------------------------------------------------------------
+ *  参考用户上传的三张老 App 截图逐像素提取：
+ *   - 主界面：淡青灰纸感底（截图2 #EDEEF1）+ 白色分组卡 + 银灰拟物 TabBar；
+ *   - 聊天页：深灰安卓顶栏（截图1 #2A2A2A）+ 灰底（#D2D2D2）+ 描边小圆角气泡；
+ *   - 铭件语言 = iOS 6 银灰拟物（上高光渐变 + 1px 硬边 + 硬投影），无模糊无大圆角。
+ *  主题只接管页面铭件；气泡由装扮系统 kind='retro'（.bub-retro）接管，
+ *  聊天背景层不受主题影响（与液态主题同口径）。
+ * ------------------------------------------------------------------------- */
+
+/* 主题页面底：淡青灰纸感微渐变（上浅下深一档，参考截图2 整体 #EDEEF1 系） */
+.rt-root {
+  background: linear-gradient(180deg, #EDEEF2 0%, #E7EAEF 55%, #E2E6EC 100%);
+}
+.dark .rt-root {
+  background: linear-gradient(180deg, #26262B 0%, #212126 55%, #1D1D22 100%);
+}
+
+/* 银灰拟物导航栏（iOS 6 风）：上高光 + 52% 处硬分界 + 底部深线 */
+.rt-bar {
+  background: linear-gradient(180deg, #FCFCFE 0%, #EFF0F3 46%, #DCDDE2 54%, #C9CBD1 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 1px 4px rgba(24, 28, 44, 0.16);
+}
+.dark .rt-bar {
+  background: linear-gradient(180deg, #54545E 0%, #474751 46%, #3C3C46 54%, #33333D 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+/* 深灰聊天顶栏（截图1 安卓 4.x 风：#2A2A2A 深黑灰 + 微渐变） */
+.rt-dark {
+  background: linear-gradient(180deg, #3E3E42 0%, #2E2E32 55%, #25252A 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 2px 5px rgba(0, 0, 0, 0.30);
+}
+.dark .rt-dark {
+  background: linear-gradient(180deg, #232327 0%, #1B1B1F 55%, #16161A 100%);
+}
+
+/* 复古聊天页底色（截图1 灰底 #D2D2D2；仅主题接管默认底色，自定义聊天背景不受影响） */
+.rt-chat-bg {
+  background: #D2D2D2;
+}
+.dark .rt-chat-bg {
+  background: #1C1C1F;
+}
+
+/* 白色分组卡（iOS 6 分组表格：白底 + 1px 硬边 + 8px 圆角） */
+.rt-panel {
+  background: #FFFFFF;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 0 0 1px #C3C5CC,
+    inset 0 1px 0 #FFFFFF,
+    0 1px 2px rgba(24, 28, 44, 0.07);
+}
+.dark .rt-panel {
+  background: #35353D;
+  box-shadow:
+    inset 0 0 0 1px #4D4D57,
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.30);
+}
+
+/* 列表行分割线颜色（rt-panel 内部行线：略深于现代版的硬灰线） */
+.rt-panel .rt-div,
+.rt-div {
+  background: #D9DBE1;
+}
+.dark .rt-div {
+  background: #45454F;
+}
+
+/* 银灰拟物 TabBar（截图2 灰底 + iOS 6 高光渐变 + 顶部深线） */
+.rt-tabbar {
+  background: linear-gradient(180deg, #F0F1F4 0%, #E0E2E7 46%, #CBCED5 52%, #B8BCC5 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 -1px 0 #9DA1AB,
+    0 -3px 8px rgba(24, 28, 44, 0.10);
+}
+.dark .rt-tabbar {
+  background: linear-gradient(180deg, #4A4A54 0%, #3D3D47 46%, #33333D 52%, #2B2B35 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 -1px 0 #17171C,
+    0 -3px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* 复古 Tab 选中蓝（iOS 6 时代 App 通用选中色，微信/QQ 古早统一） */
+.rt-tab-on {
+  color: #3D6DB5;
+}
+.dark .rt-tab-on {
+  color: #8FB4E8;
+}
+
+/* 拟物输入条（聊天页底部银灰渐变） */
+.rt-inputbar {
+  background: linear-gradient(180deg, #EEF0F3 0%, #DEE0E5 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 -1px 0 #A9ABB3;
+}
+.dark .rt-inputbar {
+  background: linear-gradient(180deg, #38383F 0%, #2E2E35 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 -1px 0 #1A1A1F;
+}
+
+/* 复古输入框本体（白底内凹：上内阴影 + 4px 小圆角，安卓老版输入框） */
+.rt-input {
+  background: #FFFFFF;
+  border-radius: 4px;
+  box-shadow:
+    inset 0 1px 2px rgba(24, 28, 44, 0.15),
+    inset 0 0 0 1px #C0C2C9,
+    0 1px 0 rgba(255, 255, 255, 0.75);
+}
+.dark .rt-input {
+  background: #26262D;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.4),
+    inset 0 0 0 1px #464650,
+    0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* 复古搜索框（列表页搜索：白底内凹 + 6px 圆角） */
+.rt-search {
+  background: #FFFFFF;
+  border-radius: 6px;
+  box-shadow:
+    inset 0 1px 2px rgba(24, 28, 44, 0.13),
+    inset 0 0 0 1px #C0C2C9;
+}
+.dark .rt-search {
+  background: #26262D;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.4),
+    inset 0 0 0 1px #464650;
+}
+
+/* 拟物小按钮（+ 钮/圆钮：银灰渐变凸起 + 硬边） */
+.rt-btn {
+  background: linear-gradient(180deg, #FDFDFE 0%, #E9EAEE 55%, #DCDDE2 100%);
+  border-radius: 5px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 1px #AFB1B9,
+    0 1px 2px rgba(24, 28, 44, 0.14);
+}
+.dark .rt-btn {
+  background: linear-gradient(180deg, #52525C 0%, #43434D 55%, #38383F 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 0 0 1px #26262E,
+    0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* 复古发送键（微信古早 = 深草绿实心小方角；QQ 古早 = 复古蓝） */
+.rt-send,
+.rt-send-qq {
+  border-radius: 4px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 1px 2px rgba(24, 28, 44, 0.2);
+}
+.rt-send {
+  background: linear-gradient(180deg, #97CC58 0%, #7FBA45 55%, #71A83B 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    inset 0 0 0 1px #679337,
+    0 1px 2px rgba(24, 28, 44, 0.2);
+}
+.rt-send-qq {
+  background: linear-gradient(180deg, #7EA3D8 0%, #5C8AC6 55%, #4E7CB8 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    inset 0 0 0 1px #4470AA,
+    0 1px 2px rgba(24, 28, 44, 0.2);
+}
+
+/* 复古图标底座（iOS 6 拟物圆角方块：上高光 + 硬边 + 做旧滤镜） */
+.rt-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  flex-shrink: 0;
+  background: linear-gradient(180deg, #FDFDFE 0%, #EDEEF2 50%, #DDDFE5 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 1px rgba(150, 153, 163, 0.55),
+    0 1px 2px rgba(24, 28, 44, 0.16);
+}
+.rt-ic > svg {
+  filter: sepia(0.2) saturate(0.85) contrast(0.95);
+}
+.dark .rt-ic {
+  background: linear-gradient(180deg, #50505A 0%, #414149 50%, #35353D 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.dark .rt-ic > svg {
+  filter: sepia(0.15) saturate(0.8) brightness(0.92);
+}
+
+/* 复古时间胶囊（聊天页时间行：白底硬边小圆角，老 App 的时间戳） */
+.rt-time {
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(24, 28, 44, 0.14);
+  color: #6B6E78;
+}
+.dark .rt-time {
+  background: rgba(40, 40, 47, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  color: #A9ACB8;
+}
+
+/* ---------------------------------------------------------------------------
+ * 古早气泡（kind='retro'）：4px 小圆角 + 1px 细描边平色底——
+ * 侧别色由 bubbleVisual 内联给出（微信我方深草绿 #8BC44E / QQ 我方淡蓝 #D3E2F0 /
+ * 对方纯白 #FFF）；深色模式用 .dark 类 !important 盖内联（复古夜间色板）。
+ * ------------------------------------------------------------------------- */
+.bub-retro {
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+.dark .bub-retro-mine {
+  background-color: #5E8F3E !important;
+  border-color: #4A7330 !important;
+  color: #EFF5E2 !important;
+}
+.dark .bub-retro-theirs {
+  background-color: #3A3A42 !important;
+  border-color: #50505A !important;
+  color: #E8E8EC !important;
+}
+/* QQ 古早我方深色用复古深蓝（微信绿不跨 App）——由宿主在气泡元素上补 .bub-retro-qq 类 */
+.dark .bub-retro-qq.bub-retro-mine {
+  background-color: #5A7BA6 !important;
+  border-color: #46648C !important;
+  color: #EAF0F8 !important;
+}

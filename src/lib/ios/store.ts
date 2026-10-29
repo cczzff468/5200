@@ -878,13 +878,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setBubbleTheme: (app, theme) => {
     const cur = get().bubbleStyle;
     // 第四十五轮（用户指定）：切换主题时气泡跟着换——液态玻璃主题 → 液态玻璃气泡，
-    // 默认主题 → 原生默认气泡（自定义色一并还原）；之后再单独切气泡样式不再动主题（patchAppStyle 只写 kind）
+    // 古早主题 → 古早气泡，默认主题 → 原生默认气泡（自定义色一并还原）；
+    // 之后再单独切气泡样式不再动主题（patchAppStyle 只写 kind）
     const next = normalizeBubbleStyle({
       ...cur,
       [app]: {
         ...cur[app],
         theme,
-        kind: theme === 'liquid' ? 'liquid' : 'default',
+        kind: theme === 'liquid' ? 'liquid' : theme === 'retro' ? 'retro' : 'default',
         mineColor: undefined,
         theirsColor: undefined,
       },

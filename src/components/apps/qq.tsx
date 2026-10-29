@@ -238,7 +238,7 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { ThemeStylePage } from './bubble-style-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
-import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
+import { bubbleVisual, isLiquidTheme, isRetroTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
 import { StackFitText } from './shrink-text';
@@ -262,6 +262,8 @@ import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, cle
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
 import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, createContact, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
+// 古早主题（retro）：复古 Tab 图标 + 拟物图标底座 + 配色表（QQ 版）
+import { RtBellIcon, RtUsersIcon, RtStarIcon, RetroIc, RETRO_ICON_TONES } from './retro-icons';
 import { listAlbums, listAlbumsForChat, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { ensureAlbumDescs } from '@/lib/ios/album-vision';
 import { buildAvatarBlock, ensureAvatarDesc, noteAvatarChanged } from '@/lib/ios/avatar-ai';
@@ -1120,6 +1122,14 @@ function maskPhone(p: string | null): string {
 const QQ_BLUE = '#12B7F5';
 const TAB_ACTIVE = 'text-[#1E6FFF] dark:text-[#4AA3FF]';
 
+/** 古早主题（retro）底部 Tab 图标（粗线方角线稿，颜色随宿主 currentColor：
+ *  选中态由按钮上的 .rt-tab-on 复古蓝接管；不填充线稿） */
+function RtTabIconOf({ id }: { id: string }) {
+  if (id === '消息') return <RtBellIcon className="h-[22px] w-[22px]" />;
+  if (id === '联系人') return <RtUsersIcon className="h-[22px] w-[22px]" />;
+  return <RtStarIcon className="h-[22px] w-[22px]" />;
+}
+
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -1789,15 +1799,18 @@ function QqHeader({
   subtitle,
   onAvatar,
   action,
+  retro = false,
 }: {
   user: QQUser;
   title: string;
   subtitle?: React.ReactNode;
   onAvatar: () => void;
   action?: React.ReactNode;
+  /** 古早主题（MainScreen 下发）：头部容器换银灰拟物导航条（rt-bar） */
+  retro?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 px-4 pb-2 pt-1">
+    <div className={`flex items-center gap-3 px-4 pb-2 pt-1 ${retro ? 'rt-bar' : ''}`}>
       <button type="button" aria-label="个人资料" onClick={onAvatar} className="rounded-full active:opacity-70">
         <QqAvatar src={user.avatar} alt={user.name} size={44} />
       </button>
@@ -1887,18 +1900,23 @@ function QqSearch({
   onChange,
   placeholder = '搜索',
   liquid = false,
+  retro = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   /** 液态玻璃主题：搜索胶囊换 .lg-search 玻璃质感（tabs 页传入；设置页等不传保持原样） */
   liquid?: boolean;
+  /** 古早主题：搜索胶囊换 .rt-search 白底内凹（6px 圆角） */
+  retro?: boolean;
 }) {
   return (
     <div
       className={
         liquid
           ? 'flex h-[36px] items-center gap-1.5 rounded-full lg-search px-3'
+          : retro
+          ? 'flex h-[36px] items-center gap-1.5 rt-search px-3'
           : 'flex h-[36px] items-center gap-1.5 rounded-full bg-black/[0.05] px-3 dark:bg-white/[0.08]'
       }
     >
@@ -3263,6 +3281,8 @@ function ChatPage({
   // + 返回/菜单 lg-chip 椭圆 + 输入框毛玻璃胶囊 + 六工具钮 lg-chip + 语音/加号/表情面板 lg-sheet；
   // 聊天气泡仍由装扮系统（kind）管、聊天背景层完全不受主题影响（用户指定）；默认主题时零覆盖
   const liquid = isLiquidTheme(bubbleStyle, 'qq');
+  // 古早主题（retro，第五十四轮）：聊天页深灰安卓顶栏 + 灰色聊天底；气泡由装扮系统 kind='retro' 全局接管
+  const retro = isRetroTheme(bubbleStyle, 'qq');
   // 液态玻璃皮肤（本轮新增）：顶栏名字区显示模式（text/avatarName/dual/dualName；仅液态主题生效）
   const liquidSkinQq = useSettings((s) => s.liquidSkin.qq);
   // 聊天输入框自定义（本轮新增）：输入框占位文字 + 加号面板功能（默认/液态两种主题都生效）
@@ -6883,7 +6903,7 @@ function ChatPage({
   return (
     <div
       ref={pageRef}
-      className={`relative flex h-full w-full flex-col overflow-hidden ${liquid ? 'lg-root' : 'bg-[#F5F6F7] dark:bg-[#111214]'}`}
+      className={`relative flex h-full w-full flex-col overflow-hidden ${liquid ? 'lg-root' : retro ? 'rt-chat-bg' : 'bg-[#F5F6F7] dark:bg-[#111214]'}`}
       onPointerDown={onSwipeStart}
       onPointerMove={onSwipeMove}
       onPointerCancel={() => {
@@ -6912,6 +6932,8 @@ function ChatPage({
         className={
           liquid
             ? 'pointer-events-none absolute inset-x-0 top-0 z-20 shrink-0 bg-transparent pt-[54px]'
+            : retro
+            ? 'relative z-10 shrink-0 pt-[54px] rt-dark text-white [&_button]:text-white'
             : 'relative z-10 shrink-0 pt-[54px] bg-[#F5F6F7] dark:bg-[#111214]'
         }
       >
@@ -6950,7 +6972,9 @@ function ChatPage({
           <span
             data-testid="qq-chat-back-badge"
             aria-label={`${otherUnread} 条未读`}
-            className="-ml-1 flex h-[20px] min-w-[20px] items-center justify-center rounded-full bg-black/[0.06] px-[5px] text-[12px] font-medium leading-none text-black/70 dark:bg-white/[0.14] dark:text-white/85"
+          className={`-ml-1 flex h-[20px] min-w-[20px] items-center justify-center rounded-full px-[5px] text-[12px] font-medium leading-none ${
+            retro ? 'bg-white/[0.14] text-white/85' : 'bg-black/[0.06] text-black/70 dark:bg-white/[0.14] dark:text-white/85'
+          }`}
           >
             {otherUnread > 99 ? '99+' : otherUnread}
           </span>
@@ -7026,7 +7050,9 @@ function ChatPage({
           <div className="flex items-center gap-1.5">
             <span
               data-testid="qq-chat-title"
-              className={`truncate text-[17px] font-semibold leading-tight ${streaming || delivering ? 'text-black/45 dark:text-white/45' : ''}`}
+              className={`truncate text-[17px] font-semibold leading-tight ${
+                streaming || delivering ? (retro ? 'text-white/45' : 'text-black/45 dark:text-white/45') : ''
+              }`}
             >
               {streaming || delivering ? '正在输入中…' : peer.name}
             </span>
@@ -7034,7 +7060,7 @@ function ChatPage({
             <CoupleMark contactId={peer.id} size={20} testId="qq-chat-couple-mark" />
             {flags.muted === true && (
               <BellOff
-                className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                className={`h-4 w-4 shrink-0 ${retro ? 'text-white/60' : 'text-black/30 dark:text-white/30'}`}
                 strokeWidth={2}
                 aria-label="消息免打扰"
               />
@@ -7058,7 +7084,7 @@ function ChatPage({
           className={liquid ? 'lg-chip grid h-[36px] w-[36px] place-items-center rounded-full active:opacity-60' : 'grid h-9 w-9 place-items-center rounded-full active:bg-black/5'}
           onClick={() => setSettingsOpen(true)}
         >
-          <Menu className="h-[22px] w-[22px] text-black/70 dark:text-white/70" strokeWidth={2.2} />
+          <Menu className={`h-[22px] w-[22px] ${retro ? 'text-white/70' : 'text-black/70 dark:text-white/70'}`} strokeWidth={2.2} />
         </button>
         </div>
         )}
@@ -7693,7 +7719,7 @@ function ChatPage({
       </div>
 
       {/* 底部：输入行 + 六图标工具栏 + 加号面板（弹出时输入框与工具栏被整体顶起，跟随面板上浮）；多选模式下变为批量操作栏 */}
-      <div className={`relative z-10 shrink-0 ${liquid ? 'bg-transparent' : 'bg-white dark:bg-[#1B1C1F]'}`}>
+      <div className={`relative z-10 shrink-0 ${liquid ? 'bg-transparent' : retro ? 'rt-inputbar' : 'bg-white dark:bg-[#1B1C1F]'}`}>
         {selectMode ? (
           <div className="flex items-center justify-around px-6 pb-[22px] pt-3" data-testid="qq-select-bar">
             <button
@@ -7845,6 +7871,8 @@ function ChatPage({
               className={
                 liquid
                   ? 'max-h-[132px] min-h-[40px] w-full overflow-y-auto rounded-full lg-input py-[9px] pl-4 pr-10 text-[15px] leading-[22px] outline-none'
+                  : retro
+                  ? 'max-h-[132px] min-h-[40px] w-full overflow-y-auto rt-input rounded-[4px] py-[9px] pl-3.5 pr-10 text-[15px] leading-[22px] outline-none text-black'
                   : 'max-h-[132px] min-h-[40px] w-full overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-10 text-[15px] leading-[22px] outline-none dark:border-white/[0.08] dark:bg-white/[0.07]'
               }
             />
@@ -7875,12 +7903,16 @@ function ChatPage({
               if (input.trim() || pendingImgs.length > 0) void send();
               else dispatchBatch();
             }}
-            className={`h-[40px] shrink-0 ${liquid ? 'rounded-full' : 'rounded-[12px]'} px-5 text-[16px] font-medium text-white transition-all duration-150 ${
+            className={`h-[40px] shrink-0 ${liquid ? 'rounded-full' : retro ? 'rt-send-qq rounded-[4px]' : 'rounded-[12px]'} px-5 text-[16px] ${
+              retro ? 'font-semibold text-[#152A42]' : 'font-medium text-white'
+            } transition-all duration-150 ${
               (input.trim() || canDispatch || pendingImgs.length > 0) && !streaming
-                ? 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95'
+                ? retro
+                  ? 'active:scale-[0.97]'
+                  : 'shadow-[0_2px_10px_rgba(0,153,255,0.30)] active:scale-[0.97] active:brightness-95'
                 : 'opacity-90'
             }`}
-            style={{ backgroundColor: (input.trim() || canDispatch || pendingImgs.length > 0) && !streaming ? QQ_BLUE : '#8AD4F7' }}
+            style={retro ? undefined : { backgroundColor: (input.trim() || canDispatch || pendingImgs.length > 0) && !streaming ? QQ_BLUE : '#8AD4F7' }}
           >
             发送
           </button>
@@ -11478,6 +11510,7 @@ function MessagesPage({
   me,
   contacts,
   liquid = false,
+  retro = false,
   onOpenChat,
   onOpenGroup,
   onOpenDrawer,
@@ -11491,6 +11524,8 @@ function MessagesPage({
   contacts: ContactRecord[];
   /** 液态玻璃主题（MainScreen 下发）：搜索胶囊玻璃化 + 会话列表玻璃卡 + 滚动底部为悬浮 TabBar 让位 */
   liquid?: boolean;
+  /** 古早主题（MainScreen 下发）：头部银灰导航条 + 搜索框白底内凹 + 会话列表白色硬边分组卡 */
+  retro?: boolean;
   onOpenChat: (c: ContactRecord) => void;
   /** 打开某个 QQ 群聊（群会话行） */
   onOpenGroup: (g: ChatGroup) => void;
@@ -11739,6 +11774,7 @@ function MessagesPage({
         user={me}
         title={me.name}
         subtitle={<OnlineBadge />}
+        retro={retro}
         onAvatar={onAvatar}
         action={
           <div className="relative">
@@ -11823,6 +11859,8 @@ function MessagesPage({
           className={
             liquid
               ? 'flex h-[36px] w-full items-center gap-1.5 rounded-full lg-search px-3 text-left'
+              : retro
+              ? 'flex h-[36px] w-full items-center gap-1.5 rt-search px-3 text-left'
               : 'flex h-[36px] w-full items-center gap-1.5 rounded-full bg-black/[0.05] px-3 text-left active:bg-black/[0.08] dark:bg-white/[0.08] dark:active:bg-white/[0.12]'
           }
         >
@@ -11843,7 +11881,7 @@ function MessagesPage({
           : [conversations]
         ).map((group, gi) =>
           group.length > 0 || !liquid ? (
-            <div key={gi} className={liquid ? `lg-panel mx-2.5 overflow-hidden ${gi > 0 ? 'mt-2.5' : ''}` : ''}>
+            <div key={gi} className={liquid ? `lg-panel mx-2.5 overflow-hidden ${gi > 0 ? 'mt-2.5' : ''}` : retro ? 'mx-2 rt-panel overflow-hidden' : ''}>
               {group.map((row) => {
           const pinned = pinSet.has(row.key);
           const unreadCount = unreads[row.key] ?? 0;
@@ -11997,6 +12035,7 @@ function ContactsPage({
   me,
   contacts,
   liquid = false,
+  retro = false,
   onOpenProfile,
   onOpenMeProfile,
   onAvatar,
@@ -12009,6 +12048,8 @@ function ContactsPage({
   contacts: ContactRecord[];
   /** 液态玻璃主题（MainScreen 下发）：搜索胶囊/列表分组玻璃化 + 滚动底部为悬浮 TabBar 让位 */
   liquid?: boolean;
+  /** 古早主题（MainScreen 下发）：头部银灰导航条 + 搜索框白底内凹 + 列表白色硬边分组卡 */
+  retro?: boolean;
   onOpenProfile: (c: ContactRecord) => void;
   onOpenMeProfile: () => void;
   onAvatar: () => void;
@@ -12041,8 +12082,8 @@ function ContactsPage({
 
   return (
     <div className="flex h-full flex-col">
-      {/* 顶部：简洁白底头部（背景封面图与打卡/状态 pills 已按需求删除），头像 + 标题 + 加好友 */}
-      <div className="flex shrink-0 items-center gap-3 px-4 pb-1 pt-3">
+      {/* 顶部：简洁头部（背景封面图与打卡/状态 pills 已按需求删除），头像 + 标题 + 加好友；古早主题 = 银灰拟物导航条 */}
+      <div className={`flex shrink-0 items-center gap-3 px-4 pb-1 pt-3 ${retro ? 'rt-bar' : ''}`}>
         <button type="button" aria-label="个人资料" onClick={onAvatar} className="rounded-full active:opacity-80">
           <QqAvatar src={me.avatar} alt={me.name} size={44} />
         </button>
@@ -12058,12 +12099,12 @@ function ContactsPage({
         </button>
       </div>
       <div className="px-4 pb-2 pt-3">
-        <QqSearch value={q} onChange={setQ} liquid={liquid} />
+        <QqSearch value={q} onChange={setQ} liquid={liquid} retro={retro} />
       </div>
 
       <div className={liquid ? 'flex-1 overflow-y-auto pb-[88px]' : 'flex-1 overflow-y-auto'} data-testid="qq-contacts-list">
-        {/* 新朋友 / 群通知（液态玻璃主题：合成一张玻璃卡；默认主题无包裹层零变化） */}
-        <div className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : ''}>
+        {/* 新朋友 / 群通知（液态玻璃主题：合成一张玻璃卡；古早主题：白色硬边分组卡；默认主题无包裹层零变化） */}
+        <div className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : retro ? 'mx-2 mt-2 rt-panel overflow-hidden' : ''}>
         <button
           type="button"
           data-testid="qq-contacts-newfriends"
@@ -12106,7 +12147,7 @@ function ContactsPage({
         </div>
 
         {tab === '分组' && (
-          <div className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : ''}>
+          <div className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : retro ? 'mx-2 mt-2 rt-panel overflow-hidden' : ''}>
             {/* 特别关心 */}
             <button
               type="button"
@@ -12185,7 +12226,7 @@ function ContactsPage({
         )}
 
         {tab === '好友' && (
-          <div className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : ''}>
+          <div className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : retro ? 'mx-2 mt-2 rt-panel overflow-hidden' : ''}>
             {/* 我：好友列表首位（搜索时仅名字命中才显示） */}
             {(!kw || me.name.toLowerCase().includes(kw)) && (
               <button
@@ -12219,7 +12260,7 @@ function ContactsPage({
         )}
 
         {tab === '群聊' && (
-          <div className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : ''}>
+          <div className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : retro ? 'mx-2 mt-2 rt-panel overflow-hidden' : ''}>
             {/* 发起群聊入口已迁移至消息页右上角「+」菜单（对照需求：创建群聊移到加号里面） */}
             {filteredGroups.length === 0 ? (
               <p className="mt-10 text-center text-[13px] text-black/30 dark:text-white/30">暂无群聊，点消息页右上角「+」创建</p>
@@ -12267,9 +12308,21 @@ const DISCOVER_ITEMS: { key: string; label: string; icon: React.ReactNode; color
   { key: 'feedback', label: '意见反馈', icon: <MessageSquarePlus className="h-[22px] w-[22px]" strokeWidth={2} />, color: '#1E6FFF' },
 ];
 
+/** 古早主题动态页图标配色（DISCOVER_ITEMS.key → RetroIc tone；任务指定：zone/game/settings/farm 对应 + 其余 search/zone 兑底） */
+const RETRO_DISCOVER_TONES: Record<string, string> = {
+  zone: RETRO_ICON_TONES.zone,
+  game: RETRO_ICON_TONES.games,
+  'moments-settings': RETRO_ICON_TONES.settings,
+  farm: RETRO_ICON_TONES.farm,
+  nearby: RETRO_ICON_TONES.search,
+  novel: RETRO_ICON_TONES.zone,
+  feedback: RETRO_ICON_TONES.search,
+};
+
 function DiscoverPage({
   me,
   liquid = false,
+  retro = false,
   onAvatar,
   onZone,
   onOpenMomentsSettings,
@@ -12279,6 +12332,8 @@ function DiscoverPage({
   me: QQUser;
   /** 液态玻璃主题（MainScreen 下发）：搜索胶囊玻璃化 + 每行独立玻璃卡（参考图 2 发现页同款） */
   liquid?: boolean;
+  /** 古早主题（MainScreen 下发）：头部银灰导航条 + 搜索框白底内凹 + 彩色图标套拟物底座 */
+  retro?: boolean;
   onAvatar: () => void;
   onZone: () => void;
   onOpenMomentsSettings: () => void;
@@ -12291,6 +12346,7 @@ function DiscoverPage({
       <QqHeader
         user={me}
         title="动态"
+        retro={retro}
         onAvatar={onAvatar}
         action={
           <button type="button" aria-label="动态管理" className="rounded-full p-1.5 active:bg-black/5" onClick={() => onToast('动态管理暂未开放')}>
@@ -12299,15 +12355,15 @@ function DiscoverPage({
         }
       />
       <div className="px-4 pb-2 pt-1">
-        <QqSearch value="" onChange={() => undefined} liquid={liquid} />
+        <QqSearch value="" onChange={() => undefined} liquid={liquid} retro={retro} />
       </div>
       <div
         className={liquid ? 'flex-1 overflow-y-auto pb-[88px]' : 'flex-1 overflow-y-auto pb-4'}
         data-testid="qq-discover-list"
       >
         {DISCOVER_ITEMS.map((it, idx) => (
-          <div key={it.key} className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : ''}>
-            {!liquid && (idx === 1 || idx === 5 || idx === 6) && (
+          <div key={it.key} className={liquid ? 'lg-panel mx-2.5 mt-2.5 overflow-hidden' : retro ? 'mx-2 mt-2 rt-panel overflow-hidden' : ''}>
+            {!liquid && !retro && (idx === 1 || idx === 5 || idx === 6) && (
               <div className="h-2 bg-black/[0.03] dark:bg-white/[0.04]" aria-hidden="true" />
             )}
             <button
@@ -12320,9 +12376,16 @@ function DiscoverPage({
               }}
               className="flex w-full items-center gap-4 bg-transparent px-4 py-3.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.05]"
             >
-              <span className="grid h-[38px] w-[38px] shrink-0 place-items-center rounded-[10px]" style={{ color: it.color }} aria-hidden="true">
-                {it.icon}
-              </span>
+              {retro ? (
+                /* 古早主题：彩色图标套 RetroIc 拟物底座（复古渐变 tone + 白色线稿，iOS 6 设置页风） */
+                <RetroIc tone={RETRO_DISCOVER_TONES[it.key] ?? RETRO_ICON_TONES.search} size={38} radius={10}>
+                  <span className="grid place-items-center text-white" aria-hidden="true">{it.icon}</span>
+                </RetroIc>
+              ) : (
+                <span className="grid h-[38px] w-[38px] shrink-0 place-items-center rounded-[10px]" style={{ color: it.color }} aria-hidden="true">
+                  {it.icon}
+                </span>
+              )}
               <span className="flex-1 truncate text-[16px]">{it.label}</span>
               {it.key === 'zone' && zoneBadge > 0 && (
                 <span
@@ -17274,6 +17337,8 @@ function MainScreen({
   // 聊天页铬件（ChatPage 内自算）；默认主题时所有分支回退原类，像素级保持现状
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
   const liquid = isLiquidTheme(bubbleStyle, 'qq');
+  // 古早主题（retro，第五十四轮）：tabs 三页白硬边分组卡 + 银灰拟物 TabBar/导航（ChatPage 铬件自算）
+  const retro = isRetroTheme(bubbleStyle, 'qq');
 
   // 单聊卡片过期清算（QQ App 打开挂载即扫一遍）：AI 发的红包/转账超 24h 未领取/未收款 →
   // 过期退回（卡片置终态 + 「XX的红包/转账已过期退回」提示行；各聊天页挂载时还会再触发，模块层防重入）
@@ -17600,8 +17665,9 @@ function MainScreen({
 
   return (
     <div
-      className="relative flex h-full w-full flex-col bg-[#FAFAFC] text-[#1F2329] dark:bg-[#16171A] dark:text-white"
+      className={`relative flex h-full w-full flex-col ${retro ? 'rt-root' : 'bg-[#FAFAFC] dark:bg-[#16171A]'} text-[#1F2329] dark:text-white`}
       data-liquid-theme={liquid ? 'true' : 'false'}
+      data-rt-theme={retro ? 'true' : 'false'}
     >
       {route.page === 'chat' && chatPeer ? (
         <ChatPage
@@ -17956,6 +18022,7 @@ function MainScreen({
                 me={me}
                 contacts={contacts}
                 liquid={liquid}
+                retro={retro}
                 onOpenChat={openChatOf}
                 onOpenGroup={openGroupOf}
                 onOpenDrawer={() => setDrawerOpen(true)}
@@ -17971,6 +18038,7 @@ function MainScreen({
                 me={me}
                 contacts={contacts}
                 liquid={liquid}
+                retro={retro}
                 onOpenProfile={(c) => setRoute({ page: 'friend-profile', contactId: c.id })}
                 onOpenMeProfile={() => setRoute({ page: 'profile' })}
                 onAvatar={() => setDrawerOpen(true)}
@@ -17984,6 +18052,7 @@ function MainScreen({
               <DiscoverPage
                 me={me}
                 liquid={liquid}
+                retro={retro}
                 onAvatar={() => setDrawerOpen(true)}
                 onZone={() => setRoute({ page: 'zone' })}
                 onOpenMomentsSettings={() => setRoute({ page: 'momentsSettings' })}
@@ -17999,10 +18068,12 @@ function MainScreen({
             className={
               liquid
                 ? 'lg-tabbar absolute inset-x-3 bottom-[12px] z-30'
+                : retro
+                ? 'rt-tabbar shrink-0 pb-[12px]'
                 : 'shrink-0 border-t border-black/[0.05] bg-white pb-[12px] dark:border-white/[0.06] dark:bg-[#1B1C1F]'
             }
           >
-          <nav className={liquid ? 'flex h-[50px] items-stretch px-1' : 'flex h-[44px] items-stretch'} aria-label="QQ 标签">
+          <nav className={liquid ? 'flex h-[50px] items-stretch px-1' : retro ? 'flex h-[46px] items-stretch' : 'flex h-[44px] items-stretch'} aria-label="QQ 标签">
             {TAB_DEFS.map((t) => {
               const active = !staleGroupRoute && route.page === 'tabs' && route.tab === t.id;
               return (
@@ -18012,16 +18083,18 @@ function MainScreen({
                   data-testid={`qq-tab-${t.id}`}
                   onClick={() => setRoute({ page: 'tabs', tab: t.id })}
                   aria-label={t.label}
-                  className={`flex flex-1 flex-col items-center justify-center gap-[3px] ${active ? TAB_ACTIVE : 'text-black/55 dark:text-white/55'}`}
+                  className={`flex flex-1 flex-col items-center justify-center gap-[3px] ${
+                    active ? (retro ? 'rt-tab-on' : TAB_ACTIVE) : retro ? 'text-[#6A6E7C]' : 'text-black/55 dark:text-white/55'
+                  }`}
                 >
-                  <span className={`relative ${active ? '[&>svg]:fill-current' : ''}`}>
-                    {t.icon}
+                  <span className={`relative ${active && !retro ? '[&>svg]:fill-current' : ''}`}>
+                    {retro ? <RtTabIconOf id={t.id} /> : t.icon}
                     {t.id === '消息' && totalUnread > 0 && (
                       <span
                         data-testid="qq-tab-badge-消息"
                         aria-label={`${totalUnread} 条未读`}
                         className={`absolute -right-[10px] -top-[6px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#F5455C] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ${
-                          liquid ? 'ring-white/80 dark:ring-white/20' : 'ring-white dark:ring-[#1B1C1F]'
+                          liquid ? 'ring-white/80 dark:ring-white/20' : retro ? 'ring-[#C9CBD2]' : 'ring-white dark:ring-[#1B1C1F]'
                         }`}
                       >
                         {totalUnread > 99 ? '99+' : totalUnread}
@@ -18032,14 +18105,14 @@ function MainScreen({
                         data-testid="qq-tab-badge-动态"
                         aria-label={`空间动态 ${qqNoticeBadge.count} 条新消息`}
                         className={`absolute -right-[10px] -top-[6px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#F5455C] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ${
-                          liquid ? 'ring-white/80 dark:ring-white/20' : 'ring-white dark:ring-[#1B1C1F]'
+                          liquid ? 'ring-white/80 dark:ring-white/20' : retro ? 'ring-[#C9CBD2]' : 'ring-white dark:ring-[#1B1C1F]'
                         }`}
                       >
                         {qqNoticeBadge.count > 99 ? '99+' : qqNoticeBadge.count}
                       </span>
                     )}
                   </span>
-                  <span className="text-[10px]">{t.label}</span>
+                  <span className={`text-[10px] ${retro ? 'font-semibold' : ''}`}>{t.label}</span>
                 </button>
               );
             })}

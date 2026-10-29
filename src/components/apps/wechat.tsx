@@ -133,6 +133,7 @@ import {
   WxIcSettings,
   WxTabCompassIcon,
 } from './wx-icons';
+import { RtChatIcon, RtContactsIcon, RtDiscoverIcon, RtMeIcon, RetroIc, RETRO_ICON_TONES } from './retro-icons';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import {
   buildRichRules,
@@ -237,7 +238,7 @@ import { ThemeStylePage } from './bubble-style-settings';
 import { liquidTabLabel, LIQUID_TABS, type LiquidTabKey } from '@/lib/ios/liquid-skin';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { BubbleTail } from './bubble-tail';
-import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
+import { bubbleVisual, isLiquidTheme, isRetroTheme } from '@/lib/ios/bubble-style';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
 import { StackFitText } from './shrink-text';
@@ -5024,6 +5025,8 @@ function ChatPage({
   // 液态玻璃主题（气泡样式设置 › 界面主题）：只接管页面铭件（根底色/顶栏胶囊/输入胶囊/输入框），
   // 气泡仍由上方 bubbleStyle 装扮系统管、聊天背景层一行不动；默认主题全部走原类（像素级保持现状）
   const liquid = isLiquidTheme(bubbleStyle, 'wx');
+  // 古早主题（第五十四轮）：2012-2014 拟物风——聊天页深灰安卓顶栏 + 灰底 + 拟物输入条；气泡由 bubbleVisual 接管
+  const retro = isRetroTheme(bubbleStyle, 'wx');
   // 液态玻璃皮肤（本轮新增）：顶栏名字区显示模式（text/avatarName/dual/dualName；仅液态主题生效）
   const liquidSkinWx = useSettings((s) => s.liquidSkin.wx);
   // 聊天输入框自定义（本轮新增）：输入框占位文字 + 加号面板功能（默认/液态两种主题都生效）
@@ -8773,9 +8776,12 @@ function ChatPage({
     <div
       ref={pageRef}
       data-liquid-theme={liquid ? 'true' : 'false'}
+      data-rt-theme={retro ? 'true' : 'false'}
       className={
         liquid
           ? 'lg-root absolute inset-0 z-20 flex h-full w-full flex-col text-black dark:text-white'
+          : retro
+          ? 'rt-chat-bg absolute inset-0 z-20 flex h-full w-full flex-col text-black dark:text-white'
           : 'absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white'
       }
     >
@@ -8795,6 +8801,9 @@ function ChatPage({
             ? /* 液态（第四十五轮，用户指定）：删背景遮罩模糊带——顶栏完全透明悬浮，
                 名字改椭圆形玻璃胶囊包裹（参考图「永恩」同款） */
               'pointer-events-none absolute inset-x-0 top-0 z-20 shrink-0 bg-transparent pt-[42px]'
+            : retro
+            ? /* 古早（第五十四轮）：深灰安卓顶栏渐变 + 白字（lucide 图标继承 currentColor） */
+              'rt-dark relative z-10 shrink-0 pt-[42px] text-white [&_button]:text-white'
             : 'relative z-10 shrink-0 bg-[#EDEDED] pt-[42px] dark:bg-[#111111]'
         }
       >
@@ -8862,6 +8871,8 @@ function ChatPage({
               className={
                 liquid
                   ? 'lg-chip -ml-1 flex h-[20px] min-w-[20px] items-center justify-center rounded-full px-[5px] text-[11px] font-medium leading-none text-black/75 dark:text-white/85'
+                  : retro
+                  ? '-ml-0.5 flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-white/20 px-[5px] text-[12px] font-medium leading-none text-white'
                   : '-ml-0.5 flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-black/[0.08] px-[5px] text-[12px] font-medium leading-none text-black/75 dark:bg-white/[0.16] dark:text-white/85'
               }
             >
@@ -8895,7 +8906,7 @@ function ChatPage({
                 </span>
                 {flags.muted === true && (
                   <BellOff
-                    className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                    className={`h-4 w-4 shrink-0 ${retro ? 'text-white/60' : 'text-black/30 dark:text-white/30'}`}
                     strokeWidth={2}
                     aria-label="消息免打扰"
                   />
@@ -8924,7 +8935,7 @@ function ChatPage({
                 ) : null}
                 {flags.muted === true && (
                   <BellOff
-                    className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                    className={`h-4 w-4 shrink-0 ${retro ? 'text-white/60' : 'text-black/30 dark:text-white/30'}`}
                     strokeWidth={2}
                     aria-label="消息免打扰"
                   />
@@ -8942,7 +8953,7 @@ function ChatPage({
                 <span className="truncate">{streaming || delivering ? '正在输入中…' : peer.name}</span>
                 {flags.muted === true && (
                   <BellOff
-                    className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                    className={`h-4 w-4 shrink-0 ${retro ? 'text-white/60' : 'text-black/30 dark:text-white/30'}`}
                     strokeWidth={2}
                     aria-label="消息免打扰"
                   />
@@ -9624,7 +9635,7 @@ function ChatPage({
       </div>
 
       {/* 底部：输入栏 + 加号面板（面板展开时输入栏保持在上方）；多选模式下变为批量删除/分享/收藏操作栏 */}
-      <div className={liquid ? 'relative z-10 shrink-0 bg-transparent' : 'relative z-10 shrink-0 border-t border-black/[0.07] bg-[#EDEDED] dark:border-white/[0.06] dark:bg-[#111111]'}>
+      <div className={liquid ? 'relative z-10 shrink-0 bg-transparent' : retro ? 'rt-inputbar relative z-10 shrink-0' : 'relative z-10 shrink-0 border-t border-black/[0.07] bg-[#EDEDED] dark:border-white/[0.06] dark:bg-[#111111]'}>
         {selectMode ? (
           <div className="flex items-center justify-around px-6 pb-[26px] pt-3" data-testid="wx-select-bar">
             <button
@@ -9763,6 +9774,9 @@ function ChatPage({
                 className={
                   liquid
                     ? /* 液态（用户指定）：玻璃圆圈包裹黑圈语音钮 */ 'lg-chip flex h-[40px] w-[40px] items-center justify-center rounded-full transition-transform active:scale-95'
+                    : retro
+                    ? /* 古早（第五十四轮）：拟物方角按钮（rt-btn 材质） */
+                      'rt-btn flex h-[32px] w-[32px] items-center justify-center text-[#3A3E4C] active:opacity-70'
                     : 'flex h-[30px] w-[30px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 transition-colors active:bg-black/[0.05] dark:border-white/70 dark:text-white/90 dark:active:bg-white/10'
                 }
               >
@@ -9815,6 +9829,8 @@ function ChatPage({
                   className={`block max-h-[132px] w-full overflow-y-auto py-[8px] pl-3.5 pr-11 text-[16px] leading-[22px] caret-[#07C160] outline-none transition-all duration-200 selection:bg-[#07C160]/20 ${
                     liquid
                       ? /* 液态：毛玻璃椭圆输入胶囊（比背景稍深一档 + 内阴影下陷感） */ 'lg-input min-h-[36px] rounded-full shadow-[inset_0_1px_3px_rgba(31,38,135,0.10)]'
+                      : retro
+                      ? /* 古早（第五十四轮）：白底内凹硬边输入框 */ 'rt-input min-h-[34px] rounded-[4px] text-black'
                       : 'min-h-[34px] rounded-[4px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] dark:bg-[#232323] dark:shadow-none'
                   }`}
                 />
@@ -9913,6 +9929,9 @@ function ChatPage({
                 className={
                   liquid
                     ? 'flex h-[34px] shrink-0 items-center justify-center rounded-full bg-[#07C160] px-[18px] text-[14px] font-medium text-white shadow-[0_3px_10px_rgba(7,193,96,0.35)] transition-transform active:scale-95 active:bg-[#06AD56] disabled:opacity-50'
+                    : retro
+                    ? /* 古早（第五十四轮）：复古绿渐变拟物发送键 */
+                      'rt-send flex h-9 shrink-0 items-center justify-center px-4 text-[14px] font-semibold text-[#1E3A0C] active:opacity-80 disabled:opacity-50'
                     : 'flex h-9 shrink-0 items-center justify-center rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50'
                 }
               >
@@ -14610,6 +14629,8 @@ function MainScreen({
    *  默认主题全部走原类（像素级保持现状），主题只接管页面铭件、不动气泡与功能逻辑 */
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
   const liquid = isLiquidTheme(bubbleStyle, 'wx');
+  /** 古早主题（第五十四轮）：四 tab 页面铭件（淡青灰底/银灰导航/白硬边分组卡/拟物 TabBar）切换拟物复古视觉 */
+  const retro = isRetroTheme(bubbleStyle, 'wx');
   /** 液态玻璃皮肤（本轮新增）：分类标签自定义文字 / 列表小组件开关（液态主题下生效） */
   const liquidSkinWx = useSettings((s) => s.liquidSkin.wx);
   /** 「让好友发一条」弹层与生成中的联系人 id */
@@ -15952,11 +15973,12 @@ function MainScreen({
     <div
       ref={rootRef}
       data-liquid-theme={liquid ? 'true' : 'false'}
-      className="relative flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white"
+      data-rt-theme={retro ? 'true' : 'false'}
+      className={`relative flex h-full w-full flex-col ${retro ? 'rt-root' : 'bg-[#EDEDED] dark:bg-[#111111]'} text-black dark:text-white`}
     >
       {/* 顶栏：默认 =（微信：返回+搜索+＋；通讯录：＋；发现/我：无图标；左侧返回键退出微信回主屏）
           液态（第四十四轮，用户指定）：左上头像+名字无椭圆包裹、只在「微信」tab 显示；标题纯文字居中；右＝圆形玻璃＋钮 */}
-      <div className="shrink-0 pt-[54px]">
+      <div className={`shrink-0 pt-[54px] ${retro ? 'rt-bar' : ''}`}>
         {liquid ? (
         <div className="relative flex h-12 items-center gap-2 px-2.5">
           {tab === 'chats' && (
@@ -16014,12 +16036,12 @@ function MainScreen({
               aria-label="返回主屏幕"
               data-testid="wx-exit"
               onClick={onExit}
-              className="-ml-1.5 p-1 text-black/75 active:opacity-50 dark:text-white/75"
+              className={`-ml-1.5 p-1 ${retro ? 'text-[#3A3E4C]' : 'text-black/75 dark:text-white/75'} active:opacity-50`}
             >
               <ChevronLeft className="h-[23px] w-[23px]" strokeWidth={2.2} />
             </button>
           </div>
-          <div className="text-[17px] font-medium">{TITLES[tab]}</div>
+          <div className={`text-[17px] ${retro ? 'font-bold text-[#3A3E4C]' : 'font-medium'}`}>{TITLES[tab]}</div>
           <div className="flex flex-1 items-center justify-end gap-5">
             {tab === 'chats' && (
               <button
@@ -16027,7 +16049,7 @@ function MainScreen({
                 aria-label="搜索"
                 data-testid="wx-search-entry"
                 onClick={() => setPage('search')}
-                className="text-black/75 active:opacity-50 dark:text-white/75"
+                className={`${retro ? 'text-[#3A3E4C]' : 'text-black/75 dark:text-white/75'} active:opacity-50`}
               >
                 <Search className="h-[21px] w-[21px]" strokeWidth={1.9} />
               </button>
@@ -16044,7 +16066,7 @@ function MainScreen({
                   }
                   setMenuOpen(true);
                 }}
-                className="text-black/75 active:opacity-50 dark:text-white/75"
+                className={`${retro ? 'text-[#3A3E4C]' : 'text-black/75 dark:text-white/75'} active:opacity-50`}
               >
                 <Plus className="h-[22px] w-[22px]" strokeWidth={1.9} />
               </button>
@@ -16088,7 +16110,7 @@ function MainScreen({
               ))}
             </div>
           ) : (
-          <div className="absolute right-3 top-[94px] z-40 w-[152px] overflow-hidden rounded-[8px] bg-[#4C4C4C] text-white shadow-xl dark:bg-[#383838]">
+          <div className={`absolute right-3 top-[94px] z-40 w-[152px] overflow-hidden rounded-[6px] shadow-[0_4px_16px_rgba(0,0,0,0.25)] ${retro ? 'border border-[#9A9CA6] bg-white text-[#2E2E33]' : 'rounded-[8px] bg-[#4C4C4C] text-white shadow-xl dark:bg-[#383838]'}`}>
             <button
               type="button"
               data-testid="wx-menu-addfriend"
@@ -16096,7 +16118,7 @@ function MainScreen({
                 setMenuOpen(false);
                 setPage('addFriend');
               }}
-              className="flex w-full items-center gap-2.5 px-4 py-[11px] text-left text-[15.5px] active:bg-white/10"
+              className={`flex w-full items-center gap-2.5 px-4 py-[11px] text-left text-[15.5px] ${retro ? 'active:bg-black/[0.06]' : 'active:bg-white/10'}`}
             >
               <UserPlus className="h-[18px] w-[18px]" strokeWidth={1.9} />
               添加朋友
@@ -16108,7 +16130,7 @@ function MainScreen({
                 setMenuOpen(false);
                 setGroupPage('create');
               }}
-              className="flex w-full items-center gap-2.5 border-t border-white/10 px-4 py-[11px] text-left text-[15.5px] active:bg-white/10"
+              className={`flex w-full items-center gap-2.5 border-t px-4 py-[11px] text-left text-[15.5px] ${retro ? 'border-black/[0.08] active:bg-black/[0.06]' : 'border-white/10 active:bg-white/10'}`}
             >
               <Users className="h-[18px] w-[18px]" strokeWidth={1.9} />
               发起群聊
@@ -16120,7 +16142,7 @@ function MainScreen({
                 setMenuOpen(false);
                 openScan('wechat');
               }}
-              className="flex w-full items-center gap-2.5 border-t border-white/10 px-4 py-[11px] text-left text-[15.5px] active:bg-white/10"
+              className={`flex w-full items-center gap-2.5 border-t px-4 py-[11px] text-left text-[15.5px] ${retro ? 'border-black/[0.08] active:bg-black/[0.06]' : 'border-white/10 active:bg-white/10'}`}
             >
               <ScanLine className="h-[18px] w-[18px]" strokeWidth={1.9} />
               扫一扫
@@ -16132,7 +16154,7 @@ function MainScreen({
                 setMenuOpen(false);
                 showToast('「收付款」暂未开放');
               }}
-              className="flex w-full items-center gap-2.5 border-t border-white/10 px-4 py-[11px] text-left text-[15.5px] active:bg-white/10"
+              className={`flex w-full items-center gap-2.5 border-t px-4 py-[11px] text-left text-[15.5px] ${retro ? 'border-black/[0.08] active:bg-black/[0.06]' : 'border-white/10 active:bg-white/10'}`}
             >
               <Banknote className="h-[18px] w-[18px]" strokeWidth={1.9} />
               收付款
@@ -16217,7 +16239,7 @@ function MainScreen({
                 </div>
               </div>
             )}
-            <div className={liquid ? 'px-2.5 pb-2' : 'min-h-full bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'px-2.5 pb-2' : retro ? 'mx-2 min-h-full rounded-[8px] bg-white shadow-[inset_0_0_0_1px_#C3C5CC]' : 'min-h-full bg-white dark:bg-[#1A1A1A]'}>
               {(liquid ? visibleSessions : sessions).length === 0 && (
                 <div className="py-16 text-center">
                   <p className="text-[14px] text-black/35 dark:text-white/35">{liquid && cat !== 'all' ? '该分类下暂无会话' : '还没有会话'}</p>
@@ -16241,7 +16263,7 @@ function MainScreen({
         {tab === 'contacts' && (
           <div className="relative min-h-full pb-4">
             {/* 功能入口 */}
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="新的朋友"
@@ -16292,7 +16314,7 @@ function MainScreen({
             </div>
 
             {/* 我（本人）—— 首次登录通讯录只有这一位；点击进入与好友同款的详情页 */}
-            <div className={liquid ? 'mx-2.5 mt-2.5 lg-panel' : 'mt-2 bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 mt-2.5 lg-panel' : retro ? 'mx-2 mt-2 rt-panel' : 'mt-2 bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label={me.name}
@@ -16318,7 +16340,7 @@ function MainScreen({
                     <p className="sticky top-0 bg-[#EDEDED] px-4 py-1 text-[13px] text-black/50 dark:bg-[#111111] dark:text-white/50">
                       {g.letter}
                     </p>
-                    <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+                    <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
                       {g.list.map((c) => (
                         <button
                           key={c.id}
@@ -16360,7 +16382,7 @@ function MainScreen({
 
         {tab === 'discover' && (
           <div className={liquid ? 'space-y-2.5 pb-6' : 'space-y-2 pb-6'}>
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="朋友圈"
@@ -16371,59 +16393,59 @@ function MainScreen({
                   setMomentsScope('all');
                   setPage('moments');
                 }}
-                icon={<WxIcMoments small />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.moments}><WxIcMoments small /></RetroIc> : <WxIcMoments small />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="视频号"
                 onClick={() => showToast('「视频号」暂未开放')}
-                icon={<WxIcChannels />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.channels}><WxIcChannels /></RetroIc> : <WxIcChannels />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="扫一扫"
                 onClick={() => openScan('wechat')}
-                icon={<WxIcScan />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.scan}><WxIcScan /></RetroIc> : <WxIcScan />}
               />
               <WxMenuRow
                 label="听一听"
                 onClick={() => showToast('「听一听」暂未开放')}
-                icon={<WxIcListen />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.listen}><WxIcListen /></RetroIc> : <WxIcListen />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="看一看"
                 onClick={() => setPage('look')}
-                icon={<WxIcStories />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.stories}><WxIcStories /></RetroIc> : <WxIcStories />}
               />
               <WxMenuRow
                 label="搜一搜"
                 onClick={() => showToast('「搜一搜」暂未开放')}
-                icon={<WxIcSearch />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.search}><WxIcSearch /></RetroIc> : <WxIcSearch />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="游戏"
                 onClick={() => showToast('「游戏」暂未开放')}
-                icon={<WxIcGames />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.games}><WxIcGames /></RetroIc> : <WxIcGames />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               {/* 主题（发现页入口；界面内毛玻璃胶囊提供主题/气泡两个选择） */}
               <WxMenuRow
                 first
                 label="主题"
                 testId="wx-discover-theme"
                 onClick={() => setPage('dress')}
-                icon={<WxIcTheme />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.theme}><WxIcTheme /></RetroIc> : <WxIcTheme />}
               />
             </div>
           </div>
@@ -16433,7 +16455,7 @@ function MainScreen({
           <div className={liquid ? 'space-y-2.5 pb-6' : 'space-y-2 pb-6'}>
             {/* 名片：默认 = 头像+名字+微信号左对齐（微信原生白底样式，点击进个人信息页）；
                 液态 = 参考图居中名片（大头像居中 + 名字下方 + 「+ 状态 / N 个朋友」胶囊标签） */}
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               {liquid ? (
                 <button
                   type="button"
@@ -16486,23 +16508,23 @@ function MainScreen({
               )}
             </div>
 
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="服务"
                 testId="wx-services-entry"
                 onClick={() => setPage('services')}
-                icon={<WxIcServices />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.wallet}><WxIcServices /></RetroIc> : <WxIcServices />}
               />
             </div>
 
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="收藏"
                 testId="wx-me-favorites"
                 onClick={() => setPage('favorites')}
-                icon={<WxIcFavorites />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.favorites}><WxIcFavorites /></RetroIc> : <WxIcFavorites />}
               />
               <WxMenuRow
                 label="朋友圈"
@@ -16512,35 +16534,35 @@ function MainScreen({
                   setMomentsScope('mine');
                   setPage('moments');
                 }}
-                icon={<WxIcMoments small />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.moments}><WxIcMoments small /></RetroIc> : <WxIcMoments small />}
               />
               <WxMenuRow
                 label="相册"
                 testId="wx-me-album"
                 onClick={() => setPage('album')}
-                icon={<WxIcWorks />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.works}><WxIcWorks /></RetroIc> : <WxIcWorks />}
               />
               <WxMenuRow
                 label="朋友圈设置"
                 testId="wx-me-moments-settings"
                 onClick={() => setPage('momentsSettings')}
-                icon={<WxIcSettings />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.settings}><WxIcSettings /></RetroIc> : <WxIcSettings />}
               />
               <WxMenuRow
                 label="表情"
                 testId="wx-me-stickers"
                 onClick={() => setPage('stickers')}
-                icon={<WxIcSticker />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.sticker}><WxIcSticker /></RetroIc> : <WxIcSticker />}
               />
             </div>
 
-            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="设置"
                 testId="wx-me-settings"
                 onClick={() => setPage('settings')}
-                icon={<WxIcSettings />}
+                icon={retro ? <RetroIc tone={RETRO_ICON_TONES.settings}><WxIcSettings /></RetroIc> : <WxIcSettings />}
               />
             </div>
           </div>
@@ -16553,16 +16575,18 @@ function MainScreen({
         className={
           liquid
             ? 'lg-tabbar absolute inset-x-3 bottom-[12px] z-30'
+            : retro
+            ? /* 古早（第五十四轮）：银灰拟物 TabBar */ 'rt-tabbar shrink-0 pb-[16px]'
             : 'shrink-0 border-t border-black/10 bg-[#F7F7F7] pb-[16px] dark:border-white/10 dark:bg-[#1A1A1A]'
         }
       >
-        <div className={liquid ? 'flex h-[54px] items-stretch px-1' : 'flex h-[46px] items-stretch'}>
+        <div className={liquid ? 'flex h-[54px] items-stretch px-1' : retro ? 'flex h-[48px] items-stretch' : 'flex h-[46px] items-stretch'}>
           {(
             [
-              ['chats', '微信', <MessageCircle key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, true],
-              ['contacts', '通讯录', <Users key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
-              ['discover', '发现', <WxTabCompassIcon key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
-              ['me', '我', <User key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
+              ['chats', '微信', retro ? <RtChatIcon key="i" className="h-[23px] w-[23px]" /> : <MessageCircle key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, true],
+              ['contacts', '通讯录', retro ? <RtContactsIcon key="i" className="h-[23px] w-[23px]" /> : <Users key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
+              ['discover', '发现', retro ? <RtDiscoverIcon key="i" className="h-[23px] w-[23px]" /> : <WxTabCompassIcon key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
+              ['me', '我', retro ? <RtMeIcon key="i" className="h-[23px] w-[23px]" /> : <User key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
             ] as Array<[Tab, string, React.ReactNode, boolean]>
           ).map(([id, label, icon, fillActive]) => {
             const active = tab === id;
@@ -16573,7 +16597,7 @@ function MainScreen({
                 data-testid={`wx-tab-${id}`}
                 onClick={() => setTab(id)}
                 className={`flex flex-1 flex-col items-center justify-center gap-0.5 ${
-                  active ? 'text-[#07C160]' : 'text-black/55 dark:text-white/55'
+                  active ? (retro ? 'rt-tab-on' : 'text-[#07C160]') : retro ? 'text-[#6A6E7C]' : 'text-black/55 dark:text-white/55'
                 }`}
                 aria-label={label}
               >
@@ -16617,14 +16641,14 @@ function MainScreen({
                     )}
                   </span>
                 ) : (
-                <span className={`relative ${active && fillActive ? '[&>svg]:fill-current' : ''}`}>
+                <span className={`relative ${active && fillActive && !retro ? '[&>svg]:fill-current' : ''}`}>
                   {icon}
                   {id === 'chats' && totalUnread > 0 && (
                     <span
                       data-testid="wx-tab-badge-chats"
                       aria-label={`${totalUnread} 条未读`}
                       className={`absolute -right-[8px] -top-[5px] flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ${
-                        liquid ? 'ring-white/80 dark:ring-white/20' : 'ring-[#F7F7F7] dark:ring-[#1A1A1A]'
+                        liquid ? 'ring-white/80 dark:ring-white/20' : retro ? 'ring-[#C9CBD2]' : 'ring-[#F7F7F7] dark:ring-[#1A1A1A]'
                       }`}
                     >
                       {totalUnread > 99 ? '99+' : totalUnread}
@@ -16635,7 +16659,7 @@ function MainScreen({
                       data-testid="wx-tab-badge-discover"
                       aria-label={`朋友圈 ${wxNoticeBadge.count} 条新消息`}
                       className={`absolute -right-[8px] -top-[5px] flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ${
-                        liquid ? 'ring-white/80 dark:ring-white/20' : 'ring-[#F7F7F7] dark:ring-[#1A1A1A]'
+                        liquid ? 'ring-white/80 dark:ring-white/20' : retro ? 'ring-[#C9CBD2]' : 'ring-[#F7F7F7] dark:ring-[#1A1A1A]'
                       }`}
                     >
                       {wxNoticeBadge.count > 99 ? '99+' : wxNoticeBadge.count}
@@ -16643,7 +16667,7 @@ function MainScreen({
                   )}
                 </span>
                 )}
-                {!liquid && <span className="text-[10px]">{label}</span>}
+                {!liquid && <span className={`text-[10px] ${retro ? 'font-semibold' : ''}`}>{label}</span>}
               </button>
             );
           })}

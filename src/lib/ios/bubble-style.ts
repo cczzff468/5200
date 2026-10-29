@@ -17,7 +17,7 @@
  */
 import type { CSSProperties } from 'react';
 
-export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'liquid';
+export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'liquid' | 'retro';
 
 /** 信息 App 同款气泡尾巴剪影（iMessage 弯钩剪影，viewBox 14×18）——
  *  QQ 装扮（纯色/七彩）气泡改成信息 App 同款后共用这对剪影（第五十一轮） */
@@ -27,8 +27,10 @@ export const TAIL_CLIP_RIGHT = 'path("M2 0 L2 6 C3 12 7 16 14 18 C10 13 8 8 8 2 
 /** App 级界面主题（第四十二轮）：default = 现状原生；liquid = 液态玻璃主题（参考图）。
  *  主题与气泡样式相互独立：主题只接管页面铭件（导航/TabBar/列表卡/输入栏），
  *  气泡仍由 kind 管；聊天背景层不受主题影响（用户指定）。
- *  第五十三轮：删除 new（新版 iMessage 主题）——存量档的 'new' 在 normalize 时自动回退 default */
-export type BubbleTheme = 'default' | 'liquid';
+ *  第五十三轮：删除 new（新版 iMessage 主题）——存量档的 'new' 在 normalize 时自动回退 default。
+ *  古早主题（retro）：2012-2014 年代拟物风（iOS 6 银灰导航 + 安卓深灰聊天顶栏 +
+ *  灰底小圆角描边气泡），仅微信/QQ 提供 */
+export type BubbleTheme = 'default' | 'liquid' | 'retro';
 
 /** 装扮宿主 App 标识（微信 / QQ / 信息） */
 export type BubbleAppId = 'wx' | 'qq' | 'sms';
@@ -77,15 +79,15 @@ export const RAINBOW_COLORS = [
   '#FB9F94', // 10 珊瑚
 ] as const;
 
-export const BUBBLE_KINDS: readonly BubbleStyleKind[] = ['default', 'rainbow', 'frosted', 'liquid'];
+export const BUBBLE_KINDS: readonly BubbleStyleKind[] = ['default', 'rainbow', 'frosted', 'liquid', 'retro'];
 
 /** 主题列表（设置页用——全部主题的权威清单；设置页按宿主 App 取子集） */
-export const BUBBLE_THEMES: readonly BubbleTheme[] = ['default', 'liquid'];
+export const BUBBLE_THEMES: readonly BubbleTheme[] = ['default', 'liquid', 'retro'];
 
-/** 各 App 提供的主题子集：微信/QQ = 默认+液态玻璃；信息 = 仅默认（第五十三轮删除新版主题） */
+/** 各 App 提供的主题子集：微信/QQ = 默认+液态玻璃+古早；信息 = 仅默认（第五十三轮删除新版主题） */
 export const THEMES_OF_APP: Record<BubbleAppId, readonly BubbleTheme[]> = {
-  wx: ['default', 'liquid'],
-  qq: ['default', 'liquid'],
+  wx: ['default', 'liquid', 'retro'],
+  qq: ['default', 'liquid', 'retro'],
   sms: ['default'],
 };
 
@@ -93,11 +95,17 @@ export const THEMES_OF_APP: Record<BubbleAppId, readonly BubbleTheme[]> = {
 export const BUBBLE_THEME_LABEL: Record<BubbleTheme, string> = {
   default: '默认主题',
   liquid: '液态玻璃',
+  retro: '古早',
 };
 
 /** 该 App 是否启用了液态玻璃主题（页面铭件读此值切换玻璃视觉；旧档无 theme 字段 = false） */
 export function isLiquidTheme(cfg: BubbleStyleConfig | undefined, app: BubbleAppId): boolean {
   return cfg?.[app]?.theme === 'liquid';
+}
+
+/** 该 App 是否启用了古早主题（页面铭件读此值切换拟物复古视觉；仅微信/QQ 生效） */
+export function isRetroTheme(cfg: BubbleStyleConfig | undefined, app: BubbleAppId): boolean {
+  return cfg?.[app]?.theme === 'retro' && (app === 'wx' || app === 'qq');
 }
 
 /** 各 App 原生默认气泡底色（kind=default 且未自定义色时还原成它）
@@ -106,6 +114,18 @@ export const NATIVE_BUBBLE: Record<BubbleAppId, { mine: string; theirs: string }
   wx: { mine: '#95EC69', theirs: '#FFFFFF' },
   qq: { mine: '#0099FF', theirs: '#FFFFFF' },
   sms: { mine: '#007AFF', theirs: '#E9E9EB' },
+};
+
+/** 古早气泡色板（参考用户上传的三张 2012-2014 年代截图逐像素提取）：
+ *  微信我方 = 老安卓深草绿 #8BC44E（截图1 绿气泡实测 #88C54E）；
+ *  QQ 我方 = 老版淡蓝 #D0E0F0（截图3 实测）；对方均纯白 + 1px 描边小圆角（4px）。 */
+export const RETRO_BUBBLE: Record<
+  BubbleAppId,
+  { mine: string; mineBorder: string; mineText: string; theirs: string; theirsBorder: string; theirsText: string }
+> = {
+  wx: { mine: '#8BC44E', mineBorder: '#6E9E3C', mineText: '#20330E', theirs: '#FFFFFF', theirsBorder: '#C6C8CD', theirsText: '#2E2E33' },
+  qq: { mine: '#D3E2F0', mineBorder: '#AEC9E0', mineText: '#27384A', theirs: '#FFFFFF', theirsBorder: '#C6C8CD', theirsText: '#2E2E33' },
+  sms: { mine: '#CFE3F5', mineBorder: '#A9C7E4', mineText: '#1F3347', theirs: '#FFFFFF', theirsBorder: '#C6C8CD', theirsText: '#2E2E33' },
 };
 
 export const DEFAULT_BUBBLE_STYLE: BubbleStyleConfig = {
@@ -225,11 +245,17 @@ function normColor(v: unknown): string | undefined {
 }
 
 /** 单 App 装扮 → 合法对象；不合法回默认 */
+function normTheme(v: unknown): BubbleTheme {
+  if (v === 'liquid') return 'liquid';
+  if (v === 'retro') return 'retro';
+  return 'default';
+}
+
 function normalizeAppStyle(v: unknown): BubbleAppStyle {
   const o = (v ?? {}) as Partial<BubbleAppStyle>;
   return {
     kind: normKind(o.kind),
-    theme: o.theme === 'liquid' ? 'liquid' : 'default',
+    theme: normTheme(o.theme),
     mineColor: normColor(o.mineColor),
     theirsColor: normColor(o.theirsColor),
   };
@@ -394,6 +420,26 @@ export function transcriptVisual(
     };
   }
 
+  if (kind === 'retro') {
+    // 古早面板：与古早气泡同语言（小圆角 + 1px 描边平色底；深色模式由 .dark 类接管）
+    const rb = RETRO_BUBBLE[app];
+    const mine = side === 'mine';
+    const sideCls = color
+      ? `bub-retro bub-retro-custom${app === 'qq' ? ' bub-retro-qq' : ''}`
+      : `bub-retro bub-retro-${mine ? 'mine' : 'theirs'}${app === 'qq' ? ' bub-retro-qq' : ''}`;
+    return {
+      override: true,
+      className: sideCls,
+      style: color
+        ? { backgroundColor: color, color: yiqTextOn(color), borderColor: color }
+        : mine
+          ? { backgroundColor: rb.mine, color: rb.mineText, borderColor: rb.mineBorder }
+          : { backgroundColor: rb.theirs, color: rb.theirsText, borderColor: rb.theirsBorder },
+      textClass: '',
+      radius: '4px',
+    };
+  }
+
   // default + 自定义色：染色面板（与气泡同色系，略深于气泡底不透明）
   const c = color as string;
   return {
@@ -522,6 +568,41 @@ export function bubbleVisual(
     };
   }
 
+  if (kind === 'retro') {
+    // 古早气泡（参考用户上传的 2012-2014 年代截图）：小圆角 4px + 1px 细描边 + 平色底——
+    // 微信我方老安卓深草绿、QQ 我方老版淡蓝、信息老版淡蓝；对方纯白灰边。
+    // 深色模式由 .dark .bub-retro-mine/-theirs 类接管（复古夜间色板，!important 盖内联）；
+    // 自定义色 = bub-retro-custom（深色不覆盖，跟随内联色）。
+    // 尾巴：微信保持原生小三角（随色）；QQ/信息复古无尾巴（老版 QQ 就是方角无尾）。
+    const rb = RETRO_BUBBLE[app];
+    const mine = side === 'mine';
+    const sideCls = color
+      ? `bub-retro bub-retro-custom${app === 'qq' ? ' bub-retro-qq' : ''}`
+      : `bub-retro bub-retro-${mine ? 'mine' : 'theirs'}${app === 'qq' ? ' bub-retro-qq' : ''}`;
+    if (color) {
+      return {
+        override: true,
+        className: sideCls,
+        style: {
+          backgroundColor: color,
+          color: yiqTextOn(color),
+          borderColor: color,
+        },
+        tail: app === 'wx' ? 'native' : 'none',
+        tailColor: color,
+      };
+    }
+    return {
+      override: true,
+      className: sideCls,
+      style: mine
+        ? { backgroundColor: rb.mine, color: rb.mineText, borderColor: rb.mineBorder }
+        : { backgroundColor: rb.theirs, color: rb.theirsText, borderColor: rb.theirsBorder },
+      tail: app === 'wx' ? 'native' : 'none',
+      tailColor: mine ? rb.mine : rb.theirs,
+    };
+  }
+
   // default + 自定义色：仅换底色/文字色；圆角——微信保持原生 5px、信息保持原生 18px（不覆盖），
   // QQ 装扮后 18px（第五十一轮与信息原生同规格）。
   // 尾巴按 App —— 微信/信息保持原生尾巴（随色）；QQ 第五十一轮改成信息 App 同款（'im' 底部弯钩剪影）
@@ -544,4 +625,5 @@ export const BUBBLE_KIND_LABEL: Record<BubbleStyleKind, string> = {
   rainbow: '七彩',
   frosted: '毛玻璃',
   liquid: '液态',
+  retro: '古早',
 };

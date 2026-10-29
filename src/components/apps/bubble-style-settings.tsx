@@ -57,6 +57,7 @@ const KIND_CAPTIONS: Record<BubbleStyleKind, string> = {
   rainbow: '九色 · 按消息循环',
   frosted: '奶白磨砂 · 隐约透底',
   liquid: '清透水膜 · 透底',
+  retro: '小圆角描边 · 古早味',
 };
 
 /** 玻璃卡（统一材质；圆角 22px） */
@@ -267,8 +268,9 @@ function LiveLiquidHeader({ skin, accent }: { skin: LiquidSkinSettings; accent: 
 }
 
 /** 顶部实时大预览卡：选哪个主题就实时渲染哪个主题的整页样式——
- *  状态栏 + 顶栏（液态 = 玻璃圆钮 + 名字胶囊，联动液态设置；默认 = 白实底条）+
- *  日期胶囊 + 三条真实装扮消息 + 输入条发送键 + TabBar（液态 = 悬浮玻璃胶囊）。
+ *  状态栏 + 顶栏（液态 = 玻璃圆钮 + 名字胶囊，联动液态设置；默认 = 白实底条；
+ *  古早 = 银灰拟物导航条 + 复古气泡）+ 日期胶囊 + 三条真实装扮消息 + 输入条发送键 +
+ *  TabBar（液态 = 悬浮玻璃胶囊；古早 = 银灰拟物硬边条）。
  *  切换主题时整卡淡入淡出过渡。 */
 function ThemeLivePreview({
   app,
@@ -284,6 +286,7 @@ function ThemeLivePreview({
   skin: LiquidSkinSettings;
 }) {
   const liquid = theme === 'liquid';
+  const retro = theme === 'retro';
   const solid = 'bg-white shadow-[0_1px_3px_rgba(0,0,0,0.07)] dark:bg-[#2A2B30] dark:shadow-none';
   return (
     <div
@@ -297,25 +300,27 @@ function ThemeLivePreview({
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.22, ease: 'easeOut' }}
-          className={`relative flex h-[310px] flex-col ${liquid ? 'lg-root' : 'bg-gradient-to-b from-[#F6F7FA] to-[#EBEDF2] dark:from-[#191B20] dark:to-[#141519]'}`}
+          className={`relative flex h-[310px] flex-col ${
+            liquid ? 'lg-root' : retro ? 'rt-root' : 'bg-gradient-to-b from-[#F6F7FA] to-[#EBEDF2] dark:from-[#191B20] dark:to-[#141519]'
+          }`}
         >
           {liquid && <AuraLayer />}
-          {/* 状态栏：时间 + 信号/Wi-Fi/电池 */}
+          {/* 状态栏：时间 + 信号/Wi-Fi/电池（古早 = 深灰安卓风） */}
           <div className="relative flex shrink-0 items-center justify-between px-[16px] pt-[9px]">
-            <span className="text-[11px] font-semibold tabular-nums leading-none text-black/45 dark:text-white/50">9:41</span>
+            <span className={`text-[11px] font-semibold tabular-nums leading-none ${retro ? 'text-[#2B2B30]' : 'text-black/45 dark:text-white/50'}`}>9:41</span>
             <span aria-hidden className="flex items-center gap-[4px]">
               <span className="flex items-end gap-[1.5px]">
                 {[4, 6, 8, 10].map((h) => (
-                  <i key={h} className="w-[2.5px] rounded-[1px] bg-black/40 dark:bg-white/50" style={{ height: h }} />
+                  <i key={h} className={`w-[2.5px] rounded-[1px] ${retro ? 'bg-[#3A3A40]' : 'bg-black/40 dark:bg-white/50'}`} style={{ height: h }} />
                 ))}
               </span>
-              <i className="h-[7px] w-[7px] rounded-full border-[1.5px] border-black/40 dark:border-white/50" />
-              <span className="flex h-[10px] w-[17px] items-center rounded-[3px] border border-black/30 p-[1.5px] dark:border-white/40">
-                <i className="h-full w-[68%] rounded-[1px] bg-black/45 dark:bg-white/55" />
+              <i className={`h-[7px] w-[7px] rounded-full border-[1.5px] ${retro ? 'border-[#3A3A40]' : 'border-black/40 dark:border-white/50'}`} />
+              <span className={`flex h-[10px] w-[17px] items-center rounded-[3px] border p-[1.5px] ${retro ? 'border-[#3A3A40]' : 'border-black/30 dark:border-white/40'}`}>
+                <i className={`h-full w-[68%] rounded-[1px] ${retro ? 'bg-[#3A3A40]' : 'bg-black/45 dark:bg-white/55'}`} />
               </span>
             </span>
           </div>
-          {/* 顶栏：液态 = 玻璃圆钮 + 名字胶囊（联动液态设置名字模式）；默认 = 白实底条 */}
+          {/* 顶栏：液态 = 玻璃圆钮 + 名字胶囊（联动液态设置名字模式）；默认 = 白实底条；古早 = 银灰拟物导航条 */}
           {liquid ? (
             <div className="relative mx-3 mt-[7px] flex h-[34px] shrink-0 items-center justify-between">
               <span aria-hidden className="lg-chip flex h-[28px] w-[28px] items-center justify-center rounded-full">
@@ -330,6 +335,16 @@ function ThemeLivePreview({
                 </span>
               </span>
             </div>
+          ) : retro ? (
+            <div className="rt-bar relative mx-2 mt-[7px] flex h-[34px] shrink-0 items-center justify-between rounded-t-[8px] px-[12px]">
+              <span aria-hidden className="h-[9px] w-[9px] -rotate-45 border-b-[2px] border-l-[2px] border-[#3E4250]" />
+              <span className="text-[12px] font-bold text-[#3A3E4C]">安吉丽娜</span>
+              <span aria-hidden className="flex items-center gap-[3px]">
+                {[0, 1, 2].map((d) => (
+                  <i key={d} className="h-[2.5px] w-[2.5px] rounded-full bg-[#4A4E5C]" />
+                ))}
+              </span>
+            </div>
           ) : (
             <div className={`relative mx-3 mt-[7px] flex h-[34px] shrink-0 items-center justify-between rounded-[14px] px-[14px] ${solid}`}>
               <span aria-hidden className="h-[9px] w-[9px] -rotate-45 border-b-[1.8px] border-l-[1.8px] border-black/40 dark:border-white/50" />
@@ -341,9 +356,9 @@ function ThemeLivePreview({
               </span>
             </div>
           )}
-          {/* 日期胶囊（真聊天页的时间行样式） */}
+          {/* 日期胶囊（真聊天页的时间行样式；古早 = 白底硬边小方角） */}
           <div className="relative mb-[2px] mt-[12px] flex shrink-0 justify-center">
-            <span className="rounded-full bg-black/[0.06] px-2.5 py-[3px] text-[9px] font-medium leading-none text-black/40 dark:bg-white/[0.08] dark:text-white/40">
+            <span className={retro ? 'rt-time rounded-[4px] px-2.5 py-[3px] text-[9px] font-medium leading-none' : 'rounded-full bg-black/[0.06] px-2.5 py-[3px] text-[9px] font-medium leading-none text-black/40 dark:bg-white/[0.08] dark:text-white/40'}>
               今天 14:32
             </span>
           </div>
@@ -353,7 +368,7 @@ function ThemeLivePreview({
               <div key={i} className={`flex items-end gap-[6px] ${m.side === 'mine' ? 'flex-row-reverse self-end' : 'self-start'}`}>
                 <span
                   aria-hidden
-                  className={`h-[24px] w-[24px] shrink-0 rounded-full ${m.side === 'theirs' ? 'bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]' : ''}`}
+                  className={`h-[24px] w-[24px] shrink-0 ${retro ? 'rounded-[5px]' : 'rounded-full'} ${m.side === 'theirs' ? 'bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]' : ''}`}
                   style={m.side === 'mine' ? { background: accent } : undefined}
                 />
                 <PreviewBubble app={app} cfg={cfg} side={m.side} index={i} className="!px-3 !py-[6px] !text-[11.5px]">
@@ -362,24 +377,37 @@ function ThemeLivePreview({
               </div>
             ))}
           </div>
-          {/* 输入条 + 发送键（液态底部留出悬浮 TabBar 的位置） */}
+          {/* 输入条 + 发送键（液态底部留出悬浮 TabBar 的位置；古早 = 银灰拟物输入条） */}
           <div
             className={`relative mx-3 flex h-[32px] shrink-0 items-center rounded-full pl-[14px] pr-[5px] ${
-              liquid ? 'lg-input mb-[50px]' : `${solid} mb-[10px]`
+              liquid ? 'lg-input mb-[50px]' : retro ? 'rt-inputbar mb-[10px] rounded-[6px]' : `${solid} mb-[10px]`
             }`}
           >
-            <span aria-hidden className="h-[5px] w-[46%] rounded-full bg-black/[0.10] dark:bg-white/20" />
-            <span aria-hidden className="ml-auto flex h-[23px] w-[23px] shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: accent }}>
-              <span className="h-[8px] w-[8px] rotate-45 border-l-[2px] border-t-[2px] border-white/95" />
+            <span aria-hidden className={`h-[5px] w-[46%] rounded-full ${retro ? 'bg-black/[0.12]' : 'bg-black/[0.10] dark:bg-white/20'}`} />
+            <span
+              aria-hidden
+              className={`ml-auto flex h-[23px] w-[23px] shrink-0 items-center justify-center ${retro ? 'rounded-[4px]' : 'rounded-full'}`}
+              style={{ backgroundColor: retro ? (app === 'wx' ? '#8BC44E' : '#D3E2F0') : accent }}
+            >
+              <span className={`h-[8px] w-[8px] rotate-45 border-l-[2px] border-t-[2px] ${retro ? (app === 'wx' ? 'border-[#20330E]' : 'border-[#27384A]') : 'border-white/95'}`} />
             </span>
           </div>
-          {/* TabBar：液态 = 悬浮玻璃胶囊；默认 = 贴底实底条 */}
+          {/* TabBar：液态 = 悬浮玻璃胶囊；古早 = 银灰拟物硬边条；默认 = 贴底实底条 */}
           {liquid ? (
             <div className="lg-tabbar absolute inset-x-[14px] bottom-[10px] flex h-[34px] items-center justify-around">
               {[0, 1, 2, 3].map((d) => (
                 <span key={d} className="flex h-[18px] w-[28px] flex-col items-center justify-center gap-[2.5px]">
                   <i className="h-[7px] w-[7px] rounded-[2.5px]" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.26)' }} />
                   <i className="h-[2px] w-[9px] rounded-full" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.16)' }} />
+                </span>
+              ))}
+            </div>
+          ) : retro ? (
+            <div className="rt-tabbar relative flex h-[34px] shrink-0 items-center justify-around">
+              {[0, 1, 2, 3].map((d) => (
+                <span key={d} className="flex h-[18px] w-[28px] flex-col items-center justify-center gap-[2.5px]">
+                  <i className="h-[7px] w-[7px] rounded-[2px]" style={{ backgroundColor: d === 0 ? '#3D6DB5' : 'rgba(50,54,66,0.55)' }} />
+                  <i className="h-[2px] w-[9px]" style={{ backgroundColor: d === 0 ? '#3D6DB5' : 'rgba(50,54,66,0.45)' }} />
                 </span>
               ))}
             </div>
@@ -400,15 +428,17 @@ function ThemeLivePreview({
 }
 
 /** 紧凑主题卡的材质缩影（~92px）：mini 顶栏条 + 两条迷你气泡 + TabBar——
- *  液态 = 玻璃材质（lg-* + 光斑）；默认 = 白实底。一眼区分两种主题材质。 */
+ *  液态 = 玻璃材质（lg-* + 光斑）；古早 = 淡青底 + 银灰拟物件 + 描边方角气泡；
+ *  默认 = 白实底。一眼区分各主题材质。 */
 function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string }) {
   const liquid = theme === 'liquid';
+  const retro = theme === 'retro';
   const solid = 'bg-white shadow-[0_1px_2px_rgba(0,0,0,0.06)] dark:bg-[#2A2B30] dark:shadow-none';
   return (
     <div
       aria-hidden
       className={`relative h-[78px] overflow-hidden rounded-[14px] ${
-        liquid ? 'lg-root' : 'bg-gradient-to-b from-[#F6F7FA] to-[#EBEDF2] dark:from-[#191B20] dark:to-[#141519]'
+        liquid ? 'lg-root' : retro ? 'rt-root' : 'bg-gradient-to-b from-[#F6F7FA] to-[#EBEDF2] dark:from-[#191B20] dark:to-[#141519]'
       }`}
     >
       {liquid && (
@@ -419,24 +449,41 @@ function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string 
         </span>
       )}
       {/* mini 顶栏条 */}
-      <div className={`relative mx-2 mt-[6px] flex h-[12px] items-center justify-between rounded-full px-[6px] ${liquid ? 'lg-search' : solid}`}>
-        <span className="h-[4px] w-[4px] -rotate-45 border-b border-l border-black/40 dark:border-white/50" />
-        <span className="text-[6.5px] font-semibold leading-none text-black/60 dark:text-white/70">安吉丽娜</span>
+      <div
+        className={`relative mx-2 mt-[6px] flex h-[12px] items-center justify-between rounded-full px-[6px] ${
+          liquid ? 'lg-search' : retro ? 'rt-bar rounded-[4px]' : solid
+        }`}
+      >
+        <span className={`h-[4px] w-[4px] -rotate-45 border-b border-l ${retro ? 'border-[#3E4250]' : 'border-black/40 dark:border-white/50'}`} />
+        <span className={`text-[6.5px] font-semibold leading-none ${retro ? 'font-bold text-[#3A3E4C]' : 'text-black/60 dark:text-white/70'}`}>安吉丽娜</span>
         <span className="flex gap-[1.5px]">
           {[0, 1, 2].map((d) => (
-            <i key={d} className="h-[1.5px] w-[1.5px] rounded-full bg-black/35 dark:bg-white/45" />
+            <i key={d} className={`h-[1.5px] w-[1.5px] rounded-full ${retro ? 'bg-[#4A4E5C]' : 'bg-black/35 dark:bg-white/45'}`} />
           ))}
         </span>
       </div>
-      {/* 两条迷你气泡 */}
+      {/* 两条迷你气泡（古早 = 小圆角描边：我方深草绿/对方白） */}
       <div className="relative mt-[7px] flex flex-col gap-[5px] px-2.5">
         <div className="flex items-end gap-[4px]">
-          <span className="h-[11px] w-[11px] shrink-0 rounded-full bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]" />
-          <span className="h-[12px] w-[46px] rounded-[4px] rounded-bl-[2px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.08)] dark:bg-[#2A2B30]" />
+          <span className={`h-[11px] w-[11px] shrink-0 ${retro ? 'rounded-[3px]' : 'rounded-full'} bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]`} />
+          <span
+            className={
+              retro
+                ? 'h-[12px] w-[46px] rounded-[3px] border border-[#C6C8CD] bg-white'
+                : 'h-[12px] w-[46px] rounded-[4px] rounded-bl-[2px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.08)] dark:bg-[#2A2B30]'
+            }
+          />
         </div>
         <div className="flex items-end justify-end gap-[4px]">
-          <span className="h-[12px] w-[54px] rounded-[4px] rounded-br-[2px]" style={{ backgroundColor: accent }} />
-          <span className="h-[11px] w-[11px] shrink-0 rounded-full" style={{ backgroundColor: accent }} />
+          <span
+            className={
+              retro
+                ? 'h-[12px] w-[54px] rounded-[3px] border border-[#6E9E3C] bg-[#8BC44E]'
+                : 'h-[12px] w-[54px] rounded-[4px] rounded-br-[2px]'
+            }
+            style={retro ? undefined : { backgroundColor: accent }}
+          />
+          <span className={`h-[11px] w-[11px] shrink-0 ${retro ? 'rounded-[3px]' : 'rounded-full'}`} style={{ backgroundColor: accent }} />
         </div>
       </div>
       {/* TabBar */}
@@ -444,6 +491,12 @@ function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string 
         <div className="lg-tabbar absolute inset-x-[7px] bottom-[6px] flex h-[9px] items-center justify-around">
           {[0, 1, 2, 3].map((d) => (
             <i key={d} className="h-[3px] w-[3px] rounded-full" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.30)' }} />
+          ))}
+        </div>
+      ) : retro ? (
+        <div className="rt-tabbar absolute inset-x-0 bottom-0 flex h-[11px] items-center justify-around">
+          {[0, 1, 2, 3].map((d) => (
+            <i key={d} className="h-[3px] w-[3px] rounded-[1px]" style={{ backgroundColor: d === 0 ? '#3D6DB5' : 'rgba(50,54,66,0.5)' }} />
           ))}
         </div>
       ) : (
@@ -656,7 +709,7 @@ function ThemeContent({
                 onClick={() => {
                   if (!selected) {
                     setBubbleTheme(app, theme);
-                    onToast(theme === 'liquid' ? '已切换液态玻璃主题' : '已恢复默认主题');
+                    onToast(theme === 'liquid' ? '已切换液态玻璃主题' : theme === 'retro' ? '已切换古早主题' : '已恢复默认主题');
                   }
                 }}
                 className={`w-full rounded-[18px] bg-white p-2 pb-1.5 text-left ring-1 transition-all active:scale-[0.98] dark:bg-[#1C1E23] ${
