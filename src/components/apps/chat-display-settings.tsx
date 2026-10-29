@@ -4,7 +4,7 @@
  * 聊天显示设置（微信 / QQ 共用，按联系人隔离）—— 嵌入聊天设置页的折叠区块
  * ---------------------------------------------------------------------------
  * 本轮（用户指定）改造：
- *  - 已读未读与时间同显时**左右横向排在同一行**（不再上下堆叠，预览同步）；
+ *  - 已读未读与时间同显时**上下两行**（已读未读在上、时间在下，预览同步）；
  *  - 删除已读未读区的颜文字快捷 chips（自定义文字仍不限字数，手输随意）；
  *  - 删除时间区的符号 / 颜文字快捷 chips，仅保留常用格式预设 + 模板输入 + 实时预览。
  *
@@ -181,8 +181,8 @@ function PreviewRow({
   const avatarMeta =
     showRead || showTime ? (
       <span
-        className={`mt-[2px] flex w-max flex-row items-center gap-x-[3px] leading-none ${
-          side === 'mine' ? 'self-end' : 'self-start'
+        className={`mt-[2px] flex w-max flex-col gap-y-[1px] leading-none ${
+          side === 'mine' ? 'self-end items-end' : 'self-start items-start'
         }`}
       >
         {showRead && cfg.readPosition === 'avatar' && (
@@ -200,8 +200,8 @@ function PreviewRow({
   const bubbleMeta =
     showRead || showTime ? (
       <span
-        className={`mt-[2px] flex flex-row flex-wrap items-center self-stretch gap-x-[4px] gap-y-[1px] leading-none ${
-          side === 'mine' ? 'justify-start' : 'justify-end'
+        className={`mt-[2px] flex flex-col self-stretch gap-y-[1px] leading-none ${
+          side === 'mine' ? 'items-start' : 'items-end'
         }`}
       >
         {showRead && cfg.readPosition === 'bubble' && (

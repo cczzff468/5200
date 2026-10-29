@@ -1685,22 +1685,22 @@ const qqMarkPeerRead = (list: QQMsg[]): QQMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
 /** 元信息小字统一样式（已读未读 / 时间）；已读浅灰 / 未读深灰（用户指定：未读弃品牌色）。
- *  nowrap：每段文字永不内部折行（用户指定：左右延伸、不上下堆叠） */
+ *  nowrap：每段文字永不内部折行（长模板向屏幕内侧延伸，不在段内折行） */
 const qqMetaText = 'whitespace-nowrap text-[10px] leading-[1.35]';
 const qqMetaReadCls = 'text-black/35 dark:text-white/40';
 const qqMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
-/** 显示设置 › 已读未读 + 时间：头像下方单行横排（用户指定：左右延伸、永不上下堆叠；
- *  已读在前、时间在后；超宽时向屏幕内侧延伸——TA 的（头像在左）左缘对齐向右延、
- *  我的（头像在右）右缘对齐向左延，长日期模板（如 yyyy/MM/dd HH:mm）也不折行不出屏） */
+/** 显示设置 › 已读未读 + 时间：头像下方上下两行（用户指定：已读未读在上、时间在下）；
+ *  超宽行向屏幕内侧延伸——TA 的（头像在左）左缘对齐向右延、
+ *  我的（头像在右）右缘对齐向左延，长日期模板（如 yyyy/MM/dd HH:mm）也不折行不出屏 */
 function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && qqMetaOk(m);
   const showTime = cfg.timeEnabled && cfg.timePosition === 'avatar' && qqMetaOk(m);
   if (!showRead && !showTime) return null;
   return (
     <span
-      className={`mt-[3px] flex w-max flex-row items-center gap-x-[3px] leading-none ${
-        m.role === 'me' ? 'self-end' : 'self-start'
+      className={`mt-[3px] flex w-max flex-col gap-y-[1px] leading-none ${
+        m.role === 'me' ? 'self-end items-end' : 'self-start items-start'
       }`}
     >
       {showRead && (
@@ -1720,10 +1720,9 @@ function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   );
 }
 
-/** 显示设置 › 已读未读 + 时间：气泡下方横排——靠气泡末尾（远离头像的一侧：我的=左下、TA的=右下）；
- *  同显时左右横向排在同一行（已读在前、时间在后，用户指定：不上下堆叠）。
- *  子项 nowrap：日期模板（yyyy/MM/dd HH:mm）等长格式也不内部折行，
- *  列宽随内容扩到单行宽；行保留 flex-wrap 仅作超长自定义文字的极端保命。
+/** 显示设置 › 已读未读 + 时间：气泡下方上下两行——靠气泡列边缘（远离头像的一侧：我的=左、TA的=右）；
+ *  同显时上下堆叠（用户指定：已读未读在上、时间在下）。
+ *  子项 nowrap：日期模板（yyyy/MM/dd HH:mm）等长格式也不内部折行。
  *  仅挂在文本气泡列（最常见消息形态） */
 function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'bubble' && qqMetaOk(m);
@@ -1731,8 +1730,8 @@ function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
   if (!showRead && !showTime) return null;
   return (
     <span
-      className={`mt-[3px] flex flex-row flex-wrap items-center self-stretch gap-x-[4px] gap-y-[1px] leading-none ${
-        m.role === 'me' ? 'justify-start' : 'justify-end'
+      className={`mt-[3px] flex flex-col self-stretch gap-y-[1px] leading-none ${
+        m.role === 'me' ? 'items-start' : 'items-end'
       }`}
     >
       {showRead && (
