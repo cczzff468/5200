@@ -121,7 +121,6 @@ import {
   WxIcStories,
   WxIcSearch,
   WxIcGames,
-  WxIcMiniProgram,
   WxIcServices,
   WxIcFavorites,
   WxIcWorks,
@@ -13599,7 +13598,7 @@ const LOOK_FEED: { title: string; source: string; reads: string }[] = [
 ];
 
 /** 看一看页（第二十二轮美化）：玻璃卡 22px + 胶囊控件 + 弱标题，
- *  space-y-7 统一节奏、纯色底（无底层光斑）。装扮入口已移至「我」页 › 主题（表情下方）。 */
+ *  space-y-7 统一节奏、纯色底（无底层光斑）。装扮入口已移至「发现」页 › 主题（末尾，原小程序位）。 */
 function WxLookPage({ onBack, onToast }: { onBack: () => void; onToast: (m: string) => void }) {
   return (
     <div className="absolute inset-0 z-20 flex flex-col bg-[#F6F7F9] text-black dark:bg-[#111214] dark:text-white" data-testid="wx-look-page">
@@ -15360,7 +15359,7 @@ function MainScreen({
   if (page === 'services') return <WxServices friends={friends} myRealName={myRealName} onExit={() => setPage('main')} />;
   if (page === 'stickers') return <WxStickersPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'look') return <WxLookPage onBack={() => setPage('main')} onToast={showToast} />;
-  // 主题页（「我」页 › 主题，表情下方进入）：界面主题独立成页，气泡样式在下一级独立页
+  // 主题页（「发现」页 › 主题，原小程序位进入）：界面主题独立成页，气泡样式在下一级独立页
   if (page === 'dress')
     return (
       <ThemeStylePage
@@ -16003,11 +16002,13 @@ function MainScreen({
               />
             </div>
             <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+              {/* 主题（自「我」页移此，顶替原小程序位）：界面主题 + 气泡样式两级独立页 */}
               <WxMenuRow
                 first
-                label="小程序"
-                onClick={() => showToast('「小程序」暂未开放')}
-                icon={<WxIcMiniProgram />}
+                label="主题"
+                testId="wx-discover-theme"
+                onClick={() => setPage('dress')}
+                icon={<WxIcTheme />}
               />
             </div>
           </div>
@@ -16115,13 +16116,6 @@ function MainScreen({
                 testId="wx-me-stickers"
                 onClick={() => setPage('stickers')}
                 icon={<WxIcSticker />}
-              />
-              {/* 主题（原发现 › 看一看 › 聊天气泡装扮入口移此）：界面主题 + 气泡样式两级独立页 */}
-              <WxMenuRow
-                label="主题"
-                testId="wx-me-theme"
-                onClick={() => setPage('dress')}
-                icon={<WxIcTheme />}
               />
             </div>
 
