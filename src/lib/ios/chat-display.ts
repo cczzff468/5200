@@ -8,18 +8,18 @@
  *  - 配置**按联系人隔离**（每个角色一份，localStorage 持久化，键 wx-chat-display /
  *    qq-chat-display，值为 { [contactId]: ChatDisplayConfig }）；
  *  - 已读未读支持**自定义文字**（readLabel / unreadLabel，空 = 默认「已读」/「未读」，
- *    本轮起**不限字数**，颜文字/长短句随意）；
+ *    **不限字数**，长短句随意）；
  *  - 未读颜色不再用品牌色，改**深灰**（比已读的浅灰深一档，双色阶都是灰色系）；
- *  - 时间改为**自定义模板**（本轮）：token 替换引擎（fmtMsgTime）——
+ *  - 时间为**自定义模板**：token 替换引擎（fmtMsgTime）——
  *    yyyy 年 / MM 月 / dd 日 / HH 时(24) / hh 时(12) / mm 分 / ss 秒 / A AM·PM，
- *    其余任意文字·颜文字·符号原样输出（「[◕‿◕] HH:mm」「yyyy年M月d日」随想随写）。
+ *    其余任意文字·符号原样输出（「yyyy年M月d日」随想随写）。
  *
  * 三个维度：
  *  - avatarShape：rounded = 圆角方形（微信原生），circle = 圆形（QQ 原生）；
  *  - read：开关 + 位置（avatar = 头像下面 / bubble = 气泡下面）+ 自定义文字（不限字数）；
  *  - time：开关 + 位置（同上）+ 自定义模板（历史枚举 hhmm/hhmmss 自动迁移）。
  *  位置为「气泡下面」时元信息靠气泡末尾（远离头像的一侧）；已读与时间同显时
- *  垂直堆叠（已读在上、时间在下）。
+ *  **左右横向排在同一行**（已读在前、时间在后，不再上下堆叠）。
  *
  * 已读语义（双向回执，上轮建立）：我发的消息在 AI 回复落地时转已读；
  * AI 发的消息在我发消息时转已读；消息字段 unread?: boolean（undefined = 视为已读）。
@@ -39,7 +39,7 @@ export type AvatarShape = 'rounded' | 'circle';
 /** 元信息（已读/时间）显示位置：avatar = 头像下面；bubble = 气泡下面 */
 export type MetaPosition = 'avatar' | 'bubble';
 
-/** 时间显示模板（自定义字符串）：token 替换 + 任意文字/颜文字；字母要原样显示用 [方括号] 转义。
+/** 时间显示模板（自定义字符串）：token 替换 + 任意文字；字母要原样显示用 [方括号] 转义。
  *  历史枚举值 'hhmm' / 'hhmmss' 在 normalize 时自动迁移为 'HH:mm' / 'HH:mm:ss'。 */
 export type TimeFormat = string;
 
@@ -230,7 +230,7 @@ export const TIME_TOKENS: readonly { token: string; label: string }[] = [
  *  - 小写 mm/m 智能区分：模板里出现小时（H/h）之前 = 月份；之后 = 分钟
  *    （用户示例「mm/dd/yyyy hh:mm AM/PM」= 12/25/2025 02:30 PM；「yyyymmdd」= 20251225）
  *  - 连写「AM/PM」「am/pm」视作单个 A/a token（用户示例格式直接可用）
- *  - 其余任意文字 / 颜文字 / 符号原样输出；字母要原样显示请用 [方括号] 括起（moment 同款转义）
+ *  - 其余任意文字 / 符号原样输出；字母要原样显示请用 [方括号] 括起（moment 同款转义）
  */
 export function fmtMsgTime(ts: number, template: string): string {
   const d = new Date(ts);
@@ -295,7 +295,7 @@ export function fmtMsgTime(ts: number, template: string): string {
       i += t.length;
       continue;
     }
-    // 其余字符（文字/颜文字/符号）原样输出
+    // 其余字符（文字/符号）原样输出
     out.push(s[i]);
     i += 1;
   }
