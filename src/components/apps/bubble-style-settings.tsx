@@ -1,18 +1,19 @@
 'use client';
 
 /**
- * 聊天装扮设置（第十七轮建立 · 本轮重构：毛玻璃胶囊「主题|气泡」两个选择）
+ * 聊天装扮设置（第十七轮建立 · 本轮重构：主题页 = 顶部实时大预览 + 下方主题选择）
  * ---------------------------------------------------------------------------
  * 入口：QQ 个人抽屉 / 设置 › 个性装扮；微信「发现」页 › 主题；
  *       信息 App › 聊天设置 › 主题。
  *
- * 本轮（用户指定：主题界面两个选择（主题/气泡）+ 毛玻璃胶囊 + 更简约 + 预览卡美化）：
- *  1. ThemeStylePage = 单一「主题界面」：顶部**毛玻璃胶囊分段器**提供两个选择——
- *     「主题」（两列预览卡 + 选中液态玻璃时内联收缩的液态玻璃设置）与「气泡」
- *     （实时预览 + 四格样式 + HSL 颜色 + 收藏夹）；胶囊滑块 spring 动画；
- *  2. 主题预览卡美化：mini 手机缩影加状态栏时间/返回键/菜单点/头像/发送键，
- *     选中卡 accent 描边 + 柔光阴影 + 右上角圆勾徽标，名字居中；
- *  3. 主题切换仍联动气泡（液态玻璃 ↔ 原生默认，setBubbleTheme 内实现）；
+ * 本轮（用户指定：预览卡放最上面 + 液态玻璃设置放液态玻璃主题下面）：
+ *  1. 「主题」胶囊 = 顶部**实时大预览卡**——选哪个主题就显示哪个主题的整页样式
+ *     （状态栏/顶栏/消息/输入条/TabBar 全套；液态顶栏名字区还跟随液态设置实时变化，
+ *     所见即所得）；预览卡下方标注当前主题名；
+ *  2. 预览下方两列紧凑主题卡（材质缩影，点选切换，选中 accent 描边 + 圆勾）；
+ *  3. 「液态玻璃设置」收缩面板紧跟液态玻璃主题卡下方（无独立界面）；
+ *  4. 「气泡」胶囊不变（实时预览 + 四格样式 + HSL 颜色 + 收藏夹）；
+ *  5. 主题切换仍联动气泡（液态玻璃 ↔ 原生默认，setBubbleTheme 内实现）；
  *     气泡胶囊下单独换样式不动主题（patchAppStyle 只写 kind）。
  */
 import { useMemo, useState } from 'react';
@@ -20,6 +21,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Check, ChevronRight, Palette, RotateCcw, Trash2 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { LiquidSkinPanel } from './liquid-skin-settings';
+import type { LiquidSkinSettings } from '@/lib/ios/liquid-skin';
 import { useSettings } from '@/lib/ios/store';
 import {
   BUBBLE_KIND_LABEL,
@@ -209,80 +211,249 @@ const PREVIEW_MESSAGES: { side: 'mine' | 'theirs'; text: string }[] = [
   { side: 'mine', text: '这就发你，等我' },
 ];
 
-// ---------------- 主题卡内实时缩影预览（本轮美化：mini 手机缩影——状态栏时间/顶栏/头像/发送键） ----------------
+// ---------------- 顶部实时大预览（本轮：预览卡放最上面，选哪个主题显示哪个样式） ----------------
 
-/** 主题卡内的实时缩影（约 148px）：状态栏 9:41 + mini 聊天顶栏（返回/名字/菜单点）+
- *  两条带头像的**真实渲染**气泡（PreviewBubble，气泡装扮同步联动）+ 输入条带发送键 +
- *  悬浮 TabBar；液态 = 玻璃半透 lg-* 同材质 + 悬浮胶囊；默认 = 白实底 + 贴底素条。 */
-function ThemeCardPreview({
+/** 大预览里的消息序列（真实装扮泡渲染，气泡装扮同步联动） */
+const LIVE_MESSAGES: { side: 'mine' | 'theirs'; text: string }[] = [
+  { side: 'theirs', text: '早安呀，今天也要开心' },
+  { side: 'mine', text: '早安！窗外云超好看' },
+  { side: 'theirs', text: '哈哈快拍给我看看' },
+];
+
+/** 液态主题顶栏名字区（实时跟随「液态玻璃设置」的名字模式/中间文字/显示名字，所见即所得） */
+function LiveLiquidHeader({ skin, accent }: { skin: LiquidSkinSettings; accent: string }) {
+  const name = '安吉丽娜';
+  const mid = skin.headerMiddleText;
+  const peerAva = 'h-[20px] w-[20px] shrink-0 rounded-full bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]';
+  const mineAva = 'h-[20px] w-[20px] shrink-0 rounded-full';
+
+  if (skin.headerMode === 'avatarName') {
+    return (
+      <span className="lg-title flex items-center gap-[6px] rounded-[15px] py-[5px] pl-[6px] pr-[12px]">
+        <span aria-hidden className={peerAva} />
+        {skin.headerShowName && (
+          <span className="max-w-[120px] truncate text-[11.5px] font-semibold text-black/85 dark:text-white/90">{name}</span>
+        )}
+      </span>
+    );
+  }
+  if (skin.headerMode === 'dual') {
+    return (
+      <span className="lg-title flex items-center gap-[6px] rounded-[15px] py-[5px] pl-[6px] pr-[8px]">
+        <span aria-hidden className={peerAva} />
+        {mid && <span className="max-w-[90px] truncate text-[10px] font-semibold text-black/70 dark:text-white/80">{mid}</span>}
+        <span aria-hidden className={mineAva} style={{ background: accent }} />
+      </span>
+    );
+  }
+  if (skin.headerMode === 'dualName') {
+    return (
+      <span className="lg-title flex items-center gap-[5px] rounded-[15px] py-[5px] pl-[8px] pr-[10px]">
+        <span className="flex w-[38px] flex-col items-center gap-[2px]">
+          <span aria-hidden className="h-[17px] w-[17px] rounded-full bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]" />
+          <span className="max-w-[38px] truncate text-[7.5px] font-medium leading-none text-black/60 dark:text-white/65">{name}</span>
+        </span>
+        {mid && <span className="max-w-[90px] truncate text-[9.5px] font-semibold text-black/70 dark:text-white/80">{mid}</span>}
+        <span className="flex w-[38px] flex-col items-center gap-[2px]">
+          <span aria-hidden className="h-[17px] w-[17px] rounded-full" style={{ background: accent }} />
+          <span className="text-[7.5px] font-medium leading-none text-black/60 dark:text-white/65">我</span>
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span className="lg-title rounded-[15px] px-[13px] py-[6px] text-[11.5px] font-semibold text-black/85 dark:text-white/90">{name}</span>
+  );
+}
+
+/** 顶部实时大预览卡：选哪个主题就实时渲染哪个主题的整页样式——
+ *  状态栏 + 顶栏（液态 = 玻璃圆钮 + 名字胶囊，联动液态设置；默认 = 白实底条）+
+ *  日期胶囊 + 三条真实装扮消息 + 输入条发送键 + TabBar（液态 = 悬浮玻璃胶囊）。
+ *  切换主题时整卡淡入淡出过渡。 */
+function ThemeLivePreview({
   app,
   cfg,
   theme,
   accent,
+  skin,
 }: {
   app: BubbleAppId;
   cfg: BubbleStyleConfig;
   theme: BubbleTheme;
   accent: string;
+  skin: LiquidSkinSettings;
 }) {
   const liquid = theme === 'liquid';
   const solid = 'bg-white shadow-[0_1px_3px_rgba(0,0,0,0.07)] dark:bg-[#2A2B30] dark:shadow-none';
   return (
     <div
-      className={`relative h-[148px] overflow-hidden rounded-[16px] ${
+      className="relative overflow-hidden rounded-[22px] ring-1 ring-black/[0.06] dark:ring-white/[0.10]"
+      style={{ boxShadow: liquid ? '0 16px 40px rgba(31,38,135,0.16)' : '0 14px 36px rgba(17,24,39,0.09)' }}
+    >
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={theme}
+          initial={{ opacity: 0, scale: 1.015 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.22, ease: 'easeOut' }}
+          className={`relative flex h-[310px] flex-col ${liquid ? 'lg-root' : 'bg-gradient-to-b from-[#F6F7FA] to-[#EBEDF2] dark:from-[#191B20] dark:to-[#141519]'}`}
+        >
+          {liquid && <AuraLayer />}
+          {/* 状态栏：时间 + 信号/Wi-Fi/电池 */}
+          <div className="relative flex shrink-0 items-center justify-between px-[16px] pt-[9px]">
+            <span className="text-[11px] font-semibold tabular-nums leading-none text-black/45 dark:text-white/50">9:41</span>
+            <span aria-hidden className="flex items-center gap-[4px]">
+              <span className="flex items-end gap-[1.5px]">
+                {[4, 6, 8, 10].map((h) => (
+                  <i key={h} className="w-[2.5px] rounded-[1px] bg-black/40 dark:bg-white/50" style={{ height: h }} />
+                ))}
+              </span>
+              <i className="h-[7px] w-[7px] rounded-full border-[1.5px] border-black/40 dark:border-white/50" />
+              <span className="flex h-[10px] w-[17px] items-center rounded-[3px] border border-black/30 p-[1.5px] dark:border-white/40">
+                <i className="h-full w-[68%] rounded-[1px] bg-black/45 dark:bg-white/55" />
+              </span>
+            </span>
+          </div>
+          {/* 顶栏：液态 = 玻璃圆钮 + 名字胶囊（联动液态设置名字模式）；默认 = 白实底条 */}
+          {liquid ? (
+            <div className="relative mx-3 mt-[7px] flex h-[34px] shrink-0 items-center justify-between">
+              <span aria-hidden className="lg-chip flex h-[28px] w-[28px] items-center justify-center rounded-full">
+                <span className="h-[8px] w-[8px] -rotate-45 border-b-[1.8px] border-l-[1.8px] border-black/45 dark:border-white/55" />
+              </span>
+              <LiveLiquidHeader skin={skin} accent={accent} />
+              <span aria-hidden className="lg-chip flex h-[28px] w-[28px] items-center justify-center rounded-full">
+                <span className="flex items-center gap-[2.5px]">
+                  {[0, 1, 2].map((d) => (
+                    <i key={d} className="h-[2.5px] w-[2.5px] rounded-full bg-black/40 dark:bg-white/50" />
+                  ))}
+                </span>
+              </span>
+            </div>
+          ) : (
+            <div className={`relative mx-3 mt-[7px] flex h-[34px] shrink-0 items-center justify-between rounded-[14px] px-[14px] ${solid}`}>
+              <span aria-hidden className="h-[9px] w-[9px] -rotate-45 border-b-[1.8px] border-l-[1.8px] border-black/40 dark:border-white/50" />
+              <span className="text-[12px] font-semibold text-black/75 dark:text-white/85">安吉丽娜</span>
+              <span aria-hidden className="flex items-center gap-[3px]">
+                {[0, 1, 2].map((d) => (
+                  <i key={d} className="h-[2.5px] w-[2.5px] rounded-full bg-black/35 dark:bg-white/45" />
+                ))}
+              </span>
+            </div>
+          )}
+          {/* 日期胶囊（真聊天页的时间行样式） */}
+          <div className="relative mb-[2px] mt-[12px] flex shrink-0 justify-center">
+            <span className="rounded-full bg-black/[0.06] px-2.5 py-[3px] text-[9px] font-medium leading-none text-black/40 dark:bg-white/[0.08] dark:text-white/40">
+              今天 14:32
+            </span>
+          </div>
+          {/* 消息（带头像的真实装扮泡） */}
+          <div className="relative flex flex-1 flex-col gap-[10px] px-4 pt-[10px]">
+            {LIVE_MESSAGES.map((m, i) => (
+              <div key={i} className={`flex items-end gap-[6px] ${m.side === 'mine' ? 'flex-row-reverse self-end' : 'self-start'}`}>
+                <span
+                  aria-hidden
+                  className={`h-[24px] w-[24px] shrink-0 rounded-full ${m.side === 'theirs' ? 'bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]' : ''}`}
+                  style={m.side === 'mine' ? { background: accent } : undefined}
+                />
+                <PreviewBubble app={app} cfg={cfg} side={m.side} index={i} className="!px-3 !py-[6px] !text-[11.5px]">
+                  {m.text}
+                </PreviewBubble>
+              </div>
+            ))}
+          </div>
+          {/* 输入条 + 发送键（液态底部留出悬浮 TabBar 的位置） */}
+          <div
+            className={`relative mx-3 flex h-[32px] shrink-0 items-center rounded-full pl-[14px] pr-[5px] ${
+              liquid ? 'lg-input mb-[50px]' : `${solid} mb-[10px]`
+            }`}
+          >
+            <span aria-hidden className="h-[5px] w-[46%] rounded-full bg-black/[0.10] dark:bg-white/20" />
+            <span aria-hidden className="ml-auto flex h-[23px] w-[23px] shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: accent }}>
+              <span className="h-[8px] w-[8px] rotate-45 border-l-[2px] border-t-[2px] border-white/95" />
+            </span>
+          </div>
+          {/* TabBar：液态 = 悬浮玻璃胶囊；默认 = 贴底实底条 */}
+          {liquid ? (
+            <div className="lg-tabbar absolute inset-x-[14px] bottom-[10px] flex h-[34px] items-center justify-around">
+              {[0, 1, 2, 3].map((d) => (
+                <span key={d} className="flex h-[18px] w-[28px] flex-col items-center justify-center gap-[2.5px]">
+                  <i className="h-[7px] w-[7px] rounded-[2.5px]" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.26)' }} />
+                  <i className="h-[2px] w-[9px] rounded-full" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.16)' }} />
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="relative flex h-[34px] shrink-0 items-center justify-around border-t border-black/[0.06] bg-[#FBFBFD] dark:border-white/[0.08] dark:bg-[#1D1E23]">
+              {[0, 1, 2, 3].map((d) => (
+                <span key={d} className="flex h-[18px] w-[28px] flex-col items-center justify-center gap-[2.5px]">
+                  <i className="h-[7px] w-[7px] rounded-[2.5px]" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.22)' }} />
+                  <i className="h-[2px] w-[9px] rounded-full" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.14)' }} />
+                </span>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** 紧凑主题卡的材质缩影（~92px）：mini 顶栏条 + 两条迷你气泡 + TabBar——
+ *  液态 = 玻璃材质（lg-* + 光斑）；默认 = 白实底。一眼区分两种主题材质。 */
+function ThemeMiniThumb({ theme, accent }: { theme: BubbleTheme; accent: string }) {
+  const liquid = theme === 'liquid';
+  const solid = 'bg-white shadow-[0_1px_2px_rgba(0,0,0,0.06)] dark:bg-[#2A2B30] dark:shadow-none';
+  return (
+    <div
+      aria-hidden
+      className={`relative h-[92px] overflow-hidden rounded-[14px] ${
         liquid ? 'lg-root' : 'bg-gradient-to-b from-[#F6F7FA] to-[#EBEDF2] dark:from-[#191B20] dark:to-[#141519]'
       }`}
     >
-      {liquid && <AuraLayer />}
-      {/* 状态栏时间 */}
-      <div className="pt-[6px] text-center text-[7.5px] font-semibold tracking-wide text-black/40 dark:text-white/40">9:41</div>
-      {/* mini 聊天顶栏：返回 + 名字 + 菜单点（液态 = 玻璃胶囊；默认 = 白实底） */}
-      <div className={`mx-2 mt-[5px] flex h-[20px] items-center justify-between rounded-[10px] px-[7px] ${liquid ? 'lg-search' : solid}`}>
-        <span aria-hidden className="h-[6.5px] w-[6.5px] -rotate-45 border-b-[1.5px] border-l-[1.5px] border-black/40 dark:border-white/50" />
-        <span className="text-[8px] font-semibold text-black/70 dark:text-white/80">安吉丽娜</span>
-        <span aria-hidden className="flex items-center gap-[2px]">
+      {liquid && (
+        <span className="pointer-events-none absolute inset-0 overflow-hidden">
+          <span className="absolute -left-2 top-1 h-8 w-8 rounded-full bg-[#FF9500]/35 blur-lg" />
+          <span className="absolute right-2 top-3 h-7 w-7 rounded-full bg-[#34C759]/35 blur-lg" />
+          <span className="absolute bottom-0 left-1/3 h-8 w-8 rounded-full bg-[#AF52DE]/30 blur-lg" />
+        </span>
+      )}
+      {/* mini 顶栏条 */}
+      <div className={`relative mx-2 mt-[7px] flex h-[13px] items-center justify-between rounded-full px-[6px] ${liquid ? 'lg-search' : solid}`}>
+        <span className="h-[4px] w-[4px] -rotate-45 border-b border-l border-black/40 dark:border-white/50" />
+        <span className="text-[6.5px] font-semibold leading-none text-black/60 dark:text-white/70">安吉丽娜</span>
+        <span className="flex gap-[1.5px]">
           {[0, 1, 2].map((d) => (
             <i key={d} className="h-[1.5px] w-[1.5px] rounded-full bg-black/35 dark:bg-white/45" />
           ))}
         </span>
       </div>
-      {/* 消息（带头像）：TA（左）+ 我（右）真实装扮泡 */}
-      <div className="mt-[8px] flex flex-col gap-[7px] px-2.5">
+      {/* 两条迷你气泡 */}
+      <div className="relative mt-[9px] flex flex-col gap-[6px] px-2.5">
         <div className="flex items-end gap-[4px]">
-          <span aria-hidden className="h-[14px] w-[14px] shrink-0 rounded-full bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]" />
-          <PreviewBubble app={app} cfg={cfg} side="theirs" index={0} className="!px-2 !py-[3.5px] !text-[8px]">
-            早呀
-          </PreviewBubble>
+          <span className="h-[11px] w-[11px] shrink-0 rounded-full bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]" />
+          <span className="h-[12px] w-[46px] rounded-[4px] rounded-bl-[2px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.08)] dark:bg-[#2A2B30]" />
         </div>
         <div className="flex items-end justify-end gap-[4px]">
-          <PreviewBubble app={app} cfg={cfg} side="mine" index={1} className="!px-2 !py-[3.5px] !text-[8px]">
-            今天也要开心
-          </PreviewBubble>
-          <span aria-hidden className="h-[14px] w-[14px] shrink-0 rounded-full" style={{ background: accent }} />
+          <span className="h-[12px] w-[54px] rounded-[4px] rounded-br-[2px]" style={{ backgroundColor: accent }} />
+          <span className="h-[11px] w-[11px] shrink-0 rounded-full" style={{ backgroundColor: accent }} />
         </div>
       </div>
-      {/* mini 输入条 + 发送键（accent 圆点） */}
-      <div className={`mx-2 mt-[10px] flex h-[14px] items-center rounded-full pl-2 pr-[4px] ${liquid ? 'lg-input' : solid}`}>
-        <span className="h-[3.5px] w-[52%] rounded-full bg-black/[0.10] dark:bg-white/20" />
-        <span
-          aria-hidden
-          className="ml-auto flex h-[9px] w-[9px] shrink-0 items-center justify-center rounded-full"
-          style={{ backgroundColor: accent }}
-        >
-          <span className="h-[3px] w-[3px] rounded-full bg-white/95" />
-        </span>
-      </div>
-      {/* mini TabBar：默认 = 贴底素条；液态 = 悬浮玻璃胶囊 */}
+      {/* TabBar */}
       {liquid ? (
-        <div className="lg-tabbar absolute inset-x-[9px] bottom-[7px] flex h-[13px] items-center justify-around">
-          {[0, 1, 2].map((d) => (
-            <span key={d} className="h-[4px] w-[4px] rounded-full" style={{ background: d === 0 ? accent : 'rgba(0,0,0,0.35)' }} />
+        <div className="lg-tabbar absolute inset-x-[7px] bottom-[7px] flex h-[11px] items-center justify-around">
+          {[0, 1, 2, 3].map((d) => (
+            <i key={d} className="h-[3.5px] w-[3.5px] rounded-full" style={{ backgroundColor: d === 0 ? accent : 'rgba(0,0,0,0.30)' }} />
           ))}
         </div>
       ) : (
-        <div className="absolute inset-x-0 bottom-0 flex h-[15px] items-center justify-around border-t border-black/[0.06] bg-[#FBFBFD] dark:border-white/[0.08] dark:bg-[#1D1E23]">
-          {[0, 1, 2].map((d) => (
-            <span key={d} className="h-[4px] w-[4px] rounded-full bg-black/[0.18] dark:bg-white/40" style={d === 0 ? { background: accent } : undefined} />
+        <div className="absolute inset-x-0 bottom-0 flex h-[13px] items-center justify-around border-t border-black/[0.06] bg-[#FBFBFD] dark:border-white/[0.08] dark:bg-[#1D1E23]">
+          {[0, 1, 2, 3].map((d) => (
+            <i
+              key={d}
+              className="h-[3.5px] w-[3.5px] rounded-full bg-black/[0.18] dark:bg-white/40"
+              style={d === 0 ? { backgroundColor: accent } : undefined}
+            />
           ))}
         </div>
       )}
@@ -407,7 +578,8 @@ export interface ThemeStylePageProps {
 }
 
 /** 主题界面：顶部毛玻璃胶囊两个选择（主题 / 气泡）——
- *  「主题」= 两列预览卡 + 选中液态玻璃时内联「液态玻璃设置」收缩面板；
+ *  「主题」= 顶部实时大预览卡（选哪个主题显示哪个样式）+ 两列紧凑主题卡 +
+ *  选中液态玻璃时「液态玻璃设置」收缩面板紧跟液态玻璃主题下方；
  *  「气泡」= 实时预览 + 四格样式 + 颜色 + 收藏夹。 */
 export function ThemeStylePage({ app, onBack, onToast, title = '主题', wxMe }: ThemeStylePageProps) {
   const [tab, setTab] = useState<'theme' | 'bubble'>('theme');
@@ -444,8 +616,9 @@ export function ThemeStylePage({ app, onBack, onToast, title = '主题', wxMe }:
   );
 }
 
-/** 「主题」选择内容：两列预览卡（点卡切换，选中 accent 描边 + 柔光 + 圆勾徽标，名字居中）+
- *  选中液态玻璃时下方内联「液态玻璃设置」收缩面板（无独立界面，归属一目了然）。 */
+/** 「主题」选择内容：**顶部实时大预览卡**（选哪个主题就显示哪个主题的整页样式，
+ *  液态顶栏名字区还联动液态设置实时变化）+ 两列紧凑主题卡（材质缩影，点选切换）+
+ *  选中液态玻璃时「液态玻璃设置」收缩面板紧跟液态玻璃主题下方（无独立界面）。 */
 function ThemeTabContent({
   app,
   onToast,
@@ -458,6 +631,7 @@ function ThemeTabContent({
   const meta = PLATFORM_META[app];
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
   const setBubbleTheme = useSettings((s) => s.setBubbleTheme);
+  const skin = useSettings((s) => s.liquidSkin[app]);
 
   const appStyle: BubbleAppStyle = bubbleStyle[app] ?? { kind: 'default' };
   const curTheme: BubbleTheme = appStyle.theme ?? 'default';
@@ -465,53 +639,69 @@ function ThemeTabContent({
 
   return (
     <>
-      {/* 主题卡（两列网格：卡内 mini 手机缩影实时预览，气泡装扮同步联动，所见即所得） */}
-      <div className="grid grid-cols-2 gap-3" role="region" aria-label="界面主题">
-        {THEMES_OF_APP[app].map((theme) => {
-          const selected = curTheme === theme;
-          return (
-            <button
-              key={theme}
-              type="button"
-              data-testid={`bubble-theme-${theme}`}
-              aria-pressed={selected}
-              onClick={() => {
-                if (!selected) {
-                  setBubbleTheme(app, theme);
-                  onToast(theme === 'liquid' ? '已切换液态玻璃主题' : '已恢复默认主题');
-                }
-              }}
-              className={`w-full rounded-[20px] bg-white p-2.5 pb-2 text-left ring-1 transition-all active:scale-[0.98] dark:bg-[#1C1E23] ${
-                selected ? 'ring-[1.5px]' : 'ring-black/[0.05] dark:ring-white/[0.08]'
-              }`}
-              style={
-                selected
-                  ? { ['--tw-ring-color' as string]: meta.accent, boxShadow: `0 10px 26px ${withAlpha(meta.accent, 0.15)}` }
-                  : { boxShadow: '0 4px 14px rgba(17,24,39,0.05)' }
-              }
-            >
-              <div className="relative">
-                <ThemeCardPreview app={app} cfg={bubbleStyle} theme={theme} accent={meta.accent} />
-                {selected && (
-                  <span
-                    className="absolute right-1.5 top-1.5 flex h-[17px] w-[17px] items-center justify-center rounded-full text-white shadow-md"
-                    style={{ backgroundColor: meta.accent }}
-                  >
-                    <Check className="h-[10px] w-[10px]" strokeWidth={3.4} />
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center justify-center pb-[2px] pt-2">
-                <span className="truncate text-[12.5px] font-semibold leading-none text-black/85 dark:text-white/90">
-                  {BUBBLE_THEME_LABEL[theme]}
-                </span>
-              </div>
-            </button>
-          );
-        })}
+      {/* 1. 实时大预览（最上面）：选哪个主题，这里就显示哪个主题的样式 */}
+      <div role="region" aria-label="主题实时预览">
+        <ThemeLivePreview app={app} cfg={bubbleStyle} theme={curTheme} accent={meta.accent} skin={skin} />
+        <p className="mt-2.5 flex items-center justify-center gap-[6px] text-[12px] font-medium leading-none text-black/45 dark:text-white/45">
+          <span
+            aria-hidden
+            className="h-[5px] w-[5px] rounded-full"
+            style={{ backgroundColor: meta.accent, boxShadow: `0 0 0 2.5px ${withAlpha(meta.accent, 0.18)}` }}
+          />
+          实时预览 · {BUBBLE_THEME_LABEL[curTheme]}
+        </p>
       </div>
 
-      {/* 液态玻璃设置（内联收缩面板，仅选中液态玻璃时出现，无独立界面） */}
+      {/* 2. 主题选择（两列紧凑卡：材质缩影一眼区分，点选即切换，顶部预览实时跟随） */}
+      <div className="mt-5">
+        <SectionLabel accent={meta.accent}>选择主题</SectionLabel>
+        <div className="mt-2.5 grid grid-cols-2 gap-3" role="region" aria-label="界面主题">
+          {THEMES_OF_APP[app].map((theme) => {
+            const selected = curTheme === theme;
+            return (
+              <button
+                key={theme}
+                type="button"
+                data-testid={`bubble-theme-${theme}`}
+                aria-pressed={selected}
+                onClick={() => {
+                  if (!selected) {
+                    setBubbleTheme(app, theme);
+                    onToast(theme === 'liquid' ? '已切换液态玻璃主题' : '已恢复默认主题');
+                  }
+                }}
+                className={`w-full rounded-[18px] bg-white p-2 pb-1.5 text-left ring-1 transition-all active:scale-[0.98] dark:bg-[#1C1E23] ${
+                  selected ? 'ring-[1.5px]' : 'ring-black/[0.05] dark:ring-white/[0.08]'
+                }`}
+                style={
+                  selected
+                    ? { ['--tw-ring-color' as string]: meta.accent, boxShadow: `0 8px 22px ${withAlpha(meta.accent, 0.16)}` }
+                    : { boxShadow: '0 3px 12px rgba(17,24,39,0.05)' }
+                }
+              >
+                <div className="relative">
+                  <ThemeMiniThumb theme={theme} accent={meta.accent} />
+                  {selected && (
+                    <span
+                      className="absolute right-1.5 top-1.5 flex h-[17px] w-[17px] items-center justify-center rounded-full text-white shadow-md"
+                      style={{ backgroundColor: meta.accent }}
+                    >
+                      <Check className="h-[10px] w-[10px]" strokeWidth={3.4} />
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center justify-center pb-[2px] pt-[7px]">
+                  <span className="truncate text-[12.5px] font-semibold leading-none text-black/85 dark:text-white/90">
+                    {BUBBLE_THEME_LABEL[theme]}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 3. 液态玻璃设置（收缩面板）：紧跟液态玻璃主题卡下方，仅选中时出现，无独立界面 */}
       <AnimatePresence initial={false}>
         {liquidOn && (
           <motion.div
