@@ -236,22 +236,6 @@ export function WxIcTheme() {
   );
 }
 
-/** 显示：眼睛（蓝色杏仁形眼眶 + 瞳孔，「我」页 › 显示 入口；聊天显示设置） */
-export function WxIcDisplay() {
-  return (
-    <Slot>
-      <path
-        d="M6 24 C11 15.5 17.5 11.5 24 11.5 C30.5 11.5 37 15.5 42 24 C37 32.5 30.5 36.5 24 36.5 C17.5 36.5 11 32.5 6 24 Z"
-        stroke="#4D9CF8"
-        strokeWidth={3}
-        fill="none"
-      />
-      <circle cx="24" cy="24" r="6.2" fill="#4D9CF8" />
-      <circle cx="26.4" cy="21.6" r="2" fill="#FFFFFF" />
-    </Slot>
-  );
-}
-
 /** 设置：蓝色齿轮（lucide 自带 viewBox，独立于 48 画布） */
 export function WxIcSettings() {
   return (

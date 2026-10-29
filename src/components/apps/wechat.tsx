@@ -127,7 +127,6 @@ import {
   WxIcWorks,
   WxIcSticker,
   WxIcTheme,
-  WxIcDisplay,
   WxIcSettings,
   WxTabCompassIcon,
 } from './wx-icons';
@@ -231,8 +230,7 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
-import { ChatDisplayPage } from './chat-display-settings';
-import { fmtMsgTime, READ_ACCENT, type ChatDisplayConfig } from '@/lib/ios/chat-display';
+import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { BubbleTail } from './bubble-tail';
 import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
@@ -1995,6 +1993,10 @@ const markPeerRead = (list: WxMsg[]): WxMsg[] =>
 /** 元信息小字统一样式（已读未读 / 时间；颜色由 style 覆盖未读态） */
 const wxMetaText = 'whitespace-nowrap text-[10px] leading-[1.35] text-black/40 dark:text-white/40';
 
+/** 元信息小字：已读浅灰 / 未读深灰（用户指定：未读弃品牌色，灰色系双阶区分） */
+const wxMetaReadCls = 'text-black/35 dark:text-white/40';
+const wxMetaUnreadCls = 'text-black/60 dark:text-white/75';
+
 /** 显示设置 › 已读未读 + 时间：头像下方堆叠块（与头像同宽居中；同显时已读在上、时间在下） */
 function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
   const showRead = cfg.readEnabled && cfg.readPosition === 'avatar' && wxMetaOk(m);
@@ -2005,10 +2007,9 @@ function WxMetaUnderAvatar({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
       {showRead && (
         <span
           data-testid={`wx-read-${m.id}`}
-          className={wxMetaText}
-          style={m.unread ? { color: READ_ACCENT.wx } : undefined}
+          className={`${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
         >
-          {m.unread ? '未读' : '已读'}
+          {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
@@ -2035,10 +2036,9 @@ function WxMetaUnderBubble({ m, cfg }: { m: WxMsg; cfg: ChatDisplayConfig }) {
       {showRead && (
         <span
           data-testid={`wx-read-${m.id}`}
-          className={wxMetaText}
-          style={m.unread ? { color: READ_ACCENT.wx } : undefined}
+          className={`${wxMetaText} ${m.unread ? wxMetaUnreadCls : wxMetaReadCls}`}
         >
-          {m.unread ? '未读' : '已读'}
+          {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
@@ -4984,8 +4984,8 @@ function ChatPage({
   const apiConfig = useSettings((s) => s.apiConfig);
   // 第十七轮聊天气泡装扮：订阅全局配置（装扮页修改 → 聊天气泡实时跟随）
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
-  // 聊天显示设置（「我」页 › 显示）：头像形状 / 已读未读回执 / 时间显示（配置页修改 → 聊天实时跟随）
-  const chatDisplay = useSettings((s) => s.chatDisplay.wx);
+  // 聊天显示设置（聊天信息 › 显示设置，按联系人隔离）：头像形状 / 已读未读回执 / 时间显示（修改 → 实时跟随）
+  const chatDisplay = useChatDisplay('wx', peer.id);
   // 液态玻璃主题（气泡样式设置 › 界面主题）：只接管页面铭件（根底色/顶栏胶囊/输入胶囊/输入框），
   // 气泡仍由上方 bubbleStyle 装扮系统管、聊天背景层一行不动；默认主题全部走原类（像素级保持现状）
   const liquid = isLiquidTheme(bubbleStyle, 'wx');
@@ -9193,11 +9193,15 @@ function ChatPage({
                   </div>
                 </div>
               ) : m.kind === 'image' && m.img ? (
-                <div {...bubblePress}>
-                  <ImageMsgBubble src={m.img.src} onClick={() => {
-                    const src = m.img?.src;
-                    if (src) setViewer({ urls: [src], index: 0 }); // 空串保护：无 src 不打开
-                  }} />
+                /* 显示设置：图片/语音/表情列容器挂气泡下元信息（与文本分支同构） */
+                <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${m.role === 'me' ? 'items-end' : 'items-start'}`}>
+                  <div className="min-w-0">
+                    <ImageMsgBubble src={m.img.src} onClick={() => {
+                      const src = m.img?.src;
+                      if (src) setViewer({ urls: [src], index: 0 }); // 空串保护：无 src 不打开
+                    }} />
+                  </div>
+                  <WxMetaUnderBubble m={m} cfg={chatDisplay} />
                 </div>
               ) : m.kind === 'textcard' && m.card ? (
                 /* 文字图片卡片（Task 14：以「我」的身份发出/历史角色卡兼容）；
@@ -9217,19 +9221,22 @@ function ChatPage({
                    （第十八轮：语音气泡跟随装扮 —— 纯色/七彩原生尾巴随色，毛玻璃/液态胶囊无尾巴）。
                    第四十七轮（用户指定）：包裹层限宽 calc(100%-92px)（与文本气泡同口径）——
                    转文字长面板不再撑满整行、不越过对侧头像区 */
-                <div {...bubblePress} className="max-w-[calc(100%-92px)]">
-                  <VoiceMsgBubble
-                    msgId={m.id}
-                    voice={m.voice}
-                    side={m.role}
-                    theme="wx"
-                    bubbleClassName={bvis.override ? bvis.className : undefined}
-                    decorated={bvis.override}
-                    hideTail={bvis.override && bvis.tail === 'none'}
-                    style={bvis.override ? bvis.style : undefined}
-                    decorApp="wx"
-                    msgIndex={i}
-                  />
+                <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${m.role === 'me' ? 'items-end' : 'items-start'}`}>
+                  <div {...bubblePress} className="max-w-full">
+                    <VoiceMsgBubble
+                      msgId={m.id}
+                      voice={m.voice}
+                      side={m.role}
+                      theme="wx"
+                      bubbleClassName={bvis.override ? bvis.className : undefined}
+                      decorated={bvis.override}
+                      hideTail={bvis.override && bvis.tail === 'none'}
+                      style={bvis.override ? bvis.style : undefined}
+                      decorApp="wx"
+                      msgIndex={i}
+                    />
+                  </div>
+                  <WxMetaUnderBubble m={m} cfg={chatDisplay} />
                 </div>
               ) : m.kind === 'call' && m.call ? (
                 /* 语音通话卡片：微信配色电话卡；整卡可点回拨（用户需求：点击通话卡片就能回拨电话）；长按菜单复制/删除等默认项。
@@ -9249,17 +9256,20 @@ function ChatPage({
                   <LocBubble name={m.loc.name} address={m.loc.address} onClick={() => setLocViewId(m.id)} />
                 </div>
               ) : m.kind === 'sticker' && m.stk ? (
-                <div {...bubblePress}>
-                  <StickerMsgBubble
-                    src={m.stk.url}
-                    meaning={m.stk.meaning}
-                    me={m.role === 'me'}
-                    onClick={() => {
-                      const url = m.stk?.url;
-                      if (url) setViewer({ urls: [url], index: 0 }); // 空串保护：无 url 不打开
-                      if (m.stk?.meaning) onToast(`表情：${m.stk.meaning}`);
-                    }}
-                  />
+                <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${m.role === 'me' ? 'items-end' : 'items-start'}`}>
+                  <div className="min-w-0">
+                    <StickerMsgBubble
+                      src={m.stk.url}
+                      meaning={m.stk.meaning}
+                      me={m.role === 'me'}
+                      onClick={() => {
+                        const url = m.stk?.url;
+                        if (url) setViewer({ urls: [url], index: 0 }); // 空串保护：无 url 不打开
+                        if (m.stk?.meaning) onToast(`表情：${m.stk.meaning}`);
+                      }}
+                    />
+                  </div>
+                  <WxMetaUnderBubble m={m} cfg={chatDisplay} />
                 </div>
               ) : m.kind === 'forward' && m.fwd?.merged ? (
                 /* 合并转发「聊天记录」卡片（原生微信同款：两面都白底）：标题 + 逐条预览 + 「聊天记录」脚注；点击进详情 */
@@ -10077,6 +10087,7 @@ function ChatPage({
         <ChatSettingsPage
           variant="wx"
           title="聊天信息"
+          contactId={peer.id}
           peerName={peer.name}
           peerAvatar={peer.avatar}
           idLabel="微信号"
@@ -13565,7 +13576,6 @@ type Page =
   | 'accountSwitch'
   | 'look'
   | 'dress'
-  | 'display'
   | 'bubbles';
 
 // ---------------- 看一看页（发现页 › 看一看：轻量内容流） ----------------
@@ -15352,8 +15362,6 @@ function MainScreen({
     );
   // 气泡样式页（主题页 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
   if (page === 'bubbles') return <BubbleStylePage app="wx" onBack={() => setPage('dress')} onToast={showToast} />;
-  // 显示设置页（「我」页 › 显示，主题下方）：头像样式 / 已读未读回执 / 时间显示（实时预览）
-  if (page === 'display') return <ChatDisplayPage app="wx" onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'album') {
     // 我的主页「相册」入口：当前用户自己的相册（可增删改）
@@ -16104,13 +16112,6 @@ function MainScreen({
                 testId="wx-me-theme"
                 onClick={() => setPage('dress')}
                 icon={<WxIcTheme />}
-              />
-              {/* 显示（本轮新增）：聊天显示设置——头像样式 / 已读未读回执 / 时间显示 */}
-              <WxMenuRow
-                label="显示"
-                testId="wx-me-display"
-                onClick={() => setPage('display')}
-                icon={<WxIcDisplay />}
               />
             </div>
 

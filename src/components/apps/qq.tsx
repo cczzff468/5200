@@ -237,8 +237,7 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, PostMoreMenu, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
-import { ChatDisplayPage } from './chat-display-settings';
-import { fmtMsgTime, READ_ACCENT, type ChatDisplayConfig } from '@/lib/ios/chat-display';
+import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
@@ -1685,8 +1684,10 @@ const qqMetaOk = (m: QQMsg) => !m.recalled && m.kind !== 'sys' && m.kind !== 'no
 const qqMarkPeerRead = (list: QQMsg[]): QQMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
-/** 元信息小字统一样式（已读未读 / 时间；颜色由 style 覆盖未读态） */
-const qqMetaText = 'whitespace-nowrap text-[10px] leading-[1.35] text-black/40 dark:text-white/40';
+/** 元信息小字统一样式（已读未读 / 时间）；已读浅灰 / 未读深灰（用户指定：未读弃品牌色） */
+const qqMetaText = 'whitespace-nowrap text-[10px] leading-[1.35]';
+const qqMetaReadCls = 'text-black/35 dark:text-white/40';
+const qqMetaUnreadCls = 'text-black/60 dark:text-white/75';
 
 /** 显示设置 › 已读未读 + 时间：头像下方堆叠块（与头像同宽居中；同显时已读在上、时间在下） */
 function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
@@ -1698,10 +1699,9 @@ function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
       {showRead && (
         <span
           data-testid={`qq-read-${m.id}`}
-          className={qqMetaText}
-          style={m.unread ? { color: READ_ACCENT.qq } : undefined}
+          className={`${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
         >
-          {m.unread ? '未读' : '已读'}
+          {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
@@ -1728,10 +1728,9 @@ function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
       {showRead && (
         <span
           data-testid={`qq-read-${m.id}`}
-          className={qqMetaText}
-          style={m.unread ? { color: READ_ACCENT.qq } : undefined}
+          className={`${qqMetaText} ${m.unread ? qqMetaUnreadCls : qqMetaReadCls}`}
         >
-          {m.unread ? '未读' : '已读'}
+          {readTextOf(cfg, m.unread === true)}
         </span>
       )}
       {showTime && (
@@ -3227,8 +3226,8 @@ function ChatPage({
   const apiConfig = useSettings((s) => s.apiConfig);
   // 第十七轮聊天气泡装扮：订阅全局配置（装扮页修改 → 聊天气泡实时跟随）
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
-  // 聊天显示设置（设置 › 聊天显示）：头像形状 / 已读未读回执 / 时间显示（配置页修改 → 聊天实时跟随）
-  const chatDisplay = useSettings((s) => s.chatDisplay.qq);
+  // 聊天显示设置（聊天设置 › 显示设置，按联系人隔离）：头像形状 / 已读未读回执 / 时间显示（修改 → 实时跟随）
+  const chatDisplay = useChatDisplay('qq', peer.id);
   // 液态玻璃主题（个性装扮 › 界面主题）：只接管页面铬件——页面底 lg-root + 顶栏完全透明悬浮（名字椭圆形玻璃胶囊包裹）
   // + 返回/菜单 lg-chip 椭圆 + 输入框毛玻璃胶囊 + 六工具钮 lg-chip + 语音/加号/表情面板 lg-sheet；
   // 聊天气泡仍由装扮系统（kind）管、聊天背景层完全不受主题影响（用户指定）；默认主题时零覆盖
@@ -7231,14 +7230,17 @@ function ChatPage({
                   </div>
                 ) : m.kind === 'image' ? (
                   /* 图片气泡：点击开大图（黑底居中；多选模式下点选勾选不开大图）；长按菜单含保存/重新生成 */
-                  <div
-                    {...bubblePress}
-                    onClick={() => {
-                      if (!selectMode && m.content) setImgViewer(m.content);
-                    }}
-                    className="min-w-0"
-                  >
-                    <QqImageBubble src={m.content} />
+                  <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                    <div
+                      {...bubblePress}
+                      onClick={() => {
+                        if (!selectMode && m.content) setImgViewer(m.content);
+                      }}
+                      className="min-w-0"
+                    >
+                      <QqImageBubble src={m.content} />
+                    </div>
+                    <QqMetaUnderBubble m={m} cfg={chatDisplay} />
                   </div>
                 ) : m.kind === 'textcard' && m.card ? (
                   /* 文字图片卡片（Task 14：以「我」的身份发出/历史角色卡兼容）；
@@ -7254,12 +7256,15 @@ function ChatPage({
                     />
                   </div>
                 ) : m.kind === 'sticker' && m.stk ? (
-                  <div {...bubblePress}>
-                    <QqStickerBubble
-                      url={m.stk.url}
-                      meaning={m.stk.meaning}
-                      onClick={() => onToast(m.stk?.meaning ? `表情：${m.stk.meaning}` : '表情')}
-                    />
+                  <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                    <div className="min-w-0" {...bubblePress}>
+                      <QqStickerBubble
+                        url={m.stk.url}
+                        meaning={m.stk.meaning}
+                        onClick={() => onToast(m.stk?.meaning ? `表情：${m.stk.meaning}` : '表情')}
+                      />
+                    </div>
+                    <QqMetaUnderBubble m={m} cfg={chatDisplay} />
                   </div>
                 ) : m.kind === 'forward' && m.fwd?.merged ? (
                   /* 合并转发「聊天记录」卡片（原生同款：两面都白底）：标题 + 逐条预览 + 「聊天记录」脚注；点击进详情 */
@@ -7335,18 +7340,22 @@ function ChatPage({
                      （我方 QQ 蓝底白字与文本气泡一致，圆角由组件内处理）。
                      第四十七轮（用户指定）：包裹层限宽 calc(100%-96px)（与 QQ 文本气泡同口径）——
                      转文字长面板不再撑满整行、不越过对侧头像区 */
-                  <div {...bubblePress} className="max-w-[calc(100%-96px)]">
-                    <VoiceMsgBubble
-                      msgId={m.id}
-                      voice={m.voice}
-                      side={m.role}
-                      theme="qq"
-                      bubbleClassName={bvis.override ? bvis.className : undefined}
-                      decorated={bvis.override}
-                      style={bvis.override ? bvis.style : m.role === 'me' ? { backgroundColor: '#0099FF' } : undefined}
-                      decorApp="qq"
-                      msgIndex={i}
-                    />
+                  /* 显示设置：语音/图片/表情列容器挂气泡下元信息（与文本分支同构） */
+                  <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                    <div {...bubblePress} className="max-w-full">
+                      <VoiceMsgBubble
+                        msgId={m.id}
+                        voice={m.voice}
+                        side={m.role}
+                        theme="qq"
+                        bubbleClassName={bvis.override ? bvis.className : undefined}
+                        decorated={bvis.override}
+                        style={bvis.override ? bvis.style : m.role === 'me' ? { backgroundColor: '#0099FF' } : undefined}
+                        decorApp="qq"
+                        msgIndex={i}
+                      />
+                    </div>
+                    <QqMetaUnderBubble m={m} cfg={chatDisplay} />
                   </div>
                 ) : (
                   <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
@@ -8236,6 +8245,7 @@ function ChatPage({
         <ChatSettingsPage
           variant="qq"
           title="聊天设置"
+          contactId={peer.id}
           peerName={peer.name}
           peerAvatar={peer.avatar}
           idLabel="QQ号"
@@ -14638,7 +14648,6 @@ function SettingsPage({
   onBack,
   onOpenSecurity,
   onOpenDress,
-  onOpenDisplay,
   onLogout,
   onToast,
 }: {
@@ -14647,8 +14656,6 @@ function SettingsPage({
   onOpenSecurity: () => void;
   /** 第十七轮：个性装扮与特权外显 → 聊天气泡装扮设置页 */
   onOpenDress: () => void;
-  /** 聊天显示设置页（头像样式 / 已读未读回执 / 时间显示） */
-  onOpenDisplay: () => void;
   onLogout: () => void;
   onToast: (m: string) => void;
 }) {
@@ -14672,7 +14679,6 @@ function SettingsPage({
     { icon: <Bell className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '消息通知', onClick: () => onToast('消息通知暂未开放') },
     { icon: <SlidersHorizontal className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '模式选择', hint: '普通模式', onClick: () => onToast('模式选择暂未开放') },
     { icon: <Shirt className="h-5 w-5" strokeWidth={1.9} />, color: '#F0479C', label: '个性装扮与特权外显', onClick: onOpenDress },
-    { icon: <Eye className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '聊天显示', hint: '头像 · 已读 · 时间', onClick: onOpenDisplay, testid: 'qq-settings-display' },
     { icon: <Sparkles className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '头像双击动作', hint: clapShown, onClick: openClap, testid: 'qq-settings-clap' },
     { icon: <Settings className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '通用', onClick: () => onToast('通用设置暂未开放') },
   ];
@@ -17104,7 +17110,6 @@ type MainRoute =
   | { page: 'momentsSettings' }
   | { page: 'dress' }
   | { page: 'bubbles' }
-  | { page: 'display' }
   | { page: 'settings' }
   | { page: 'security' }
   | { page: 'stickers' }
@@ -17742,9 +17747,6 @@ function MainScreen({
       ) : route.page === 'bubbles' ? (
         // 气泡样式页（个性装扮 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
         <BubbleStylePage app="qq" onBack={() => setRoute({ page: 'dress' })} onToast={showToast} />
-      ) : route.page === 'display' ? (
-        // 显示设置页（设置 › 聊天显示）：头像样式 / 已读未读回执 / 时间显示（实时预览）
-        <ChatDisplayPage app="qq" onBack={() => setRoute({ page: 'settings' })} onToast={showToast} />
       ) : route.page === 'momentsSettings' ? (
         <MomentsSettingsPage
           app="qq"
@@ -17767,7 +17769,6 @@ function MainScreen({
           onBack={() => openTabs('消息')}
           onOpenSecurity={() => setRoute({ page: 'security' })}
           onOpenDress={() => setRoute({ page: 'dress' })}
-          onOpenDisplay={() => setRoute({ page: 'display' })}
           onLogout={onLogout}
           onToast={showToast}
         />

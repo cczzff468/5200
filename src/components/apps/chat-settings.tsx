@@ -39,6 +39,7 @@ import { voiceIdForProvider } from '@/lib/ios/tts-client';
 import { useSettings } from '@/lib/ios/store';
 import { getBoundBookIds, loadBooks, saveBooks, type WorldBook } from '@/lib/ios/worldbook';
 import { LocalToast, useLocalToast } from './page-toast';
+import { ChatDisplaySection } from './chat-display-settings';
 
 export type ChatSettingsVariant = 'wx' | 'qq' | 'sms';
 
@@ -145,6 +146,8 @@ export function ChatSettingsPage({
   timeAware,
   stickersOn,
   worldBooksSummary,
+  /** 当前会话联系人 id（显示设置按联系人隔离）；不传 = 隐藏显示设置区块（信息端 / 自己会话） */
+  contactId,
   onBack,
   onSaveRemark,
   /** 与角色的关系（当前账号视角，多账号关系感知）；不传 = 隐藏该行 */
@@ -213,6 +216,8 @@ export function ChatSettingsPage({
   actionDescOn: boolean;
   /** 挂载的世界书摘要（未挂载时「未选择」） */
   worldBooksSummary: string;
+  /** 当前会话联系人 id（显示设置按联系人隔离：头像样式 / 已读未读回执 / 时间显示）；不传 = 隐藏该区块 */
+  contactId?: string;
   onBack: () => void;
   /** 保存备注（空串 = 清除备注；宿主负责持久化并刷新展示名） */
   onSaveRemark: (v: string) => void;
@@ -403,6 +408,10 @@ export function ChatSettingsPage({
             </span>
           </button>
         </div>
+
+        {/* 显示设置（本轮：折叠区块——头像样式 / 已读未读回执 / 时间显示，按联系人隔离；
+            信息端（sms）不参与，未传 contactId（如自己会话）也不显示） */}
+        {variant !== 'sms' && contactId ? <ChatDisplaySection app={variant} contactId={contactId} /> : null}
 
         {/* 回复条数：AI 按选定条数连发多条消息（独立二级页选择） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
