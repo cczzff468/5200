@@ -6922,8 +6922,43 @@ function ChatPage({
           </span>
         )}
         <div className="ml-1 min-w-0 flex-1">
-          {liquid && liquidSkinQq.headerMode !== 'text' ? (
-            /* 液态玻璃皮肤（本轮新增）：名字区四种模式——头像+名字（名字可关）/ 双头像+中间文字 / 双头像+名字 */
+          {liquid && liquidSkinQq.headerMode === 'dualName' ? (
+            /* 液态·双头像+名字（本轮用户指定）：我的名字也显示——名字在各自头像下面（两列布局）；
+               中间可插自定义文字；正在输入时中间显示「正在输入…」 */
+            <div className="flex items-center gap-1.5">
+              <span
+                data-testid="qq-chat-liquid-header"
+                className="lg-title flex min-w-0 items-center gap-2 rounded-full py-[4px] pl-[7px] pr-[11px]"
+              >
+                <span className="flex w-[52px] shrink-0 flex-col items-center gap-[2px]">
+                  <QqAvatar src={peer.avatar} alt={peer.name} size={24} />
+                  <span className="max-w-[52px] truncate text-[9.5px] font-medium leading-none text-black/65 dark:text-white/70">
+                    {peer.name}
+                  </span>
+                </span>
+                {(streaming || delivering || liquidSkinQq.headerMiddleText.trim()) && (
+                  <span className="max-w-[86px] truncate text-[12px] font-semibold text-black/70 dark:text-white/75">
+                    {streaming || delivering ? '正在输入…' : liquidSkinQq.headerMiddleText.trim()}
+                  </span>
+                )}
+                <span className="flex w-[52px] shrink-0 flex-col items-center gap-[2px]">
+                  <QqAvatar src={me.avatar} alt={me.name} size={24} />
+                  <span className="max-w-[52px] truncate text-[9.5px] font-medium leading-none text-black/65 dark:text-white/70">
+                    {me.name}
+                  </span>
+                </span>
+              </span>
+              <CoupleMark contactId={peer.id} size={20} testId="qq-chat-couple-mark" />
+              {flags.muted === true && (
+                <BellOff
+                  className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                  strokeWidth={2}
+                  aria-label="消息免打扰"
+                />
+              )}
+            </div>
+          ) : liquid && liquidSkinQq.headerMode !== 'text' ? (
+            /* 液态玻璃皮肤：头像+名字（名字可关）/ 双头像+中间文字 */
             <div className="flex items-center gap-1.5">
               <span
                 data-testid="qq-chat-liquid-header"
@@ -6940,7 +6975,7 @@ function ChatPage({
                     <QqAvatar src={me.avatar} alt={me.name} size={26} />
                   </>
                 )}
-                {(liquidSkinQq.headerMode === 'avatarName' && liquidSkinQq.headerShowName) || liquidSkinQq.headerMode === 'dualName' ? (
+                {liquidSkinQq.headerMode === 'avatarName' && liquidSkinQq.headerShowName ? (
                   <span className="truncate">{streaming || delivering ? '正在输入中…' : peer.name}</span>
                 ) : null}
               </span>

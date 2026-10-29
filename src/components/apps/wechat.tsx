@@ -61,11 +61,9 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
-  Disc3,
+  Music2,
   Pause,
   Play,
-  Repeat,
-  Settings,
   SkipBack,
   SkipForward,
 } from 'lucide-react';
@@ -162,6 +160,7 @@ import { triggerInviteFromChat } from '@/lib/ios/together-invite';
 import { sendUserTogetherInvite, TG_CARD_INSERTED_EVENT, type TgCardMsg } from '@/lib/ios/together-flow';
 import { TogetherInviteSheet } from './together-invite-sheet';
 import { songArtistText, songCover } from '@/lib/ios/music-api';
+import { useMusic, mediaProxyUrl } from '@/lib/ios/music-store';
 import { cutUnfinishedMusicTag, runMusicRemote, takeMusicRemote, togetherLiveBlock } from '@/lib/ios/music-remote';
 import {
   acceptBlockReq,
@@ -8840,8 +8839,40 @@ function ChatPage({
             </span>
           )}
           <div className="flex min-w-0 flex-1 items-center justify-center" data-testid="wx-chat-peer-name">
-            {liquid && liquidSkinWx.headerMode !== 'text' ? (
-              /* 液态玻璃皮肤（本轮新增）：名字区四种模式——头像+名字（名字可关）/ 双头像+中间文字 / 双头像+名字；
+            {liquid && liquidSkinWx.headerMode === 'dualName' ? (
+              /* 液态·双头像+名字（本轮用户指定）：我的名字也显示——名字在各自头像下面（两列布局）；
+                 中间可插自定义文字；正在输入时中间显示「正在输入…」 */
+              <span
+                data-testid="wx-chat-liquid-header"
+                className="lg-title flex min-w-0 items-center gap-2 rounded-full py-[4px] pl-[7px] pr-[11px]"
+              >
+                <span className="flex w-[52px] shrink-0 flex-col items-center gap-[2px]">
+                  <WxAvatar src={peer.avatar} alt={peer.name} size={24} shape="circle" />
+                  <span className="max-w-[52px] truncate text-[9.5px] font-medium leading-none text-black/65 dark:text-white/70">
+                    {peer.name}
+                  </span>
+                </span>
+                {(streaming || delivering || liquidSkinWx.headerMiddleText.trim()) && (
+                  <span className="max-w-[86px] truncate text-[12px] font-semibold text-black/70 dark:text-white/75">
+                    {streaming || delivering ? '正在输入…' : liquidSkinWx.headerMiddleText.trim()}
+                  </span>
+                )}
+                <span className="flex w-[52px] shrink-0 flex-col items-center gap-[2px]">
+                  <WxAvatar src={me.avatar} alt={me.name} size={24} shape="circle" />
+                  <span className="max-w-[52px] truncate text-[9.5px] font-medium leading-none text-black/65 dark:text-white/70">
+                    {me.name}
+                  </span>
+                </span>
+                {flags.muted === true && (
+                  <BellOff
+                    className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
+                    strokeWidth={2}
+                    aria-label="消息免打扰"
+                  />
+                )}
+              </span>
+            ) : liquid && liquidSkinWx.headerMode !== 'text' ? (
+              /* 液态玻璃皮肤：头像+名字（名字可关）/ 双头像+中间文字；
                  群聊（peer 侧另有页面）不走此分支；selfChat 也能用（两个头像都是自己） */
               <span
                 data-testid="wx-chat-liquid-header"
@@ -8858,7 +8889,7 @@ function ChatPage({
                     <WxAvatar src={me.avatar} alt={me.name} size={26} shape="circle" />
                   </>
                 )}
-                {(liquidSkinWx.headerMode === 'avatarName' && liquidSkinWx.headerShowName) || liquidSkinWx.headerMode === 'dualName' ? (
+                {liquidSkinWx.headerMode === 'avatarName' && liquidSkinWx.headerShowName ? (
                   <span className="truncate">{streaming || delivering ? '正在输入中…' : peer.name}</span>
                 ) : null}
                 {flags.muted === true && (
@@ -14149,130 +14180,241 @@ function mmss(sec: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-/** 网易云音乐小组件：装饰性迷你播放器——播放/暂停真实驱动进度条与唱片旋转（本组件内自洽，不影响音乐 App） */
-function WxWidgetMusic() {
-  const [playing, setPlaying] = useState(true);
-  const DURATION = 225; // 03:45
-  const [sec, setSec] = useState(47);
-  // 播放中每秒推进 1 秒，到结尾循环
-  useEffect(() => {
-    if (!playing) return;
-    const t = window.setInterval(() => setSec((v) => (v + 1 >= DURATION ? 0 : v + 1)), 1000);
-    return () => window.clearInterval(t);
-  }, [playing]);
-  const pct = (sec / DURATION) * 100;
+/** 网易云音乐小组件（连接音乐 App）：真实读取全局播放器状态（当前歌/进度/播放暂停），
+ *  预览/切歌/暂停直接驱动音乐引擎，点歌曲区跳进音乐 App 播放页；
+ *  顶部身份（头像+昵称）可跟随微信登录账号，也可在 主题›液态玻璃设置 里自定义 */
+function WxWidgetMusic({ me }: { me: WxUser }) {
+  const skin = useSettings((s) => s.liquidSkin.wx);
+  const switchToApp = useUI((s) => s.switchToApp);
+  const current = useMusic((s) => s.current);
+  const playing = useMusic((s) => s.playing);
+  const buffering = useMusic((s) => s.buffering);
+  const position = useMusic((s) => s.position);
+  const duration = useMusic((s) => s.duration);
+  const playError = useMusic((s) => s.playError);
+  const toggle = useMusic((s) => s.toggle);
+  const next = useMusic((s) => s.next);
+  const prev = useMusic((s) => s.prev);
+  const openPlayer = useMusic((s) => s.openPlayer);
+  const setMusicTab = useMusic((s) => s.setTab);
+
+  /* 顶部身份：跟随微信登录账号（me）或自定义（液态玻璃设置；头像空 = 灰底占位） */
+  const follow = skin.musicFollowWx;
+  const dispName = follow ? me.name : skin.musicName.trim() || '我';
+  const dispAvatar = follow ? me.avatar : skin.musicAvatar || null;
+
+  /* 时长：优先 audio 汇报，缺失时回退歌曲元数据（毫秒）；进度按真实 position 驱动 */
+  const dur = duration > 0 ? duration : current?.duration ? current.duration / 1000 : 0;
+  const pct = dur > 0 ? Math.min(100, (position / dur) * 100) : 0;
+
+  /* 跳转音乐 App：有歌直进播放器页，没歌回首页 */
+  const openMusic = () => {
+    if (current) openPlayer();
+    else setMusicTab('home');
+    switchToApp('music');
+  };
+
+  /* 封面（http 直链过同源代理，防混合内容拦截；无封面用渐变示意） */
+  const cover = current ? songCover(current) : '';
+  const coverUrl = cover ? (cover.startsWith('http://') ? mediaProxyUrl(cover) : cover) : '';
+  /* 歌手行：过长截断为前 2 位 + …（联名单曲一长串名字挤在小卡片里） */
+  const artistLine = (() => {
+    const names = (current?.artists ?? []).map((a) => a.name).filter(Boolean);
+    if (!names.length) return '未知歌手';
+    return names.length > 2 ? `${names.slice(0, 2).join('/')} 等` : names.join('/');
+  })();
 
   return (
-    <div
-      data-testid="wx-widget-music"
-      className="lg-card flex items-stretch gap-3 overflow-hidden rounded-[22px] p-3"
-    >
-      {/* 左侧信息列 */}
-      <div className="flex min-w-0 flex-1 flex-col justify-between">
-        <div className="flex items-center gap-2">
-          <span aria-hidden="true" className="h-[30px] w-[30px] shrink-0 rounded-full bg-gradient-to-br from-[#E8B4CB] to-[#9D8BC0] shadow-[0_2px_6px_rgba(0,0,0,0.15)]" />
-          <span className="truncate text-[14px] font-semibold text-black/85 dark:text-white/90">冷冷</span>
-        </div>
-        <div className="mt-1.5 min-w-0">
-          <p className="truncate text-[19px] font-bold leading-tight text-black/90 dark:text-white/95">玻璃</p>
-          <p className="mt-0.5 truncate text-[12.5px] font-medium leading-tight text-black/45 dark:text-white/45">衬托着渐入睡的</p>
-        </div>
-        {/* 进度条 */}
-        <div className="mt-2">
-          <div className="h-[4px] w-full overflow-hidden rounded-full bg-black/[0.08] dark:bg-white/[0.14]">
-            <div className="h-full rounded-full bg-[#07C160]/80" style={{ width: `${pct}%` }} />
-          </div>
-          <div className="mt-1 flex justify-between text-[10px] tabular-nums text-black/35 dark:text-white/40">
-            <span>{mmss(sec)}</span>
-            <span>{mmss(DURATION)}</span>
-          </div>
-        </div>
-        {/* 控制行 */}
-        <div className="mt-1 flex items-center justify-between px-1 text-black/75 dark:text-white/85">
-          <button type="button" aria-label="播放设置" onClick={() => setPlaying((v) => !v)} className="p-1 active:opacity-50">
-            <Settings className="h-[17px] w-[17px]" strokeWidth={2} />
-          </button>
-          <button type="button" aria-label="上一首" onClick={() => setSec(0)} className="p-1 active:opacity-50">
-            <SkipBack className="h-[17px] w-[17px]" strokeWidth={2} />
-          </button>
+    <div data-testid="wx-widget-music" className="lg-card relative overflow-hidden rounded-[22px] p-3">
+      {/* 顶部身份行：头像 + 昵称（跟随微信/自定义） + 右侧网易云品牌角标 */}
+      <div className="flex items-center gap-2">
+        <WxAvatar src={dispAvatar} alt={dispName} size={26} shape="circle" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-black/75 dark:text-white/80">{dispName}</span>
+        <span
+          aria-hidden="true"
+          className="flex shrink-0 items-center gap-1 rounded-full bg-[#C20C0C]/[0.08] px-2 py-[3px] text-[10px] font-semibold text-[#C20C0C] dark:bg-[#FF5A5A]/[0.14] dark:text-[#FF6B6B]"
+        >
+          <Music2 className="h-[11px] w-[11px]" strokeWidth={2.6} />
+          网易云音乐
+        </span>
+      </div>
+
+      {current ? (
+        <>
+          {/* 歌曲区：左信息右旋转唱片；点按 → 音乐 App 播放页 */}
           <button
             type="button"
-            aria-label={playing ? '暂停' : '播放'}
-            data-testid="wx-widget-music-toggle"
-            onClick={() => setPlaying((v) => !v)}
-            className="p-1 active:opacity-50"
+            data-testid="wx-widget-music-open"
+            onClick={openMusic}
+            className="mt-2.5 flex w-full items-center gap-3.5 text-left active:opacity-70"
           >
-            {playing ? <Pause className="h-[21px] w-[21px]" strokeWidth={2} /> : <Play className="h-[21px] w-[21px]" strokeWidth={2} />}
+            <span className="min-w-0 flex-1">
+              <span data-testid="wx-widget-music-song" className="block truncate text-[17px] font-bold leading-tight text-black/90 dark:text-white/95">
+                {current.name}
+              </span>
+              <span className="mt-1 block truncate text-[12px] font-medium leading-tight text-black/45 dark:text-white/45">
+                {buffering ? '缓冲中…' : playError || artistLine}
+              </span>
+              {/* 正在听标识：小红点呼吸 */}
+              {playing && !buffering && (
+                <span className="mt-1.5 flex items-center gap-1 text-[10px] font-medium text-[#C20C0C] dark:text-[#FF6B6B]">
+                  <span
+                    aria-hidden="true"
+                    className="h-[5px] w-[5px] rounded-full bg-[#C20C0C] dark:bg-[#FF6B6B]"
+                    style={{ animation: 'wxWidgetPulse 1.6s ease-in-out infinite' }}
+                  />
+                  正在听
+                </span>
+              )}
+            </span>
+            {/* 黑胶唱片：播放中旋转，中心 = 真实封面 */}
+            <span className="relative flex h-[78px] w-[78px] shrink-0 items-center justify-center" aria-hidden="true">
+              <span
+                className="relative block h-full w-full rounded-full shadow-[0_5px_16px_rgba(0,0,0,0.30)]"
+                style={{
+                  animation: playing ? 'wxWidgetSpin 7s linear infinite' : undefined,
+                  background: 'repeating-radial-gradient(circle at center, #17171A 0px, #1F1F24 1.5px, #17171A 3px)',
+                }}
+              >
+                {coverUrl ? (
+                  <img
+                    src={coverUrl}
+                    alt=""
+                    className="absolute left-1/2 top-1/2 h-[42px] w-[42px] -translate-x-1/2 -translate-y-1/2 rounded-full object-cover shadow-[inset_0_0_0_1px_rgba(255,255,255,0.25)]"
+                  />
+                ) : (
+                  <span className="absolute left-1/2 top-1/2 h-[42px] w-[42px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-[#F6D9E5] via-[#DCC7EC] to-[#B9C7F2]" />
+                )}
+                <span className="absolute left-1/2 top-1/2 h-[8px] w-[8px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#0D0D0F] ring-1 ring-white/30" />
+              </span>
+              {/* 唱针（静态装饰） */}
+              <span className="absolute -right-0.5 -top-1 h-[32px] w-[2px] origin-top rotate-[28deg] rounded-full bg-black/45 dark:bg-white/50" />
+            </span>
           </button>
-          <button type="button" aria-label="下一首" onClick={() => setSec(DURATION - 15)} className="p-1 active:opacity-50">
-            <SkipForward className="h-[17px] w-[17px]" strokeWidth={2} />
-          </button>
-          <button type="button" aria-label="循环播放" onClick={() => setPlaying(true)} className="p-1 active:opacity-50">
-            <Repeat className="h-[17px] w-[17px]" strokeWidth={2} />
-          </button>
-        </div>
-      </div>
-      {/* 右侧旋转唱片（播放中旋转；中心 = 专辑封面示意） */}
-      <div className="relative flex w-[108px] shrink-0 items-center justify-center">
-        <div
-          aria-hidden="true"
-          className="relative h-[96px] w-[96px] rounded-full bg-[#141416] shadow-[0_6px_18px_rgba(0,0,0,0.28)]"
-          style={{
-            animation: playing ? 'wxWidgetSpin 6s linear infinite' : undefined,
-            background:
-              'repeating-radial-gradient(circle at center, #161618 0px, #1E1E22 1.5px, #161618 3px)',
-          }}
+
+          {/* 进度条（真实 position/duration） */}
+          <div className="mt-2">
+            <div className="h-[4px] w-full overflow-hidden rounded-full bg-black/[0.08] dark:bg-white/[0.14]">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-[#C20C0C] to-[#FF6B6B] transition-[width] duration-300"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <div className="mt-1 flex justify-between text-[10px] tabular-nums text-black/35 dark:text-white/40">
+              <span>{mmss(position)}</span>
+              <span>{dur > 0 ? mmss(dur) : '--:--'}</span>
+            </div>
+          </div>
+
+          {/* 控制行：上一首 / 播放暂停（玻璃圆钮） / 下一首（真实驱动音乐引擎） */}
+          <div className="mt-1.5 flex items-center justify-center gap-8 text-black/80 dark:text-white/90">
+            <button type="button" aria-label="上一首" onClick={() => void prev()} className="p-1 active:opacity-50">
+              <SkipBack className="h-[19px] w-[19px]" strokeWidth={2.2} fill="currentColor" />
+            </button>
+            <button
+              type="button"
+              aria-label={playing ? '暂停' : '播放'}
+              data-testid="wx-widget-music-toggle"
+              onClick={toggle}
+              className="grid h-[38px] w-[38px] place-items-center rounded-full bg-black/[0.06] ring-1 ring-black/[0.06] transition-transform active:scale-95 dark:bg-white/[0.12] dark:ring-white/[0.12]"
+            >
+              {playing ? (
+                <Pause className="h-[18px] w-[18px]" strokeWidth={2.2} fill="currentColor" />
+              ) : (
+                <Play className="ml-[2px] h-[18px] w-[18px]" strokeWidth={2.2} fill="currentColor" />
+              )}
+            </button>
+            <button type="button" aria-label="下一首" onClick={() => void next()} className="p-1 active:opacity-50">
+              <SkipForward className="h-[19px] w-[19px]" strokeWidth={2.2} fill="currentColor" />
+            </button>
+          </div>
+        </>
+      ) : (
+        /* 空态：还没播过歌 —— 引导去音乐 App 挑一首 */
+        <button
+          type="button"
+          data-testid="wx-widget-music-open"
+          onClick={openMusic}
+          className="mt-2.5 flex w-full items-center gap-3 rounded-[16px] bg-black/[0.035] px-3 py-3 text-left active:opacity-70 dark:bg-white/[0.06]"
         >
-          <span className="absolute left-1/2 top-1/2 h-[52px] w-[52px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full bg-gradient-to-br from-[#F6D9E5] via-[#DCC7EC] to-[#B9C7F2] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.4)]">
-            <span className="absolute left-1/2 top-1/2 h-[14px] w-[14px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#141416]" />
+          <span className="grid h-[42px] w-[42px] shrink-0 place-items-center rounded-full bg-[#C20C0C]/[0.10] text-[#C20C0C] dark:bg-[#FF5A5A]/[0.16] dark:text-[#FF6B6B]">
+            <Music2 className="h-[20px] w-[20px]" strokeWidth={2.2} />
           </span>
-        </div>
-        {/* 唱针（静态装饰） */}
-        <span aria-hidden="true" className="absolute right-1 top-0 h-[46px] w-[2px] origin-top rotate-[26deg] rounded-full bg-black/50 dark:bg-white/50" />
-      </div>
-      <style>{'@keyframes wxWidgetSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}'}</style>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[14px] font-semibold leading-tight text-black/80 dark:text-white/85">还没有在听的歌</span>
+            <span className="mt-0.5 block text-[11.5px] leading-tight text-black/40 dark:text-white/40">去音乐 App 挑一首，这里同步显示</span>
+          </span>
+          <ChevronRight className="h-[16px] w-[16px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2.2} />
+        </button>
+      )}
+      <style>{'@keyframes wxWidgetSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes wxWidgetPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}'}</style>
     </div>
   );
 }
 
-/** 日历小组件：iOS 风格——星期 + 大日期 + 月份 */
+/** 日历小组件：iOS 日历风——年月标题 + 今天红色胶囊 + 真实当月网格（今天红圈、周末红字、前后月补齐灰显） */
 function WxWidgetCalendar() {
   const now = new Date();
-  const week = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][now.getDay()];
-  const weekend = now.getDay() === 0 || now.getDay() === 6;
+  const year = now.getFullYear();
+  const month = now.getMonth(); // 0 基
+  const today = now.getDate();
+  /* 当月天数 / 上月天数 / 一号是周几（周日 = 0） */
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const prevDays = new Date(year, month, 0).getDate();
+  const firstDow = new Date(year, month, 1).getDay();
+  /* 网格单元：前后月补齐成整周，其他月日期灰显 */
+  const cells: { d: number; other: boolean }[] = [];
+  for (let i = firstDow - 1; i >= 0; i--) cells.push({ d: prevDays - i, other: true });
+  for (let d = 1; d <= daysInMonth; d++) cells.push({ d, other: false });
+  for (let n = 1; cells.length % 7 !== 0; n++) cells.push({ d: n, other: true });
+
   return (
-    <div
-      data-testid="wx-widget-calendar"
-      className="lg-card flex items-center gap-4 overflow-hidden rounded-[22px] px-4 py-3"
-    >
-      <div className="flex min-w-0 flex-1 flex-col">
-        <p className="text-[12.5px] font-medium leading-none text-black/40 dark:text-white/45">
-          {now.getFullYear()}年{now.getMonth() + 1}月
+    <div data-testid="wx-widget-calendar" className="lg-card overflow-hidden rounded-[22px] px-3.5 pb-2.5 pt-3">
+      {/* 头部：年月标题 + 今天胶囊 */}
+      <div className="flex items-center justify-between px-1">
+        <p className="text-[14px] font-bold leading-none text-black/85 dark:text-white/90">
+          {year}年{month + 1}月
         </p>
-        <p className="mt-1.5 flex items-baseline gap-2">
-          <span
-            className="text-[34px] font-bold leading-none tabular-nums text-black/90 dark:text-white/95"
-            style={weekend ? { color: '#FF453A' } : undefined}
-          >
-            {now.getDate()}
-          </span>
-          <span className="text-[14px] font-medium text-black/55 dark:text-white/55" style={weekend ? { color: '#FF453A' } : undefined}>
-            {week}
-          </span>
-        </p>
+        <span className="flex items-center gap-1 rounded-full bg-[#FF453A] px-[9px] py-[3px] text-[10.5px] font-semibold leading-none text-white">
+          今天 {today}
+        </span>
       </div>
-      {/* 右侧日历示意 */}
-      <div aria-hidden="true" className="grid shrink-0 grid-cols-7 gap-[3px] opacity-70">
-        {Array.from({ length: 31 }, (_, i) => (
+      {/* 周标题行 */}
+      <div className="mt-2.5 grid grid-cols-7 text-center" aria-hidden="true">
+        {['日', '一', '二', '三', '四', '五', '六'].map((d, i) => (
           <span
-            key={i}
-            className={`h-[7px] w-[7px] rounded-full ${
-              i + 1 === now.getDate()
-                ? 'bg-[#FF453A]'
-                : 'bg-black/[0.10] dark:bg-white/[0.16]'
+            key={d}
+            className={`text-[10px] font-semibold leading-none ${
+              i === 0 || i === 6 ? 'text-[#FF453A]/75' : 'text-black/35 dark:text-white/35'
             }`}
-          />
+          >
+            {d}
+          </span>
         ))}
+      </div>
+      {/* 日期网格：今天红圆白字，周末红字，其他月灰显 */}
+      <div className="mt-1.5 grid grid-cols-7 text-center">
+        {cells.map((c, i) => {
+          const weekend = i % 7 === 0 || i % 7 === 6;
+          const isToday = !c.other && c.d === today;
+          return (
+            <span key={i} className="flex h-[21px] items-center justify-center">
+              <span
+                className={`grid h-[19px] min-w-[19px] place-items-center rounded-full px-[2px] text-[11px] font-medium leading-none tabular-nums ${
+                  isToday
+                    ? 'bg-[#FF453A] font-bold text-white'
+                    : c.other
+                      ? 'text-black/20 dark:text-white/20'
+                      : weekend
+                        ? 'text-[#FF453A]/90 dark:text-[#FF6B6B]/90'
+                        : 'text-black/70 dark:text-white/75'
+                }`}
+              >
+                {c.d}
+              </span>
+            </span>
+          );
+        })}
       </div>
     </div>
   );
@@ -14300,12 +14442,12 @@ function WxWidgetCustom({ html }: { html: string }) {
 }
 
 /** 小组件区（搜索框下、分类标签上）：按设置开关逐个渲染 */
-function WxLiquidWidgets() {
+function WxLiquidWidgets({ me }: { me: WxUser }) {
   const skin = useSettings((s) => s.liquidSkin.wx);
   if (!skin.widgetMusic && !skin.widgetCalendar && !skin.widgetCustom) return null;
   return (
     <div className="mb-2.5 flex flex-col gap-2.5">
-      {skin.widgetMusic && <WxWidgetMusic />}
+      {skin.widgetMusic && <WxWidgetMusic me={me} />}
       {skin.widgetCalendar && <WxWidgetCalendar />}
       {skin.widgetCustom && <WxWidgetCustom html={skin.customHtml} />}
     </div>
@@ -15589,8 +15731,9 @@ function MainScreen({
     );
   // 气泡样式页（主题页 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
   if (page === 'bubbles') return <BubbleStylePage app="wx" onBack={() => setPage('dress')} onToast={showToast} />;
-  // 液态玻璃皮肤页（主题页 › 液态玻璃设置）：顶栏名字区/分类标签文字/列表小组件
-  if (page === 'liquidSkin') return <LiquidSkinPage app="wx" onBack={() => setPage('dress')} onToast={showToast} />;
+  // 液态玻璃皮肤页（主题页 › 液态玻璃设置）：顶栏名字区/分类标签文字/列表小组件（网易云身份跟随微信预览用）
+  if (page === 'liquidSkin')
+    return <LiquidSkinPage app="wx" onBack={() => setPage('dress')} onToast={showToast} wxMe={{ name: me.name, avatar: me.avatar }} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'album') {
     // 我的主页「相册」入口：当前用户自己的相册（可增删改）
@@ -15962,8 +16105,8 @@ function MainScreen({
                   <Search className="h-[16px] w-[16px]" strokeWidth={2.1} aria-hidden="true" />
                   <span className="text-[14px]">搜索</span>
                 </button>
-                {/* 小组件区（本轮新增）：搜索框下、分类标签上，在 主题页›液态玻璃设置 里开关 */}
-                <WxLiquidWidgets />
+                {/* 小组件区：搜索框下、分类标签上，在 主题页›液态玻璃设置 里开关（网易云已连接音乐 App） */}
+                <WxLiquidWidgets me={me} />
                 <div
                   className="lg-seg mb-2.5 flex items-center gap-1 overflow-x-auto rounded-[17px] p-[3px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                   role="tablist"

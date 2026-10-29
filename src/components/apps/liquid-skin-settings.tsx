@@ -15,10 +15,11 @@
  * 修改即时写入 useSettings.setLiquidSkin（App 隔离）并持久化，聊天页/列表实时跟随。
  */
 import { motion } from 'framer-motion';
-import { CalendarDays, Check, ChevronRight, Music2, Paintbrush, RotateCcw } from 'lucide-react';
+import { CalendarDays, Camera, Check, ChevronRight, Music2, Paintbrush, RotateCcw, X } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { Switch } from '@/components/ui/switch';
 import { useSettings } from '@/lib/ios/store';
+import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 import {
   LIQUID_CUSTOM_WIDGET_EXAMPLE,
   LIQUID_HEADER_MODE_DESC,
@@ -147,12 +148,25 @@ function HeaderModePreview({
           {showName && <span className="text-[10.5px] font-semibold text-black/85 dark:text-white/90">{name}</span>}
         </span>
       )}
-      {(mode === 'dual' || mode === 'dualName') && (
+      {(mode === 'dual' || mode === 'dualName') && mode === 'dual' && (
         <span className="flex items-center gap-1.5 rounded-full bg-white/90 py-[4px] pl-[5px] pr-[7px] shadow-sm dark:bg-white/15">
           <MiniAvatarPeer size={22} />
           {mid && <span className="text-[10px] font-semibold text-black/75 dark:text-white/85">{mid}</span>}
           <MiniAvatarMine size={22} accent={accent} />
-          {mode === 'dualName' && <span className="ml-0.5 text-[10.5px] font-semibold text-black/85 dark:text-white/90">{name}</span>}
+        </span>
+      )}
+      {mode === 'dualName' && (
+        /* 双头像+名字（本轮用户指定）：名字在各自头像下面（两列）；中间可插自定义文字 */
+        <span className="flex items-center gap-1.5 rounded-full bg-white/90 py-[4px] pl-[7px] pr-[9px] shadow-sm dark:bg-white/15">
+          <span className="flex w-[36px] flex-col items-center gap-[1.5px]">
+            <MiniAvatarPeer size={17} />
+            <span className="max-w-[36px] truncate text-[7.5px] font-medium leading-none text-black/60 dark:text-white/65">{name}</span>
+          </span>
+          {mid && <span className="text-[9px] font-semibold text-black/75 dark:text-white/85">{mid}</span>}
+          <span className="flex w-[36px] flex-col items-center gap-[1.5px]">
+            <MiniAvatarMine size={17} accent={accent} />
+            <span className="max-w-[36px] truncate text-[7.5px] font-medium leading-none text-black/60 dark:text-white/65">我</span>
+          </span>
         </span>
       )}
       {/* 右侧菜单示意小圆 */}
@@ -167,9 +181,34 @@ export interface LiquidSkinPageProps {
   app: BubbleAppId;
   onBack: () => void;
   onToast: (m: string) => void;
+  /** （仅微信）当前登录账号的头像/昵称——网易云小组件「跟随微信」预览用 */
+  wxMe?: { name: string; avatar: string | null };
 }
 
-export function LiquidSkinPage({ app, onBack, onToast }: LiquidSkinPageProps) {
+/** 网易云小组件顶部身份实时预览（跟随微信 / 自定义） */
+function MusicIdentityPreview({ skin, wxMe }: { skin: LiquidSkinSettings; wxMe?: { name: string; avatar: string | null } }) {
+  const av = skin.musicFollowWx ? (wxMe?.avatar ?? null) : skin.musicAvatar || null;
+  const nm = skin.musicFollowWx ? (wxMe?.name ?? '微信昵称') : skin.musicName.trim() || '我';
+  return (
+    <div className="mt-3 flex items-center gap-2.5 rounded-[12px] bg-black/[0.03] px-3 py-2.5 dark:bg-white/[0.05]" data-testid="liquid-music-preview">
+      {av ? (
+        <img src={av} alt="" className="h-[24px] w-[24px] shrink-0 rounded-full object-cover" />
+      ) : (
+        <span aria-hidden="true" className="h-[24px] w-[24px] shrink-0 rounded-full bg-[#C9C9CE] dark:bg-[#3C3C42]" />
+      )}
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-black/70 dark:text-white/75">{nm}</span>
+      <span
+        aria-hidden="true"
+        className="flex shrink-0 items-center gap-1 rounded-full bg-[#C20C0C]/[0.08] px-2 py-[2px] text-[9px] font-semibold text-[#C20C0C] dark:bg-[#FF5A5A]/[0.14] dark:text-[#FF6B6B]"
+      >
+        <Music2 className="h-[9px] w-[9px]" strokeWidth={2.6} />
+        网易云音乐
+      </span>
+    </div>
+  );
+}
+
+export function LiquidSkinPage({ app, onBack, onToast, wxMe }: LiquidSkinPageProps) {
   const meta = PLATFORM_META[app];
   const liquidSkin = useSettings((s) => s.liquidSkin);
   const setLiquidSkin = useSettings((s) => s.setLiquidSkin);
@@ -331,13 +370,13 @@ export function LiquidSkinPage({ app, onBack, onToast }: LiquidSkinPageProps) {
             <div className="mt-3 overflow-hidden rounded-[16px] bg-white ring-1 ring-black/[0.05] dark:bg-[#1C1E23] dark:ring-white/[0.08]">
               {/* 网易云音乐 */}
               <div className="flex items-center gap-3 px-4 py-3" data-testid="liquid-widget-row-music">
-                <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px]" style={{ backgroundColor: 'rgba(7,193,96,0.12)' }}>
-                  <Music2 className="h-[17px] w-[17px]" style={{ color: '#07C160' }} strokeWidth={2.1} />
+                <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px]" style={{ backgroundColor: 'rgba(194,12,12,0.10)' }}>
+                  <Music2 className="h-[17px] w-[17px]" style={{ color: '#C20C0C' }} strokeWidth={2.1} />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-[15px] leading-tight text-black/85 dark:text-white/90">网易云音乐</span>
                   <span className="mt-[2px] block text-[11.5px] leading-tight text-black/40 dark:text-white/40">
-                    搜索框下的迷你播放器卡片
+                    连接音乐 App，显示正在听的歌
                   </span>
                 </span>
                 <Switch
@@ -346,6 +385,81 @@ export function LiquidSkinPage({ app, onBack, onToast }: LiquidSkinPageProps) {
                   onCheckedChange={(v) => patch({ widgetMusic: v })}
                 />
               </div>
+              {/* 网易云小组件身份（开关打开才显示）：头像昵称跟随微信 / 自定义 */}
+              {skin.widgetMusic && (
+                <div className="border-t border-black/[0.05] px-4 py-3 dark:border-white/[0.07]" data-testid="liquid-music-identity">
+                  <div className="flex items-center gap-3">
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[14px] leading-tight text-black/85 dark:text-white/90">头像昵称跟随微信</span>
+                      <span className="mt-[2px] block text-[11.5px] leading-tight text-black/40 dark:text-white/40">
+                        显示当前微信登录账号的头像和昵称
+                      </span>
+                    </span>
+                    <Switch
+                      data-testid="liquid-music-follow"
+                      checked={skin.musicFollowWx}
+                      onCheckedChange={(v) => patch({ musicFollowWx: v })}
+                    />
+                  </div>
+                  {!skin.musicFollowWx && (
+                    <div className="mt-3 flex items-center gap-3">
+                      {/* 自定义头像：点相册/相机选图（居中裁剪 256×256 JPEG dataURL） */}
+                      <label
+                        data-testid="liquid-music-avatar"
+                        aria-label="更换小组件头像"
+                        className="relative flex h-[46px] w-[46px] shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full bg-black/[0.05] ring-1 ring-black/[0.06] active:opacity-70 dark:bg-white/[0.08] dark:ring-white/[0.10]"
+                      >
+                        {skin.musicAvatar ? (
+                          <img src={skin.musicAvatar} alt="小组件头像" className="h-full w-full object-cover" />
+                        ) : (
+                          <Camera className="h-[18px] w-[18px] text-black/35 dark:text-white/40" strokeWidth={2} />
+                        )}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="sr-only"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            e.target.value = '';
+                            if (!f) return;
+                            fileToAvatarDataUrl(f)
+                              .then((url) => {
+                                patch({ musicAvatar: url });
+                                onToast('小组件头像已更新');
+                              })
+                              .catch(() => onToast('图片处理失败，换一张试试'));
+                          }}
+                        />
+                      </label>
+                      <span className="min-w-0 flex-1">
+                        <label className="block text-[12.5px] font-medium text-black/60 dark:text-white/60" htmlFor="liquid-music-name">
+                          自定义昵称
+                        </label>
+                        <input
+                          id="liquid-music-name"
+                          data-testid="liquid-music-name"
+                          value={skin.musicName}
+                          onChange={(e) => patch({ musicName: e.target.value.slice(0, 24) })}
+                          placeholder="留空显示「我」"
+                          className="mt-1.5 h-9 w-full rounded-[10px] bg-black/[0.04] px-3 text-[14px] text-black/85 outline-none placeholder:text-black/25 focus:ring-2 focus:ring-black/[0.08] dark:bg-white/[0.08] dark:text-white/90 dark:placeholder:text-white/25 dark:focus:ring-white/[0.12]"
+                        />
+                      </span>
+                      {skin.musicAvatar && (
+                        <button
+                          type="button"
+                          aria-label="移除自定义头像"
+                          onClick={() => patch({ musicAvatar: '' })}
+                          className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-black/[0.06] text-black/45 active:opacity-60 dark:bg-white/[0.10] dark:text-white/50"
+                        >
+                          <X className="h-[13px] w-[13px]" strokeWidth={2.4} />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {/* 身份实时预览（跟随微信 = 微信头像昵称；自定义 = 上传头像/昵称） */}
+                  <MusicIdentityPreview skin={skin} wxMe={wxMe} />
+                </div>
+              )}
               {/* 日历 */}
               <div className="flex items-center gap-3 border-t border-black/[0.05] px-4 py-3 dark:border-white/[0.07]" data-testid="liquid-widget-row-calendar">
                 <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px]" style={{ backgroundColor: 'rgba(255,69,58,0.10)' }}>
@@ -428,7 +542,7 @@ export function LiquidSkinPage({ app, onBack, onToast }: LiquidSkinPageProps) {
               )}
             </div>
             <p className="mt-2 px-2 text-[11px] leading-relaxed text-black/35 dark:text-white/35">
-              小组件出现在液态玻璃主题会话列表搜索框下面，全部可单独开关。
+              小组件出现在液态玻璃主题会话列表搜索框下面，全部可单独开关；网易云小组件已连接音乐 App，可在上面直接控制播放。
             </p>
           </FadeInSection>
         )}

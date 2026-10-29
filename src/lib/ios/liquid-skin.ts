@@ -43,6 +43,12 @@ export interface LiquidSkinSettings {
   tabLabels: Record<LiquidTabKey, string>;
   /** 会话列表小组件：网易云音乐 */
   widgetMusic: boolean;
+  /** 网易云小组件顶部身份（头像+昵称）跟随微信登录账号（true = 跟随，false = 用自定义） */
+  musicFollowWx: boolean;
+  /** 网易云小组件自定义昵称（musicFollowWx = false 时生效；空 = 「我」） */
+  musicName: string;
+  /** 网易云小组件自定义头像 dataURL（musicFollowWx = false 时生效；空 = 渐变默认头像） */
+  musicAvatar: string;
   /** 会话列表小组件：日历 */
   widgetCalendar: boolean;
   /** 会话列表小组件：自定义 CSS/HTML 内容 */
@@ -57,6 +63,9 @@ export const DEFAULT_LIQUID_SKIN: LiquidSkinSettings = {
   headerShowName: true,
   tabLabels: { all: '', friends: '', work: '', groups: '', officials: '' },
   widgetMusic: false,
+  musicFollowWx: true,
+  musicName: '',
+  musicAvatar: '',
   widgetCalendar: false,
   widgetCustom: false,
   customHtml: '',
@@ -75,7 +84,7 @@ export const LIQUID_HEADER_MODE_DESC: Record<LiquidHeaderMode, string> = {
   text: '纯文字（默认）',
   avatarName: 'TA 的头像，名字可隐藏',
   dual: 'TA+我的头像，中间文字可自定义',
-  dualName: '双头像再加 TA 的名字',
+  dualName: '双头像，头像下面各带名字',
 };
 
 /**
@@ -139,6 +148,9 @@ export function normalizeLiquidSkin(v: unknown): LiquidSkinSettings {
       officials: str(labels.officials, 12),
     },
     widgetMusic: o.widgetMusic === true,
+    musicFollowWx: o.musicFollowWx !== false,
+    musicName: str(o.musicName, 24),
+    musicAvatar: typeof o.musicAvatar === 'string' ? o.musicAvatar.slice(0, 500_000) : '',
     widgetCalendar: o.widgetCalendar === true,
     widgetCustom: o.widgetCustom === true,
     customHtml: typeof o.customHtml === 'string' ? o.customHtml.slice(0, 20000) : '',
