@@ -8,24 +8,25 @@
  *   只作用于当前联系人的聊天界面（每个联系人一套，互不影响；第七十轮由按 App 升级为按联系人）；
  * - 线下模式 › 现场设置（「自定义CSS」卡片）：scope='offline'，只作用于线下所有界面。
  *
- * 第六十九轮（用户指定「示例 = 让用户照着添加自己想要的主题」+「美化一下，简约美观」）：
- * - 「示例主题」chips 点按即把一整套主题模板填进编辑框，改几个颜色就是自己的主题；
- * - 编辑框升级为「代码窗口」造型（窗口栏 = 红黄绿圆点 + 文件名 + 字数/未应用小圆点）；
- * - 方案列表改扁平细线风格、按钮统一小圆角，整体更简约。
- * 第七十轮（用户指定「示例一个就好了」）：每作用域只留一个「默认主题」chip。
+ * 第六十九轮：代码窗口造型 + 扁平方案列表（简约美观）。
+ * 第七十轮：示例每作用域只留一个；聊天 CSS 按联系人隔离。
+ * 第七十一轮（用户指定「要模板不要主题，把界面上所有东西都列出来」）：
+ * - 「示例主题」chips → 一枚「填入完整模板」按钮，点按把该界面的完整元素清单填进编辑框
+ *   （背景/顶栏/底栏/气泡/尾巴/时间/输入栏/状态栏/面板/按钮…逐段列出，微信/QQ 各按 App 样式）；
+ * - 每段默认值 = 当前样式 → 不改直接应用 ≈ 没变化，用户改哪段哪段生效。
  */
 import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronDown, Code2, Eraser, FileUp, Play, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Code2, Eraser, FileUp, LayoutTemplate, Play, Trash2 } from 'lucide-react';
 import {
   CUSTOM_CSS_MAX_LEN,
   CUSTOM_CSS_NAME_MAX,
-  chatCssPresets,
   chatCssScope,
+  chatCssTemplate,
   readCustomCssActive,
   type CustomCssScope,
   type CustomCssScheme,
-  type CssThemePreset,
+  type CssTemplate,
 } from '@/lib/ios/custom-css';
 import { useSettings } from '@/lib/ios/store';
 
@@ -45,8 +46,8 @@ function scopeMeta(scope: CustomCssScope): { title: string; hint: string; file: 
 
 export interface CustomCssEditorProps {
   scope: CustomCssScope;
-  /** 示例主题（chips 点按填入编辑框，用户在整套模板上改色做自己的主题） */
-  presets: CssThemePreset[];
+  /** 完整模板（一键填入编辑框：逐段列出该界面所有能改的元素，用户改值） */
+  template: CssTemplate;
   /** 主色（按钮/选中态） */
   accent: string;
   /** 弹提示 */
@@ -56,7 +57,7 @@ export interface CustomCssEditorProps {
 }
 
 /** 单个作用域的编辑器本体（状态读写都走 useSettings.customCss；聊天作用域按联系人隔离） */
-export function CustomCssEditor({ scope, presets, accent, onToast, variant = 'card' }: CustomCssEditorProps) {
+export function CustomCssEditor({ scope, template, accent, onToast, variant = 'card' }: CustomCssEditorProps) {
   const meta = scopeMeta(scope);
   // 统一读取：global/offline 独立字段，chat:app:id → chats[联系人key]（第七十轮）
   const activeCss = useSettings((s) => readCustomCssActive(s.customCss, scope));
@@ -86,9 +87,9 @@ export function CustomCssEditor({ scope, presets, accent, onToast, variant = 'ca
     onToast('已清除，恢复默认样式');
   };
 
-  const loadPreset = (p: CssThemePreset) => {
-    setDraft(p.css);
-    onToast(`已载入「${p.name}」，改改颜色点「应用」`);
+  const loadTemplate = () => {
+    setDraft(template.css);
+    onToast('已填入完整模板，改好点「应用」');
   };
 
   const onFile = (f: File | null | undefined) => {
@@ -191,35 +192,35 @@ export function CustomCssEditor({ scope, presets, accent, onToast, variant = 'ca
           value={draft}
           onChange={(e) => setDraft(e.target.value.slice(0, CUSTOM_CSS_MAX_LEN))}
           spellCheck={false}
-          rows={8}
-          placeholder={'/* 在这里写 CSS，或点下面的示例主题 */'}
+          rows={10}
+          placeholder={'/* 在这里写 CSS，或点下面填入完整模板 */'}
           aria-label={`自定义 CSS 编辑框（${meta.title}）`}
           data-testid={`custom-css-textarea-${scope}`}
           className="block w-full resize-y bg-[#FCFBF8] px-3.5 py-3 font-mono text-[12px] leading-[1.7] text-black/85 outline-none placeholder:text-black/25 dark:bg-[#151517] dark:text-white/85 dark:placeholder:text-white/25"
         />
       </div>
 
-      {/* 示例主题 chips：每枚 = 一整套主题（色板预览点 + 名字），点按填入编辑框 */}
-      <div className="mt-3 flex flex-wrap items-center gap-1.5">
-        <span className="shrink-0 py-[3px] text-[11.5px] text-black/35 dark:text-white/35">示例主题</span>
-        {presets.map((p, i) => (
-          <button
-            key={p.name}
-            type="button"
-            onClick={() => loadPreset(p)}
-            aria-label={`载入示例主题 ${p.name}`}
-            data-testid={i === 0 ? `custom-css-example-${scope}` : undefined}
-            className="flex shrink-0 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white/60 py-[5px] pl-2 pr-2.5 text-[12px] font-medium text-black/65 transition-colors active:bg-black/[0.06] dark:border-white/[0.10] dark:bg-white/[0.06] dark:text-white/70 dark:active:bg-white/[0.10]"
-          >
-            <span className="flex gap-[3px]" aria-hidden="true">
-              {p.swatch.map((c) => (
-                <i key={c} className="h-[9px] w-[9px] rounded-full ring-1 ring-black/[0.06] dark:ring-white/10" style={{ backgroundColor: c }} />
-              ))}
-            </span>
-            {p.name}
-          </button>
-        ))}
-      </div>
+      {/* 完整模板（第七十一轮）：一键填入该界面的元素清单——每段 = 一处，改值即换样式 */}
+      <button
+        type="button"
+        onClick={loadTemplate}
+        aria-label={`填入${template.name}`}
+        data-testid={`custom-css-example-${scope}`}
+        className="mt-3 flex w-full items-center gap-2.5 rounded-[13px] border border-black/[0.08] bg-white/60 px-3 py-2.5 text-left transition-colors active:bg-black/[0.06] dark:border-white/[0.10] dark:bg-white/[0.06] dark:active:bg-white/[0.10]"
+      >
+        <span
+          className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[10px]"
+          style={{ backgroundColor: `color-mix(in srgb, ${accent} 12%, transparent)`, color: accent }}
+          aria-hidden="true"
+        >
+          <LayoutTemplate className="h-[15px] w-[15px]" strokeWidth={2.2} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px] font-semibold leading-tight text-black/80 dark:text-white/85">{template.name}</span>
+          <span className="mt-[2px] block truncate text-[11px] leading-[1.4] text-black/40 dark:text-white/40">{template.desc}，点按填入</span>
+        </span>
+        <ChevronRight className="h-[16px] w-[16px] shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
+      </button>
 
       {/* 上传 CSS 文件（.css） */}
       <button
@@ -421,7 +422,7 @@ export function ChatCssSection({ app, contactId, accent, onToast }: ChatCssSecti
             <div className="pb-1">
               <CustomCssEditor
                 scope={scope}
-                presets={chatCssPresets(app)}
+                template={chatCssTemplate(app)}
                 accent={accent}
                 onToast={onToast}
                 variant="chat"

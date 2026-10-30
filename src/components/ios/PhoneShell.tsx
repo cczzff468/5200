@@ -432,7 +432,7 @@ export default function PhoneShell() {
             className="pointer-events-none absolute inset-x-0 bottom-0 z-[72] flex h-[28px] items-end justify-center pb-[7px] touch-none"
           >
             <div
-              className={`h-[5px] w-[134px] rounded-full opacity-90 transition-colors duration-300 ${
+              className={`ph-homebar h-[5px] w-[134px] rounded-full opacity-90 transition-colors duration-300 ${
                 barLight ? 'bg-white' : 'bg-black'
               }`}
             />
@@ -464,7 +464,7 @@ export default function PhoneShell() {
         {statusBarVisible && <StatusBar />}
         {statusBarVisible && islandPersistent && !islandCovered && (
           <div
-            className="pointer-events-none absolute left-1/2 top-[11px] z-[80] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
+            className="ph-island pointer-events-none absolute left-1/2 top-[11px] z-[80] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
             aria-hidden="true"
           />
         )}

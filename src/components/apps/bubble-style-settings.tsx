@@ -23,7 +23,7 @@ import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar'
 import { LiquidSkinPanel } from './liquid-skin-settings';
 import { ChatDecorPanel } from './chat-decor-settings';
 import { CustomCssEditor } from './custom-css-editor';
-import { globalCssPresets } from '@/lib/ios/custom-css';
+import { GLOBAL_CSS_TEMPLATE } from '@/lib/ios/custom-css';
 import type { LiquidSkinSettings } from '@/lib/ios/liquid-skin';
 import { useSettings } from '@/lib/ios/store';
 import {
@@ -808,7 +808,7 @@ function ThemeContent({
       <FadeInSection index={2} className="mt-4" role="region" ariaLabel="自定义 CSS">
         <SectionLabel accent={meta.accent}>自定义CSS</SectionLabel>
         <div className="mt-2.5">
-          <CustomCssEditor scope="global" presets={globalCssPresets} accent={meta.accent} onToast={onToast} />
+          <CustomCssEditor scope="global" template={GLOBAL_CSS_TEMPLATE} accent={meta.accent} onToast={onToast} />
         </div>
         <p className="mt-2 px-2 text-[11.5px] leading-[1.5] text-black/35 dark:text-white/35">
           想只改某个聊天界面？去对应 App 的 联系人 › 聊天设置 › 自定义CSS；想只改线下模式？去 线下模式 › 现场设置 › 自定义CSS。

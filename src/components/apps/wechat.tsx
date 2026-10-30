@@ -8871,14 +8871,15 @@ function ChatPage({
           第三十六轮：pt-48→pt-42（再上移 6px，灵动岛/状态栏下方留白更紧凑；群聊会话页同步） */}
       <div
         className={
-          liquid
+          'wx-topbar ' +
+          (liquid
             ? /* 液态（第四十五轮，用户指定）：删背景遮罩模糊带——顶栏完全透明悬浮，
                 名字改椭圆形玻璃胶囊包裹（参考图「永恩」同款） */
               'pointer-events-none absolute inset-x-0 top-0 z-20 shrink-0 bg-transparent pt-[42px]'
             : retro
             ? /* 古早（第五十四轮）：深灰安卓顶栏渐变 + 白字（lucide 图标继承 currentColor） */
               'rt-dark relative z-10 shrink-0 pt-[42px] text-white [&_button]:text-white'
-            : 'relative z-10 shrink-0 bg-[#EDEDED] pt-[42px] dark:bg-[#111111]'
+            : 'relative z-10 shrink-0 bg-[#EDEDED] pt-[42px] dark:bg-[#111111]')
         }
       >
         {selectMode ? (

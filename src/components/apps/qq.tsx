@@ -6998,11 +6998,12 @@ function ChatPage({
           多选模式下变为「取消 + 已选计数」操作栏（保持原生样式） */}
       <div
         className={
-          liquid
+          'qq-topbar ' +
+          (liquid
             ? 'pointer-events-none absolute inset-x-0 top-0 z-20 shrink-0 bg-transparent pt-[54px]'
             : retro
             ? 'relative z-10 shrink-0 pt-[54px] rt-dark text-white [&_button]:text-white'
-            : 'relative z-10 shrink-0 pt-[54px] bg-[#F5F6F7] dark:bg-[#111214]'
+            : 'relative z-10 shrink-0 pt-[54px] bg-[#F5F6F7] dark:bg-[#111214]')
         }
       >
         {selectMode ? (
