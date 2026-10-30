@@ -9048,8 +9048,9 @@ function ChatPage({
         )}
       </div>
 
-      {/* 消息列表：浅灰背景（同微信），自定义聊天背景时透出背景层 */}
-      <div ref={scrollRef} className={`no-scrollbar relative z-10 min-h-0 flex-1 overflow-y-auto px-3 ${liquid ? 'pb-3 pt-[96px]' : 'py-3'}`}>
+      {/* 消息列表：浅灰背景（同微信），自定义聊天背景时透出背景层。
+          wx-chat-list：消息区锚点（聊天设置 › 自定义CSS 示例主题可改内边距/字体） */}
+      <div ref={scrollRef} className={`wx-chat-list no-scrollbar relative z-10 min-h-0 flex-1 overflow-y-auto px-3 ${liquid ? 'pb-3 pt-[96px]' : 'py-3'}`}>
         {msgs.length === 0 && (
           <p className="mt-16 text-center text-[13px] text-black/35 dark:text-white/35">
             {selfChat ? '给自己发条消息吧' : `和 ${peer.name} 打个招呼吧`}
@@ -9098,11 +9099,12 @@ function ChatPage({
                 显示设置 › 时间开启后每条消息单独显示时间，此间隔条退场（冗余） */}
             {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && !chatDisplay.timeEnabled && (
               <div className="py-2 text-center">
+                {/* wx-time-chip：时间胶囊锚点（聊天设置 › 自定义CSS 示例主题可改它） */}
                 <span
                   className={
                     liquid
-                      ? 'text-[11.5px] font-medium leading-[1.4] text-black/45 dark:text-white/50'
-                      : 'inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60'
+                      ? 'wx-time-chip text-[11.5px] font-medium leading-[1.4] text-black/45 dark:text-white/50'
+                      : 'wx-time-chip inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60'
                   }
                 >
                   {fmtChatTime(m.time)}
@@ -9733,8 +9735,9 @@ function ChatPage({
         })()}
       </div>
 
-      {/* 底部：输入栏 + 加号面板（面板展开时输入栏保持在上方）；多选模式下变为批量删除/分享/收藏操作栏 */}
-      <div className={liquid ? 'relative z-10 shrink-0 bg-transparent' : retro ? 'rt-inputbar relative z-10 shrink-0' : 'relative z-10 shrink-0 border-t border-black/[0.07] bg-[#EDEDED] dark:border-white/[0.06] dark:bg-[#111111]'}>
+      {/* 底部：输入栏 + 加号面板（面板展开时输入栏保持在上方）；多选模式下变为批量删除/分享/收藏操作栏。
+          wx-inputbar：输入栏锚点（聊天设置 › 自定义CSS 示例主题可改底色/边框） */}
+      <div className={`wx-inputbar ${liquid ? 'relative z-10 shrink-0 bg-transparent' : retro ? 'rt-inputbar relative z-10 shrink-0' : 'relative z-10 shrink-0 border-t border-black/[0.07] bg-[#EDEDED] dark:border-white/[0.06] dark:bg-[#111111]'}`}>
         {selectMode ? (
           <div className="flex items-center justify-around px-6 pb-[26px] pt-3" data-testid="wx-select-bar">
             <button

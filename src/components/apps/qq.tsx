@@ -7155,10 +7155,11 @@ function ChatPage({
         )}
       </div>
 
-      {/* 消息流（页面任意位置左滑 → 好友互动标识页；自定义聊天背景时透出背景层） */}
+      {/* 消息流（页面任意位置左滑 → 好友互动标识页；自定义聊天背景时透出背景层）。
+          qq-chat-list：消息区锚点（聊天设置 › 自定义CSS 示例主题可改内边距/字体） */}
       <div
         ref={scrollRef}
-        className={`no-scrollbar relative z-10 flex-1 overflow-y-auto px-3.5 select-none ${liquid ? 'pt-[112px] pb-3' : 'py-3'}`}
+        className={`qq-chat-list no-scrollbar relative z-10 flex-1 overflow-y-auto px-3.5 select-none ${liquid ? 'pt-[112px] pb-3' : 'py-3'}`}
         data-testid="qq-chat-list"
         style={{ touchAction: 'pan-y' }}
       >
@@ -7208,7 +7209,8 @@ function ChatPage({
             >
               {showTime && (
                 <div className="my-2 text-center">
-                  <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
+                  {/* qq-time-chip：时间胶囊锚点（聊天设置 › 自定义CSS 示例主题可改它） */}
+                  <span className="qq-time-chip inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
                 </div>
               )}
               {lineOnly ? (
@@ -7834,7 +7836,8 @@ function ChatPage({
       </div>
 
       {/* 底部：输入行 + 六图标工具栏 + 加号面板（弹出时输入框与工具栏被整体顶起，跟随面板上浮）；多选模式下变为批量操作栏 */}
-      <div className={`relative z-10 shrink-0 ${liquid ? 'bg-transparent' : retro ? 'rt-inputbar' : 'bg-white dark:bg-[#1B1C1F]'}`}>
+      {/* qq-inputbar：输入栏锚点（聊天设置 › 自定义CSS 示例主题可改底色/边框） */}
+      <div className={`qq-inputbar relative z-10 shrink-0 ${liquid ? 'bg-transparent' : retro ? 'rt-inputbar' : 'bg-white dark:bg-[#1B1C1F]'}`}>
         {selectMode ? (
           <div className="flex items-center justify-around px-6 pb-[22px] pt-3" data-testid="qq-select-bar">
             <button
