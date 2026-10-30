@@ -90,6 +90,37 @@ const SYSTEM_PROMPT = [
   '7. 如果你完全不知道这首歌（可能是生造/自创名字），只输出 {"error":"unknown"}。',
 ].join('\n');
 
+// ---------------- B2 服务端记谱缓存（内存 LRU，200 首） ----------------
+// 同一首歌换角色 / 清前端缓存 / 多设备不再重复烧 LLM 记谱调用（限流期尤其重要）。
+// 模块级 Map：Node 进程存活期间跨角色、跨会话命中；插入序即 LRU 序。
+
+const songCache = new Map<string, SongOut>();
+const SONG_CACHE_MAX = 200;
+
+/** 曲名归一缓存键（去空白/书名号/引号 + 小写，与前端 normKey 同策略） */
+function normTitle(t: string): string {
+  return t.replace(/\s|《|》|["'「」]/g, '').toLowerCase();
+}
+
+/** LRU 读：命中则移到队尾（最近使用） */
+function songCacheGet(key: string): SongOut | null {
+  const v = songCache.get(key);
+  if (!v) return null;
+  songCache.delete(key);
+  songCache.set(key, v);
+  return v;
+}
+
+/** LRU 写：超上限丢队首（最久未用） */
+function songCachePut(key: string, v: SongOut): void {
+  songCache.delete(key);
+  songCache.set(key, v);
+  if (songCache.size > SONG_CACHE_MAX) {
+    const oldest = songCache.keys().next().value;
+    if (oldest !== undefined) songCache.delete(oldest);
+  }
+}
+
 export async function POST(req: NextRequest) {
   const body = await readJsonBody(req);
   if (!body) return NextResponse.json({ ok: false, error: 'bad-request' }, { status: 400 });
@@ -97,18 +128,36 @@ export async function POST(req: NextRequest) {
   const title = typeof body.title === 'string' ? body.title.trim().slice(0, 40) : '';
   if (!title) return NextResponse.json({ ok: false, error: 'bad-title' }, { status: 400 });
 
+  // B2：先查服务端缓存（跨角色/跨会话命中，秒回不烧调用）
+  const cacheKey = normTitle(title);
+  const cached = songCacheGet(cacheKey);
+  if (cached) return NextResponse.json({ ok: true, song: cached, via: 'cache' });
+
   const cfg = extractUpstreamConfig(body.config);
+  const messages = [
+    { role: 'system' as const, content: SYSTEM_PROMPT },
+    { role: 'user' as const, content: `歌名：《${title}》。请记谱。` },
+  ];
   try {
-    const { text, via } = await completeWithFallback(cfg, [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: `歌名：《${title}》。请记谱。` },
-    ]);
+    // A3 修复：仅限流（429/频率超限）先退避 1.5s 重试一次——限流窗口内立即重打必然又败，
+    // 还会加剧限流（聊天+决策+记谱互相踩）；其它错误直接失败，前端回落即兴
+    let text = '';
+    let via = 'upstream';
+    try {
+      ({ text, via } = await completeWithFallback(cfg, messages));
+    } catch (first) {
+      const msg = first instanceof Error ? first.message : String(first);
+      if (!/429|频率|限流|rate ?limit|too many/i.test(msg)) throw first;
+      await new Promise((r) => setTimeout(r, 1500));
+      ({ text, via } = await completeWithFallback(cfg, messages));
+    }
     const parsed = parseLooseJSON<Record<string, unknown>>(text);
     if (!parsed || parsed.error === 'unknown' || parsed.error) {
       return NextResponse.json({ ok: false, error: 'unknown' });
     }
     const song = sanitizeSong(parsed, title);
     if (!song) return NextResponse.json({ ok: false, error: 'bad-melody' });
+    songCachePut(cacheKey, song); // B2：成功记谱入缓存
     return NextResponse.json({ ok: true, song, via });
   } catch (err) {
     const msg = err instanceof Error ? err.message : '记谱失败';

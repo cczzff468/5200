@@ -175,6 +175,12 @@ export async function cabinChatTurn(
   try {
     return await callOnce(false);
   } catch (err) {
+    // 仅限流（429/频率超限）先退避 1.5s 再换通道重试：限流窗口内立即重试必然又撞墙，
+    // 还会加剧限流（聊天+决策+朋友圈+记忆提取互相踩）；其它错误换通道立即重试有意义（不同链路）
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/429|频率|限流|rate ?limit|too many/i.test(msg)) {
+      await new Promise((r) => setTimeout(r, 1500));
+    }
     // 代理层已尽力（上游失败时服务端直接 SDK 兜底）——到这里还失败：forceSdk 再试一次
     console.warn('[cabin] 聊天请求失败，改用内置模型重试', err);
     return await callOnce(true);
@@ -189,8 +195,8 @@ export interface ParsedReply {
   raw: string;
 }
 
-/** 动作块标记 */
-const ACT_RE = /<<ACT>>([\s\S]*?)<<END>>/;
+/** 动作块标记（g：全文所有块——模型偶尔输出两个块，必须全部提取合并、全部从正文剔除） */
+const ACT_RE = /<<ACT>>([\s\S]*?)<<END>>/g;
 
 /** 允许的动作类型 */
 const ACT_KINDS = new Set([
@@ -202,17 +208,19 @@ const ROOM_IDS = new Set(['lr', 'br', 'kt', 'ba', 'bal', 'sr', 'yd']);
 
 /**
  * 拦截解析 AI 回复：
- * - 抽出最后一个 <<ACT>>{...}<<END>> 动作块（JSON 宽松解析：actions 数组，type 白名单）；
- * - 剩余文本按行拆成气泡消息（去空行、去动作块残留；全空时兜底一句「（轻轻点了点头）」不行——
- *   返回空数组由调用方兜底文案）。
+ * - 提取【全部】 <<ACT>>{...}<<END>> 动作块合并执行（模型偶尔连发两个块：只认第一个会丢动作，
+ *   漏掉的那个块 JSON 原文还会泄漏成 TA 头顶的聊天气泡——用户看到 TA「念代码」）；
+ * - 所有块（含块内 JSON）全部从正文剔除，正文里孤立成行的动作 JSON 残留也一并清掉；
+ * - 剩余文本按行拆成气泡消息（去空行、去动作块残留；全空时返回空数组由调用方兜底文案）。
  */
 export function parseAiReply(text: string): ParsedReply {
   const raw = text ?? '';
   const actions: { type: string; room?: RoomId; song?: string; open?: boolean; inst?: 'piano' | 'guitar' }[] = [];
   let body = raw;
-  const m = ACT_RE.exec(raw);
-  if (m) {
-    body = raw.replace(ACT_RE, '').trim();
+  // —— 全局遍历：每个完整动作块的 actions 都合并进来（顺序保留） ——
+  let found = false;
+  for (const m of raw.matchAll(ACT_RE)) {
+    found = true;
     try {
       const parsed = JSON.parse(m[1].trim()) as { actions?: unknown };
       if (Array.isArray(parsed.actions)) {
@@ -230,8 +238,12 @@ export function parseAiReply(text: string): ParsedReply {
         }
       }
     } catch {
-      // 动作块 JSON 损坏：忽略动作，保留聊天内容
+      // 动作块 JSON 损坏：忽略这个块的动作，保留聊天内容
     }
+  }
+  if (found) {
+    // 全部完整块整体剔除（g 标志替换所有）
+    body = raw.replace(ACT_RE, '').trim();
   }
   // 清理残标记 + 拆行
   const cleaned = body
@@ -241,7 +253,8 @@ export function parseAiReply(text: string): ParsedReply {
   const msgs = cleaned
     .split(/\n+/)
     .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !/^<<.*>>$/.test(l))
+    // 孤立成行的动作 JSON 残留（未闭合块 / 块外散落的 {"actions":...}）不能变成 TA 念出来的「台词」
+    .filter((l) => l.length > 0 && !/^<<.*>>$/.test(l) && !/^\{[\s\S]*"actions"[\s\S]*\}$/.test(l))
     .slice(0, 10); // 1~10 条（要求上限）
   return { msgs, actions, raw };
 }

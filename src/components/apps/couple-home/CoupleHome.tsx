@@ -160,7 +160,7 @@ import {
 } from './cabin-mind';
 import { search as ncmSearch, songUrl as ncmSongUrl } from '@/lib/ios/music-api';
 import CabinHistorySheet from './CabinHistorySheet';
-import { prefetchSong, playRequestedSong, stopAiSong } from './ai-song';
+import { prefetchSong, playRequestedSong, stopAiSong, AI_SONG_NAMES } from './ai-song';
 import {
   cabinAfterChatTurn,
   cabinBehaviorMemoryOncePerDay,
@@ -1021,8 +1021,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, [companion?.id, companion]);
   /** 最近一次自主活动（行为强化归因：被夸/被嫌弃记在它头上） */
   const lastActRef = useRef<string>('');
+  /** 最近一次弹/放的歌名（B1：被夸时记到歌维度，TA 自主弹琴时优先挑「上次你说好听的那首」） */
+  const lastSongTitleRef = useRef<string>('');
   /** 下次决策时间 */
   const decideNextAtRef = useRef(Date.now() + 60_000);
+  /** 决策连续失败次数（A3 修复：连续失败指数拉长决策间隔，恢复即回正常节奏） */
+  const decideFailRef = useRef(0);
   /** B1 真歌播放器（网易云直链；null = 没在放） */
   const realAudioRef = useRef<HTMLAudioElement | null>(null);
   /** v10 E1 聊天记录回看面板 */
@@ -1166,6 +1170,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
           const playKind = inst?.kind === 'guitar' ? 'guitar' : 'piano';
           void playRequestedSong(playKind, e.song).then((r) => {
             const name = companion?.name ?? 'TA';
+            if (r.via !== 'improv') lastSongTitleRef.current = r.title; // B1：歌维度强化归因（即兴不算真歌）
             if (r.via === 'llm') toast(`${name}现记了《${r.title}》的谱子，弹给你听～`);
             else if (r.via === 'improv') toast(e.song?.trim() ? `《${e.song}》的谱没想起来，${name}即兴弹了一段～` : `${name}即兴弹了一段小曲～`);
             else toast(`${name}弹起了《${r.title}》～`);
@@ -1217,6 +1222,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
             if (!ok) {
               // C3 两次都连不上真歌源 → 八音盒轻声循环（谱子同样三层取：曲库/缓存/现记）
               void playRequestedSong('musicbox', e.song, { loop: true, vol: 0.3 }).then((r) => {
+                if (r.via !== 'improv') lastSongTitleRef.current = r.title; // B1：歌维度强化归因
                 toast(
                   r.via === 'improv' && e.song?.trim()
                     ? `真歌源连不上，《${e.song}》的谱也没想起，用八音盒放了首轻音乐～`
@@ -1224,6 +1230,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 );
               });
             } else {
+              if (e.song?.trim()) lastSongTitleRef.current = e.song.trim(); // B1：歌维度强化归因
               toast(`音箱里放起了《${e.song ?? '一首好听的歌'}》，真的能听到哦～`);
             }
           });
@@ -1664,15 +1671,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
           ...(acts[0].type === 'play' && acts[0].inst ? { itemId: instIdOf(acts[0].inst) } : {}),
           memo: 'ai-act',
         });
-        // —— v10 A10 行为强化：刚做完的事被夸/被嫌弃 → 记下来影响以后 ——
-        const m2 = mindRef.current;
-        if (m2 && companion && ['play', 'cook', 'music', 'eat', 'dance'].includes(lastActRef.current)) {
-          if (/好听|真好听|弹得|唱得|真棒|好厉害|好棒|好喜欢|喜欢你|谢谢你|真好吃|好香/.test(text)) {
-            reinforceActivity(companion.id, m2, lastActRef.current, true);
-          } else if (/难听|不好听|难吃|太吵|不好吃|吵死了/.test(text)) {
-            reinforceActivity(companion.id, m2, lastActRef.current, false);
-          }
-        }
       } else {
         // v10 意图兜底：模型没发动作块（内置兜底模型偶尔偷懒，只回一句「我这就去弹」），
         // 但用户话里是明确的弹琴/放歌指令 → 本地补发动作，让 TA 说到做到
@@ -1688,6 +1686,21 @@ export default function CoupleHome({ close }: { close: () => void }) {
             ...(instItem ? { itemId: instItem.id } : {}),
             memo: 'intent-fallback',
           });
+        }
+      }
+      // —— v10 A10 行为强化：刚做完的事被夸/被嫌弃 → 记下来影响以后 ——
+      // v10.x：移出「AI 带动作块」分支——夸奖/嫌弃往往不带指令，AI 纯文字回应时也要结算归因；
+      // B1：弹琴/放歌被夸除了记活动维度，还记歌维度（song:曲名）——TA 自主决策弹琴时优先挑「上次你说好听的那首」
+      const m2 = mindRef.current;
+      if (m2 && companion && ['play', 'cook', 'music', 'eat', 'dance'].includes(lastActRef.current)) {
+        const lastSong = lastSongTitleRef.current;
+        const songKey = (lastActRef.current === 'play' || lastActRef.current === 'music') && lastSong ? `song:${lastSong}` : '';
+        if (/好听|真好听|弹得|唱得|真棒|好厉害|好棒|好喜欢|喜欢你|谢谢你|真好吃|好香/.test(text)) {
+          if (songKey) reinforceActivity(companion.id, m2, songKey, true);
+          reinforceActivity(companion.id, m2, lastActRef.current, true);
+        } else if (/难听|不好听|难吃|太吵|不好吃|吵死了/.test(text)) {
+          if (songKey) reinforceActivity(companion.id, m2, songKey, false);
+          reinforceActivity(companion.id, m2, lastActRef.current, false);
         }
       }
       // ⑧ 对话记忆入库（标准管线：碎片 → 核心 → 长期；scene=拾光小屋）
@@ -2187,10 +2200,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
         };
         let result: DecisionResult | null = null;
         try {
-          const reply = await cabinChatTurn([{ role: 'system', content: buildDecisionPrompt(m, ctx) }], useSettings.getState().apiConfig);
+          const reply = await cabinChatTurn([{ role: 'system', content: buildDecisionPrompt(m, ctx, { songs: AI_SONG_NAMES }) }], useSettings.getState().apiConfig);
           result = parseDecision(reply);
         } catch {
           /* 网络/模型失败 → 规则兜底 */
+        }
+        if (result) {
+          decideFailRef.current = 0; // 恢复即回正常节奏（95~155s）
+        } else {
+          // A3 修复：连续失败指数拉长决策间隔（2→5→10 分钟）——限流期不再每 95~155s 烧 2 次必败调用，
+          // 反过来加剧限流（聊天+决策+朋友圈+记忆提取互相踩）；本地决策照常兜底，行为不中断
+          decideFailRef.current += 1;
+          const backoff = decideFailRef.current >= 3 ? 10 * 60_000 : decideFailRef.current === 2 ? 5 * 60_000 : 2 * 60_000;
+          decideNextAtRef.current = Math.max(decideNextAtRef.current, Date.now() + backoff);
         }
         if (!result) result = decideLocally(m, nightRef.current);
         // —— A7 想法气泡：决策透明（TA 为什么做这件事） ——

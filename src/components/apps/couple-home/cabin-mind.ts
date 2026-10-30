@@ -147,6 +147,14 @@ export function loadMind(id: string): CabinMind {
     if (Array.isArray(j.specialDays)) {
       m.specialDays = j.specialDays
         .filter((d) => d && typeof d.date === 'string' && typeof d.label === 'string')
+        // v10.x A2 存量清洗：旧版把点歌指令（「来首生日快乐」）/ 无日期关键词默认 +7 天记成的
+        // 假日子——label 括号里是原文片段而不是日期。读到即丢，避免当天冒出「今天是：来首生日快乐」。
+        // 旧格式「N月N日的约定」（无括号）与新格式「生日（12月3日）」（括号内是日期）都保留。
+        .filter((d) => {
+          const bracket = /（([^）]*)）$/.exec(d.label);
+          if (!bracket) return true; // 旧格式无括号（明确日期）→ 保留
+          return /\d{1,2}月\d{1,2}日/.test(bracket[1]); // 括号内必须是日期，否则是误记脏数据 → 丢弃
+        })
         .slice(0, 24)
         .map((d) => ({ date: d.date, label: d.label, ts: Number(d.ts) || Date.now() }));
     }
@@ -258,28 +266,76 @@ export function reinforceWeight(m: CabinMind, activity: string): number {
   return Math.min(2.2, Math.max(0.4, 1 + r.praise * 0.35 - r.complaint * 0.55));
 }
 
+/** B1 被夸过的歌名列表（reinforce 里 key = `song:${title}` 的记录，按被夸次数降序，前 5）。
+ *  TA 自主决策弹琴时优先挑这些——「上次你说好听的那首」。 */
+export function praisedSongs(m: CabinMind): string[] {
+  return Object.entries(m.reinforce)
+    .filter(([k, r]) => k.startsWith('song:') && r.praise > 0)
+    .sort((a, b) => b[1].praise - a[1].praise)
+    .map(([k]) => k.slice(5))
+    .slice(0, 5);
+}
+
 // ---------------- A8 特别日子 ----------------
 
 const SPECIAL_RE =
   /(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]|(生日|考试|面试|纪念日|周年|体检|演出|比赛|答辩)/;
 
-/** 从用户聊天文本里自动记日子（每轮聊天后调用；去重） */
-export function captureSpecialDay(id: string, m: CabinMind, text: string): string | null {
-  const hit = SPECIAL_RE.exec(text);
-  if (!hit) return null;
-  let date = '';
-  let label = '';
-  if (hit[1] && hit[2]) {
-    const mo = String(Math.min(12, Math.max(1, parseInt(hit[1], 10)))).padStart(2, '0');
-    const da = String(Math.min(31, Math.max(1, parseInt(hit[2], 10)))).padStart(2, '0');
-    date = `${mo}-${da}`;
-    label = `${parseInt(hit[1], 10)}月${parseInt(hit[2], 10)}日的约定`;
-  } else {
-    // 没说日期的关键词：默认记到 7 天后（到时候会主动问起）
-    const d = new Date(Date.now() + 7 * 86400_000);
-    date = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    label = `${hit[3] ?? '重要日子'}（${text.slice(0, 14)}）`;
+/** 特别日子关键词（单独提一次：日期分支和关键词分支可能只命中其一，label 都要用到） */
+const SPECIAL_KW_RE = /(生日|考试|面试|纪念日|周年|体检|演出|比赛|答辩)/;
+
+/** 否定句：「我不过生日 / 别提考试 / 没有」——用户明确表示不过/没有这件事，不记 */
+const SPECIAL_NEG_RE = /不过|从来|从不|没有|没什么|别再?提|不记得|忘了/;
+/** 已完成时：「考试终于考完了 / 生日过完了 / 面试结束了」——事情已经发生，不是未来的日子，不记 */
+const SPECIAL_DONE_RE = /(考|过|办|开|比|答|面|演|检)完|完事|结束了|已经.{0,6}完/;
+
+/** 相对日期词 → 距今天数（明天/后天/大后天/下周三/周三…）；解析不出返回 -1 */
+function parseRelativeDay(text: string, now: Date): number {
+  if (/今[天日晚]/.test(text)) return 0;
+  if (/明[天日晚]/.test(text)) return 1;
+  if (/大后天/.test(text)) return 3;
+  if (/后天/.test(text)) return 2;
+  const wk = text.match(/(下?)周([一二三四五六天日末])/);
+  if (wk) {
+    const map: Record<string, number> = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 0, '天': 0, '末': 6 };
+    const target = map[wk[2]];
+    if (target === undefined) return -1;
+    const raw = target - now.getDay();
+    if (wk[1] === '下') return raw === 0 ? 7 : (raw + 7) % 7; // 「下周三」= 未来最近的那个周三（今天周三则 7 天后）
+    return raw >= 0 ? raw : -1; // 「周三」本周内：已过去的不记
   }
+  return -1;
+}
+
+/** 从用户聊天文本里自动记日子（每轮聊天后调用；去重）。
+ *  v10.x 误记修复：否定句（不过生日）/ 已完成时（考完了）不记；只有关键词没有明确日期
+ *  （含相对日期词）也不记——以前默认记到 +7 天后会凭空冒出「今天是：考试终于考完了」。 */
+export function captureSpecialDay(id: string, m: CabinMind, text: string): string | null {
+  const t = (text ?? '').trim();
+  if (!t) return null;
+  // —— 否定句 / 已完成时：说了日子也不是「要到来的日子」 ——
+  if (SPECIAL_NEG_RE.test(t)) return null;
+  if (SPECIAL_DONE_RE.test(t)) return null;
+  const hit = SPECIAL_RE.exec(t);
+  if (!hit) return null;
+  const kw = SPECIAL_KW_RE.exec(t)?.[1] ?? '重要日子';
+  const now = new Date();
+  let mo = 0;
+  let da = 0;
+  if (hit[1] && hit[2]) {
+    // 明确的 N月N日
+    mo = Math.min(12, Math.max(1, parseInt(hit[1], 10)));
+    da = Math.min(31, Math.max(1, parseInt(hit[2], 10)));
+  } else {
+    // 只有关键词：找相对日期词（明天/后天/下周三…）；找不到就不记（不再默认 +7 天）
+    const diff = parseRelativeDay(t, now);
+    if (diff < 0) return null;
+    const d = new Date(now.getTime() + diff * 86400_000);
+    mo = d.getMonth() + 1;
+    da = d.getDate();
+  }
+  const date = `${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}`;
+  const label = `${kw}（${mo}月${da}日）`;
   if (m.specialDays.some((d) => d.date === date && d.label === label)) return null;
   m.specialDays.push({ date, label, ts: Date.now() });
   if (m.specialDays.length > 24) m.specialDays.shift();
@@ -468,15 +524,18 @@ const MOOD_TEXT: Record<CabinMood, string> = {
   sulking: '在闹小脾气（被冷落久了），嘴上说不生气但其实很在意',
 };
 
-/** 情境 + 内心状态 → 决策 system prompt（A1） */
-export function buildDecisionPrompt(m: CabinMind, ctx: DecisionCtx): string {
+/** 情境 + 内心状态 → 决策 system prompt（A1）
+ *  v10.x B1 增强：opts.songs 注入经典曲库名单 + 被夸过的歌——TA 自己练琴也会点歌，
+ *  优先弹「上次你说好听的那首」。 */
+export function buildDecisionPrompt(m: CabinMind, ctx: DecisionCtx, opts?: { songs?: string }): string {
   const lv = affinityLevelOf(m.affinity);
   const slot = scheduleSlot(new Date().getHours(), [0, 6].includes(new Date().getDay()));
   const reinforceLines = Object.entries(m.reinforce)
-    .filter(([, r]) => r.praise + r.complaint > 0)
+    .filter(([k, r]) => !k.startsWith('song:') && r.praise + r.complaint > 0)
     .slice(0, 6)
     .map(([k, r]) => `  · ${k}：被夸过 ${r.praise} 次、被嫌弃过 ${r.complaint} 次`);
   const special = todaySpecial(m);
+  const praised = praisedSongs(m);
   return [
     `你是「拾光小屋」里的 AI 伴侣 ${ctx.charName}（3D 小人）。现在没有人跟你说话——请根据你的内心状态和作息，自己决定接下来 1~3 分钟做什么。`,
     '',
@@ -487,6 +546,8 @@ export function buildDecisionPrompt(m: CabinMind, ctx: DecisionCtx): string {
     m.sulk.on ? `- 注意：你在闹脾气，行动上可以离 ${ctx.userName} 远一点、背对着 TA，但 TA 来哄你的话要心软` : '',
     `- 现在的时间：${ctx.timeStr}（${ctx.night ? '夜晚' : '白天'}，窗外${ctx.weather}）；作息上：${slot.plan}`,
     special ? `- 特别日子：${special}——可以为此做点什么（做饭/弹歌/拥抱）并在心里想着这件事` : '',
+    opts?.songs ? `- 你会弹的曲子（经典曲库）：${opts.songs}——想弹具体的歌就在 play 动作里带 song 参数（如 {"type":"play","song":"卡农"}）` : '',
+    praised.length > 0 ? `- 你记得这几首被${ctx.userName}夸过：${praised.join('、')}——想弹琴时优先弹这几首（「上次你说好听的那首」）` : '',
     reinforceLines.length ? '【你的经验（行为强化）】' : '',
     ...reinforceLines,
     '',
@@ -496,7 +557,7 @@ export function buildDecisionPrompt(m: CabinMind, ctx: DecisionCtx): string {
     '',
     '【输出格式】只输出一个 JSON（不要多余文字）：',
     '{"thought":"一句内心想法（10字内，会显示成你的想法气泡）","say":["想说的话，0~2句，没有就空数组"],"actions":[{"type":"..."}]}',
-    '动作 type 可选：come（找TA）| goto(room: lr客厅/br卧室/kt厨房/ba卫生间/bal阳台/sr书房/yd花园) | sit | lie（睡觉，夜里配 dur:0）| watch | play（弹琴）| cook（做饭）| music（放歌）| eat | door | lamp | dance（跳舞）| stretch（伸懒腰）| water（浇花）| read（看书）| hug | holdhand | free',
+    '动作 type 可选：come（找TA）| goto(room: lr客厅/br卧室/kt厨房/ba卫生间/bal阳台/sr书房/yd花园) | sit | lie（睡觉，夜里配 dur:0）| watch | play（弹琴，可带 song 点曲库里的歌）| cook（做饭）| music（放歌）| eat | door | lamp | dance（跳舞）| stretch（伸懒腰）| water（浇花）| read（看书）| hug | holdhand | free',
     '选择倾向：饿了(food<35)→cook+eat；困了(energy<28或深夜)→lie 睡觉；无聊(mood<35)→play/music/dance；想TA了(social<32)→come 或 goto 到 TA 那里；平时按作息来；刚做过的事别立刻重复；晚上 23 点后一律睡觉（lie + dur:0）。',
     '闹脾气时：不选 come/hug，选 goto 别的房间/sit/背对着的动作。',
   ]
@@ -572,9 +633,14 @@ export function decideLocally(m: CabinMind, night: boolean): DecisionResult {
     const away = (['br', 'sr', 'bal', 'yd'] as const)[Math.floor(Math.random() * 4)];
     return { thought: '哼，不想理你', say: [], actions: [{ type: 'goto', room: away }, { type: 'sit' }] };
   }
+  // B1：被夸过的歌优先——练琴时弹「上次你说好听的那首」
+  const praised = praisedSongs(m);
   // 作息优先
   if (slot.act === 'cook-eat') return { thought: '到饭点啦', say: [], actions: [{ type: 'cook' }, { type: 'eat' }] };
-  if (slot.act === 'play') return { thought: '练会儿琴吧', say: [], actions: [{ type: 'play' }] };
+  if (slot.act === 'play')
+    return praised[0]
+      ? { thought: `弹${praised[0]}吧，TA 爱听`, say: [], actions: [{ type: 'play', song: praised[0] }] }
+      : { thought: '练会儿琴吧', say: [], actions: [{ type: 'play' }] };
   if (slot.act === 'read') return { thought: '看会儿书', say: [], actions: [{ type: 'read' }] };
   if (slot.act === 'garden') return { thought: '去花园转转', say: [], actions: [{ type: 'goto', room: 'yd' }, { type: 'water' }] };
   if (slot.act === 'wash') return { thought: '收拾一下', say: [], actions: [{ type: 'goto', room: 'ba' }, { type: 'stretch' }] };
@@ -583,16 +649,13 @@ export function decideLocally(m: CabinMind, night: boolean): DecisionResult {
   const pool = ACT_W.map((a) => ({ type: a.type, w: (a.need(m, hour, night) + a.w) * reinforceWeight(m, a.type) * (0.6 + Math.random() * 0.8) }));
   pool.sort((x, y) => y.w - x.w);
   const pick = pool[0]?.type ?? 'sit';
-  const extra: Record<string, { type: string; room?: string }[]> = {
-    cook: [{ type: 'eat' }],
-    goto: [],
-    come: [],
-  };
+  const extra: Record<string, { type: string }[]> = { cook: [{ type: 'eat' }] };
+  const playSong = pick === 'play' ? praised[0] : undefined;
   const thoughtMap: Record<string, string> = {
     cook: '肚子有点饿…做点吃的',
     eat: '吃饭啦',
     lie: '好困…',
-    play: '弹会儿琴',
+    play: playSong ? `弹${playSong}吧` : '弹会儿琴',
     music: '放首歌听',
     dance: '想动一动',
     read: '翻翻书',
@@ -604,6 +667,9 @@ export function decideLocally(m: CabinMind, night: boolean): DecisionResult {
   return {
     thought: thoughtMap[pick] ?? '随便转转',
     say: [],
-    actions: [{ type: pick }, ...(extra[pick] ?? [])],
+    actions: [
+      { type: pick, ...(playSong ? { song: playSong } : {}) },
+      ...(extra[pick] ?? []),
+    ],
   };
 }
