@@ -344,84 +344,84 @@ export interface CssTemplate {
 
 // ================= 全局（个性装扮 › 主题 Tab › 自定义CSS） =================
 
-/** 全局模板：整台手机所有界面的完整清单（默认值 = 系统当前样式） */
+/** 全局模板：变量驱动一键换肤（第七十四轮精细化）——
+ *  色板区 4 个颜色变量控整机，下面各段全部吃变量；
+ *  示范配色（奶茶金）与系统默认明显不同：填入即应用 → 立刻可见变化，
+ *  解决「照模板填了默认值 → 应用后看起来没变」的困惑。 */
 export const GLOBAL_CSS_TEMPLATE: CssTemplate = {
-  name: '全局完整模板',
-  desc: '背景 / 状态栏 / 灵动岛 / 面板 / 按钮…手机上所有能改的地方',
+  name: '全局主题模板',
+  desc: '改色板 4 个颜色 = 一键换肤（自带示范配色，应用即可见）',
   css: `/* ═══════════════════════════════════════════════
-   全局 · 完整模板（整台手机）
+   全局 · 主题模板（一键换肤版）
    ═══════════════════════════════════════════════
-   作用范围：手机里所有界面——各 App 页面、状态栏、面板、
-   按钮、线下模式，全部听这里的。
-   每一段 = 一处；把值改成你想要的，不想要的整段删掉。
-   下面填的都是系统现在的默认样式——不改直接应用 ≈ 没变化。
-   注意：联系人若单独设了聊天 CSS，会盖过这里的同名规则。 */
+   用法：只改下面【色板】里的颜色，点「应用」，
+   整台手机立刻换肤；想精调某一处，再改下面对应段。
+   深色模式的颜色在第二组（.dark &）里，不想要
+   深浅双色就把它删了。自带示范配色（奶茶金），
+   应用后立即能看到变化。 */
 
-/* ── 1. 页面背景（所有 App 的灰白底一起换色） ── */
+/* ── 色板（改这 4 个值就够了） ── */
+& {
+  --my-page: #FAF2DF;    /* ① 页面底色（所有 App 的灰白底） */
+  --my-card: #FFFDF4;    /* ② 卡片/面板底色（液态/古早面板） */
+  --my-bar: #F3E8CC;     /* ③ 顶栏底色（各页导航条） */
+  --my-accent: #B07818;  /* ④ 强调色（输入光标/选中文字） */
+}
+.dark & {
+  --my-page: #17130B;
+  --my-card: #221C11;
+  --my-bar: #1D180F;
+  --my-accent: #E0B45C;
+}
+
+/* ── 1. 页面底色：所有 App 的灰白底 → 色板① ── */
 [class*='bg-[#F5F6F7]'], [class*='bg-[#EDEDED]'], [class*='bg-[#F4F5F7]'],
 [class*='bg-[#F7F8FA]'], [class*='bg-[#F5F6F8]'], [class*='bg-[#F7F7F7]'],
 [class*='bg-[#F2F3F5]'], [class*='bg-[#F6F7F8]'], [class*='bg-[#F8F8F8]'],
 [class*='bg-[#F6F7F9]'], [class*='bg-[#F4F5F9]'], [class*='bg-[#FAFAFC]'],
 [class*='bg-[#FAFAFA]'], [class*='bg-[#EFEFF4]'] {
-  background: #F5F6F7;   /* ← 换成你想要的颜色 */
+  background: var(--my-page);
 }
 
-/* 上面那批页面在深色模式下的颜色 */
-.dark & [class*='bg-[#F5F6F7]'], .dark & [class*='bg-[#EDEDED]'], .dark & [class*='bg-[#F4F5F7]'],
-.dark & [class*='bg-[#F7F8FA]'], .dark & [class*='bg-[#F5F6F8]'], .dark & [class*='bg-[#F7F7F7]'],
-.dark & [class*='bg-[#F2F3F5]'], .dark & [class*='bg-[#F6F7F8]'], .dark & [class*='bg-[#F8F8F8]'],
-.dark & [class*='bg-[#F6F7F9]'], .dark & [class*='bg-[#F4F5F9]'], .dark & [class*='bg-[#FAFAFC]'],
-.dark & [class*='bg-[#FAFAFA]'], .dark & [class*='bg-[#EFEFF4]'] {
-  background: #111214;
-}
-
-/* ── 2. 状态栏（顶部时间 · 信号 · 电池） ── */
-/* 默认自动选黑/白字（看背景明暗）；想固定颜色就解开注释填 */
-/* .ph-statusbar { color: #1F1F1F; } */
-
-/* ── 3. 灵动岛（顶部黑色胶囊） ── */
-.ph-island { background: #000000; }
-
-/* ── 4. Home 指示条（屏幕最底部的小横杠） ── */
-/* 同样默认自动黑/白；想固定颜色就解开注释填 */
-/* .ph-homebar { background: #1F1F1F; opacity: 0.9; } */
-
-/* ── 5. App 顶部导航栏（大标题那一整条） ── */
+/* ── 2. 顶栏：各页导航条 → 色板③（毛玻璃保留） ── */
 [class*='bg-background/80'] {
-  background: color-mix(in oklab, var(--background) 80%, transparent);
+  background: color-mix(in srgb, var(--my-bar) 86%, transparent);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
 }
-/* ↑ 这行 = 系统默认（半透明，自动跟随深浅模式）；直接换成你要的颜色，如 rgba(255,250,240,0.85) */
 
-/* ── 6. 面板 / 卡片（设置页、弹窗里的卡片） ── */
-.rt-panel { background: #FFFFFF; }
-.dark & .rt-panel { background: #35353D; }
+/* ── 3. 面板/卡片：液态玻璃 / 古早主题的面板 → 色板②（保留透底） ── */
+.rt-panel { background: var(--my-card); }
+.lg-card, .lg-sheet, .lg-panel {
+  background: color-mix(in srgb, var(--my-card) 72%, transparent);
+}
 
-.lg-card, .lg-sheet, .lg-panel { background: rgba(255, 255, 255, 0.62); }
-.dark & .lg-card, .dark & .lg-sheet, .dark & .lg-panel { background: rgba(28, 28, 34, 0.62); }
+/* ── 4. 强调色：输入光标 + 选中文字高亮 → 色板④ ── */
+input, textarea { caret-color: var(--my-accent); }
+::selection { background: var(--my-accent); color: #FFFFFF; }
 
-/* ── 7. 按钮手感（按下轻轻缩，松手弹回来） ── */
+/* ── 5. 按钮按下手感（轻轻缩一下弹回来） ── */
 button {
   transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1.4),
     background-color 0.18s, color 0.18s, opacity 0.18s;
 }
 button:active { transform: scale(0.955); }
 
-/* ── 8. 输入框（打字时的光标颜色） ── */
-/* 解开注释填你想要的颜色 */
-/* input, textarea { caret-color: #FF7A59; } */
-
-/* ── 9. 文字选中（长按 / 拖选文字的高亮色） ── */
-/* 解开注释填你想要的颜色 */
-/* ::selection { background: #FF7A59; color: #FFFFFF; } */
-
-/* ── 10. 滚动条（手机里所有列表的滚动条） ── */
+/* ── 6. 滚动条（极细 iOS 风） ── */
 ::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.25); border-radius: 99px; }
 .dark & ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.25); }
 
-/* ── 11. 想再动手？解开这些注释 ── */
-/* 所有按钮统一圆角 */
-/* button { border-radius: 12px; } */
+/* ── 7. 灵动岛 / 状态栏 / Home 条 ── */
+.ph-island { background: #000000; }
+/* 状态栏文字（默认自动黑白；想固定就解开注释） */
+/* .ph-statusbar { color: #1F1F1F; } */
+/* Home 指示条（同样默认自动黑白） */
+/* .ph-homebar { background: #1F1F1F; opacity: 0.9; } */
+
+/* ── 8. 想再动手？解开这些注释 ── */
+/* 所有按钮统一圆角（注意：胶囊按钮会变方角） */
+/* button, input, textarea { border-radius: 12px; } */
 
 /* 全手机文字放大一档 */
 /* & { font-size: 105%; } */

@@ -343,11 +343,8 @@ function memberNameOf(c: ContactRecord): string {
   return displayNameOf(c);
 }
 
-/** 亲属卡扣款通知行前缀（与单聊同款）：扣款 parts 按赠卡人名去重后恰一个 → 「你用{名}送的亲属卡支付了」；多个赠卡人 → 「你用亲属卡支付了」 */
-function fcNoticePreOf(parts: Array<{ giverName: string }>): string {
-  const givers = [...new Set(parts.map((p) => p.giverName))];
-  return givers.length === 1 ? `你用${givers[0]}送的亲属卡支付了` : '你用亲属卡支付了';
-}
+/** 亲属卡扣款通知行前缀：第七十四轮（用户指定）不再往聊天里插「你用X送的亲属卡支付了¥N」提示行——
+ *  消费感知照常落库（流水+记忆碎片），只是界面不显示；保留函数以防后续需要恢复 */
 
 /** 正则元字符转义（@ 提及边界匹配用：成员显示名可能含 . * + 等正则特殊字符） */
 function escapeRegExp(s: string): string {
@@ -4232,10 +4229,10 @@ export function WxGroupChatPage({
     setLayer(null);
     appendMsg(msg);
     if (pay.fc) {
-      // 亲属卡扣款感知：资金通知行（与单聊同款句式）+ 消费流水/赠卡人记忆碎片（fire-and-forget，绝不触发 AI 回合）
-      const fc = pay.fc;
-      appendFundNotice('fam', fcNoticePreOf(fc.parts), `¥${fmtMoney(fc.total)}`);
+      // 第七十四轮（用户指定）：亲属卡扣款不再插「你用X送的亲属卡支付了¥N」提示行——
+      // 消费流水/赠卡人记忆碎片照常落库（fire-and-forget，绝不触发 AI 回合）；
       // 多账号 v2：亲属卡消费记忆按微信 App 当前账号取「我」的真名
+      const fc = pay.fc;
       void ownerRealNameFor('wx').then((o) => {
         recordFcSpend({ total: fc.total, scene: '红包', where: `发进「${groupDisplayName(group)}」的群红包`, note: p.blessing || undefined, parts: fc.parts, ownerName: o });
       });
@@ -4285,10 +4282,10 @@ export function WxGroupChatPage({
     setLayer(null);
     appendMsg(msg);
     if (pay.fc) {
-      // 亲属卡扣款感知：资金通知行（与单聊同款句式）+ 消费流水/赠卡人记忆碎片（fire-and-forget，绝不触发 AI 回合）
-      const fc = pay.fc;
-      appendFundNotice('fam', fcNoticePreOf(fc.parts), `¥${fmtMoney(fc.total)}`);
+      // 第七十四轮（用户指定）：亲属卡扣款不再插「你用X送的亲属卡支付了¥N」提示行——
+      // 消费流水/赠卡人记忆碎片照常落库（fire-and-forget，绝不触发 AI 回合）；
       // 多账号 v2：亲属卡消费记忆按微信 App 当前账号取「我」的真名
+      const fc = pay.fc;
       void ownerRealNameFor('wx').then((o) => {
         recordFcSpend({ total: fc.total, scene: '转账', where: `转给「${memberNameOf(member)}」的转账`, note: note || undefined, parts: fc.parts, ownerName: o });
       });

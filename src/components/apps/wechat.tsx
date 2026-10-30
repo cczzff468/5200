@@ -8433,17 +8433,12 @@ function ChatPage({
     }
     // 生成 AI 可引用的短 ID；发出后立即触发 AI 回复（红包进待处理清单，AI 按人设决定领取/退回/拒收）
     const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'redpacket', rp: { amount, blessing, opened: false, cid: nextWxCid('rp') } };
+    // 第七十四轮（用户指定）：亲属卡付款不再往聊天里插「你用X送的亲属卡支付了¥N」提示行——
+    // 消费感知照常落库（流水 + 按赠卡人的记忆碎片，recordFcSpend 绝不触发 AI 回合），只是界面不显示；
+    // 自聊（发给自己）无感知对象：不落流水
+    setMsgs((prev) => [...prev, msg]);
     if (pay.fc && peer.id !== me.id) {
-      // 亲属卡付款：消息 + 「消费感知」通知行一次写入（对齐 openRedPacket 的 notice 行形状），
-      // 同时落消费流水与按赠卡人的记忆碎片（recordFcSpend 内部绝不触发 AI 回合）；
-      // 自聊（发给自己）无感知对象：不插通知行不落流水
-      const givers = new Set(pay.fc.parts.map((p) => p.giverName));
-      const pre = givers.size === 1 ? `你用${[...givers][0]}送的亲属卡支付了` : '你用亲属卡支付了';
-      const noticeRow: WxMsg = { id: uid(), role: 'peer' as const, content: '', time: Date.now(), kind: 'notice' as const, notice: { icon: 'fam' as const, pre, accent: `¥${fmtMoney(pay.fc.total)}` } };
-      setMsgs((prev) => [...prev, msg, noticeRow]);
       recordFcSpend({ total: pay.fc.total, scene: '红包', where: `发给「${peer.name}」的红包`, note: blessing || undefined, parts: pay.fc.parts, ownerName: me.realName || me.name });
-    } else {
-      setMsgs((prev) => [...prev, msg]);
     }
     setCompose(null);
     if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
@@ -8476,17 +8471,12 @@ function ChatPage({
     }
     // 生成 AI 可引用的短 ID；发出后立即触发 AI 回复（AI 按人设决定收款/退回/拒收）
     const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'transfer', tr: { amount, note, received: false, cid: nextWxCid('tr') } };
+    // 第七十四轮（用户指定）：亲属卡付款不再往聊天里插「你用X送的亲属卡支付了¥N」提示行——
+    // 消费感知照常落库（流水 + 按赠卡人的记忆碎片，recordFcSpend 绝不触发 AI 回合），只是界面不显示；
+    // 自聊（发给自己）无感知对象：不落流水
+    setMsgs((prev) => [...prev, msg]);
     if (pay.fc && peer.id !== me.id) {
-      // 亲属卡付款：消息 + 「消费感知」通知行一次写入（对齐 openRedPacket 的 notice 行形状），
-      // 同时落消费流水与按赠卡人的记忆碎片（recordFcSpend 内部绝不触发 AI 回合）；
-      // 自聊（发给自己）无感知对象：不插通知行不落流水
-      const givers = new Set(pay.fc.parts.map((p) => p.giverName));
-      const pre = givers.size === 1 ? `你用${[...givers][0]}送的亲属卡支付了` : '你用亲属卡支付了';
-      const noticeRow: WxMsg = { id: uid(), role: 'peer' as const, content: '', time: Date.now(), kind: 'notice' as const, notice: { icon: 'fam' as const, pre, accent: `¥${fmtMoney(pay.fc.total)}` } };
-      setMsgs((prev) => [...prev, msg, noticeRow]);
       recordFcSpend({ total: pay.fc.total, scene: '转账', where: `转给「${peer.name}」的转账`, note: note || undefined, parts: pay.fc.parts, ownerName: me.realName || me.name });
-    } else {
-      setMsgs((prev) => [...prev, msg]);
     }
     setCompose(null);
     if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
@@ -11190,17 +11180,20 @@ function MomentRow({
 
         {menuOpen && (
           <div className="mt-2 flex justify-end" data-testid={`wx-moment-actions-${post.id}`}>
+            {/* 第七十四轮（用户指定：菜单文字要横向平行）：四个按钮 + 分隔线在内容列宽内放不下 →
+                按钮收紧内距/字号并加 whitespace-nowrap shrink-0（CJK 逐字换行是 min-width:auto
+                把按钮压到一字宽导致的）；总宽 ≈ 260px < 内容列 ≈ 302px，完整显示不裁切 */}
             <div className="flex overflow-hidden rounded-[6px] bg-[#4C4C4C] text-white shadow-md dark:bg-[#383838]">
               <button
                 type="button"
                 data-testid={`wx-moment-like-${post.id}`}
                 onClick={onToggleLike}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] active:bg-white/10"
+                className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-2 text-[12.5px] active:bg-white/10"
               >
                 <Heart className={`h-4 w-4 ${post.likes.includes(meName) ? 'fill-[#FA5151] text-[#FA5151]' : ''}`} strokeWidth={1.8} />
                 {post.likes.includes(meName) ? '取消' : '赞'}
               </button>
-              <span className="my-1.5 w-px bg-white/25" aria-hidden="true" />
+              <span className="my-1.5 w-px shrink-0 bg-white/25" aria-hidden="true" />
               <button
                 type="button"
                 data-testid={`wx-moment-comment-open-${post.id}`}
@@ -11208,31 +11201,31 @@ function MomentRow({
                   setComposerOpen(true);
                   onToggleMenu();
                 }}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] active:bg-white/10"
+                className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-2 text-[12.5px] active:bg-white/10"
               >
                 <MessageCircle className="h-4 w-4" strokeWidth={1.8} />
                 评论
               </button>
               {onEditRequest && (
                 <>
-                  <span className="my-1.5 w-px bg-white/25" aria-hidden="true" />
+                  <span className="my-1.5 w-px shrink-0 bg-white/25" aria-hidden="true" />
                   <button
                     type="button"
                     data-testid={`wx-moment-edit-${post.id}`}
                     onClick={onEditRequest}
-                    className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] active:bg-white/10"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-2 text-[12.5px] active:bg-white/10"
                   >
                     <Pencil className="h-4 w-4" strokeWidth={1.8} />
                     编辑
                   </button>
                 </>
               )}
-              <span className="my-1.5 w-px bg-white/25" aria-hidden="true" />
+              <span className="my-1.5 w-px shrink-0 bg-white/25" aria-hidden="true" />
               <button
                 type="button"
                 data-testid={`wx-moment-delete-${post.id}`}
                 onClick={onDelete}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-[13.5px] text-[#FF9C9C] active:bg-white/10"
+                className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-2 text-[12.5px] text-[#FF9C9C] active:bg-white/10"
               >
                 <Trash2 className="h-4 w-4" strokeWidth={1.8} />
                 删除
