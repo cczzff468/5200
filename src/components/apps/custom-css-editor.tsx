@@ -15,6 +15,9 @@
  *   空时显示引导文案，永远可见）；
  * - CSS 字数不再设上限（CUSTOM_CSS_MAX_LEN 已删除）；
  * - 底部一排只剩「清除 · 应用」；卡片整体视觉收紧美化。
+ *
+ * 第七十八轮（用户指定）：「我的主题」区块移到底部「清除 · 应用」按钮
+ * 下方——先操作后清单，改完即点应用，已存主题沉底备用。
  */
 import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -187,7 +190,31 @@ export function CustomCssEditor({ scope, templates, accent, onToast, variant = '
         </div>
       )}
 
-      {/* 我的主题（第七十七轮新增区块：保存的方案在这里列出，空时给引导） */}
+      {/* 底部按钮栏：清除 · 应用（上传/存当前已移到右上角） */}
+      <div className="mt-3 flex gap-2">
+        <button
+          type="button"
+          onClick={clearAll}
+          disabled={!activeCss && !draft}
+          data-testid={`custom-css-clear-${scope}`}
+          className={`${grayBtn} flex-1 px-1`}
+        >
+          <Eraser className="h-[15px] w-[15px] shrink-0" aria-hidden="true" />
+          清除
+        </button>
+        <button
+          type="button"
+          onClick={apply}
+          data-testid={`custom-css-apply-${scope}`}
+          className="flex h-11 flex-[1.6] items-center justify-center gap-1.5 rounded-[14px] px-1 text-[13.5px] font-semibold text-white transition-transform active:scale-[0.97] disabled:opacity-40"
+          style={{ backgroundColor: accent, boxShadow: `0 10px 22px -10px ${accent}` }}
+        >
+          <Play className="h-[15px] w-[15px] shrink-0" aria-hidden="true" />
+          应用
+        </button>
+      </div>
+
+      {/* 我的主题（第七十八轮移到「应用」按钮下方：保存的方案在这里列出，空时给引导） */}
       <div className="mt-3">
         <div className="flex items-center justify-between px-1">
           <span className="text-[12.5px] font-semibold text-black/55 dark:text-white/60">我的主题</span>
@@ -260,30 +287,6 @@ export function CustomCssEditor({ scope, templates, accent, onToast, variant = '
             })}
           </ul>
         )}
-      </div>
-
-      {/* 底部按钮栏：清除 · 应用（上传/存当前已移到右上角） */}
-      <div className="mt-3 flex gap-2">
-        <button
-          type="button"
-          onClick={clearAll}
-          disabled={!activeCss && !draft}
-          data-testid={`custom-css-clear-${scope}`}
-          className={`${grayBtn} flex-1 px-1`}
-        >
-          <Eraser className="h-[15px] w-[15px] shrink-0" aria-hidden="true" />
-          清除
-        </button>
-        <button
-          type="button"
-          onClick={apply}
-          data-testid={`custom-css-apply-${scope}`}
-          className="flex h-11 flex-[1.6] items-center justify-center gap-1.5 rounded-[14px] px-1 text-[13.5px] font-semibold text-white transition-transform active:scale-[0.97] disabled:opacity-40"
-          style={{ backgroundColor: accent, boxShadow: `0 10px 22px -10px ${accent}` }}
-        >
-          <Play className="h-[15px] w-[15px] shrink-0" aria-hidden="true" />
-          应用
-        </button>
       </div>
 
       {/* 隐藏的文件选择（右上角「上传」按钮触发） */}
