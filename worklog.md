@@ -1621,3 +1621,25 @@ Work Log:
 Stage Summary:
 - 5200 仓库最新版（75b3265）已同步至沙箱并全量 E2E 验证通过：AI Phone 全功能可用（锁屏/主屏/联系人建档/微信登录/自定义CSS三作用域编辑器/信息App AI对话+TTS），守护链常驻，随时可在此基础上修改/新增功能
 - 关键文件：无代码改动（纯同步部署）；验证截图 tmp-analysis/sync-verify/
+
+---
+Task ID: 7
+Agent: 主控 Agent（Z.ai Code）
+Task: 拾光小屋「AI 任意歌点播」——我说什么歌 TA 就弹什么歌（钢琴+吉他）+ C2-C5 附加任务
+
+Work Log:
+- 方案 A1+A2 落地：A1 经典曲库 10 首（新增铃儿响叮当/玛丽的小羊/致爱丽丝/卡农，含黑键 D#5/G#4 等）+ 别名包含匹配（「弹个生日歌呀」命中生日快乐）
+- A2 任意歌实时记谱三层取谱：曲库 → IndexedDB 缓存（ai-song-cache:v1，上限 40 首）→ POST /api/ai-song（服务端让模型写 C3-C6 主旋律，音名/拍数/速度全量清洗，黑键 Db/E♭ 等价归一，不认识返回 unknown）；预取 prefetchSong：TA 走向乐器路上就开始记谱；同曲 inflight 去重
+- 意图兜底+增强 extractSongIntent（companion-brain.ts）：19 个正则用例全过——模型没发 ACT 时本地补发 play/music 动作；模型发了 ACT 但 song/inst 缺参数时本地补全（「用吉他弹个生日快乐」→ itemId 解析吉他；「去弹钢琴」→ itemId 钢琴）；乐器偏好经 CompanionCmd.itemId 传给寻路，覆盖 nearestInstrument 就近选择
+- E2E 发现并修复弹琴链路真 Bug：companionAnchor 外围点（v10.3 修复）只覆盖 sit/lie/read/eat，play/cook 缺失 —— 钢琴锚点（dz0.72）在琴身 footprint 内，A* 目标格被占不可达 → path 空 → TA 直线怼墙永远卡 walk（E2E 实测 TA 站梳妆台与钢琴之间 30s+ 不动）；补上 play/cook 后目录 out 外围点定义生效；再加 walk 15s 总时长传送兜底（碰撞抖动会让 moved>0.05 绕过位移卡死检测）+ sitUntil 语义配套修正
+- C2 弹奏体验：onSongState 曲目事件总线（ai-song.ts）→ InstrumentOverlay 订阅显示曲名字幕（钢琴键床上方粉色胶囊「♪ 《X》· TA 弹奏中」/吉他标题条），白键/黑键按下发光增强（双 glow shadow），弦位高亮 650ms 金色辉光；琴键点亮 300→430ms
+- C3 音箱放歌：playRealSong 重构 tryOnce(candidateIdx, kwSuffix) —— 首选歌直链失败自动换第二候选+「轻音乐」关键词降级重试一次，两次都失败才落八音盒 musicbox 轻声循环（谱子同样三层取）
+- C4：three-quiet.ts —— THREE.setConsoleFunction 挂透传过滤器，只吞「Clock: This module has been deprecated」一条（R3F 9.x 内部 new THREE.Clock() 的已知噪音），其余 log/warn/error 原样放行；HomeScene 挂载前安装（幂等）
+- C5：scheduleSlot 的 weekend ? hour : hour 无效三元清理
+- E2E 全链路验证（agent-browser 390×844 + VLM 双证）：锁屏 PointerEvent 上滑解锁 → 主屏开拾光小屋 → 和TA聊天发指令；音频真发声用 OscillatorNode/AudioBufferSourceNode.prototype.start 双探针计数确认（钢琴 336 osc=42音×8谐波、吉他拨弦 32 buf）；曲库秒弹（小星星/两只老虎/生日快乐/茉莉花/欢乐颂/卡农 toast「小雨弹起了《X》～」）；缓存命中（晴天 48 音符零 API 调用）；LLM 现记（七里香 → POST /api/ai-song 200 → 32 音符 + toast「现记了《七里香》的谱子，弹给你听～」）；乐器偏好（itemId piano-*/guitar-* 寻路日志确认）；C2 字幕（MutationObserver 捕获「♪ 《小星星》 · TA 弹奏中」节点 + 截图）；C3 真歌（ncm cloudsearch → song/url → m701.music.126.net mp3 206 Media 请求 + toast「音箱里放起了…真的能听到哦～」）
+- 排障记录：①小屋气泡是 Three.js CanvasTexture 渲染，DOM 查询查不到 → 改读 localStorage cabin-chat-* 存档（含 raw ACT 块）+ rt 状态机临时调试日志（已删）；②toast 类名是小屋自绘 bg-[#3a3a3e]/85 而非全局 page-toast；③agent-browser console 有缓冲延迟，goto「卡死」实为日志滞后（4s 实际到达）；④弹奏结束起身快，截图须在 toast/音频计数出现的瞬间抓拍
+- lint：改动文件零新增错误（CoupleHome.tsx 52=基线存量，其余全过）；dev.log 无 error
+
+Stage Summary:
+- 拾光小屋 AI 点播闭环达成：「弹一首 X」→ 曲库秒弹 / 缓存秒弹 / LLM 现记谱照弹（吉他钢琴双乐器、任意歌、不依赖模型格式遵循度），音箱放歌真歌直链优先+重试+八音盒兜底，弹奏时曲名字幕+琴键弦位高亮联动；附带修复 play/cook 寻路不可达与卡死兜底两个底层 Bug
+- 关键文件：ai-song.ts（曲库+三层取谱+播放引擎+事件总线）、api/ai-song/route.ts（LLM 记谱）、companion-brain.ts（意图兜底/增强+ACT inst 参数）、companion-rt.ts（外围点+传送兜底）、CoupleHome.tsx（预取/意图接线/C3 重试）、InstrumentOverlay.tsx（C2 字幕+高亮）、three-quiet.ts（C4）；验证截图 tmp-analysis/song-verify/
