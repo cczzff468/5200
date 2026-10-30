@@ -46,7 +46,7 @@ import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt, type PersonaSource } from '@/lib/ios/persona';
 import { useSettings } from '@/lib/ios/store';
 import { isLiquidTheme, isRetroTheme, type BubbleStyleConfig } from '@/lib/ios/bubble-style';
-import { OFFLINE_CSS_EXAMPLE, scopeCss } from '@/lib/ios/custom-css';
+import { OFFLINE_CSS_PRESETS, scopeCss } from '@/lib/ios/custom-css';
 import { CustomCssEditor } from './custom-css-editor';
 import { getMemSettings, memAddEventFragment, memRecallBlock } from '@/lib/memory';
 import {
@@ -1118,11 +1118,11 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, avail
           </Card>
         ) : null}
 
-        {/* 自定义 CSS（第六十五轮，用户指定「线下模式也添加一个自定义css，只改变线下所有界面、所有按钮」）：
-            作用域 = 线下模式全部界面（开始页/见面页/存档/现场设置/历史），与全局/聊天 CSS 互不影响；
-            编辑器内示例给出 off-card / off-chip / off-start / off-input 等稳定语义类锚点 */}
+        {/* 自定义 CSS（第六十五轮建 · 第六十九轮示例升级为主题模板）：作用域 = 线下模式全部界面
+            （开始页/见面页/存档/现场设置/历史），与全局/聊天 CSS 互不影响；
+            示例主题 chips = 整套配色模板（off-card / off-chip / off-start / off-input 等稳定语义锚点） */}
         <Card>
-          <CustomCssEditor scope="offline" example={OFFLINE_CSS_EXAMPLE} accent={skin.editorAccent} onToast={onToast} />
+          <CustomCssEditor scope="offline" presets={OFFLINE_CSS_PRESETS} accent={skin.editorAccent} onToast={onToast} />
         </Card>
 
         {/* 背景读取说明 + 重新分析 */}

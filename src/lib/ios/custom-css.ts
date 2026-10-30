@@ -287,16 +287,20 @@ function globalThemeCss(p: GlobalPalette): string {
   --theme: ${p.accent}; /* 主题色（光标 / 滚动条） */
 }
 
-/* ① 页面底：各 App 常见的灰白页面底，全部换成主题底色 */
-[class*='bg-[#EDEDED]'], [class*='bg-[#F5F6F8]'],
-[class*='bg-[#F5F6F7]'], [class*='bg-[#F2F3F5]'],
-[class*='bg-[#F6F7F9]'], [class*='bg-[#F7F7F7]'] {
+/* ① 页面底：各 App 常见的灰白页面底色，全部换成主题底色 */
+[class*='bg-[#F5F6F7]'], [class*='bg-[#EDEDED]'], [class*='bg-[#F4F5F7]'],
+[class*='bg-[#F7F8FA]'], [class*='bg-[#F5F6F8]'], [class*='bg-[#F7F7F7]'],
+[class*='bg-[#F2F3F5]'], [class*='bg-[#F6F7F8]'], [class*='bg-[#F8F8F8]'],
+[class*='bg-[#F6F7F9]'], [class*='bg-[#F4F5F9]'], [class*='bg-[#FAFAFC]'],
+[class*='bg-[#FAFAFA]'], [class*='bg-[#EFEFF4]'] {
   background: var(--page);
 }
 /*   同一批页面在深色模式下换主题夜色 */
-.dark & [class*='bg-[#EDEDED]'], .dark & [class*='bg-[#F5F6F8]'],
-.dark & [class*='bg-[#F5F6F7]'], .dark & [class*='bg-[#F2F3F5]'],
-.dark & [class*='bg-[#F6F7F9]'], .dark & [class*='bg-[#F7F7F7]'] {
+.dark & [class*='bg-[#F5F6F7]'], .dark & [class*='bg-[#EDEDED]'], .dark & [class*='bg-[#F4F5F7]'],
+.dark & [class*='bg-[#F7F8FA]'], .dark & [class*='bg-[#F5F6F8]'], .dark & [class*='bg-[#F7F7F7]'],
+.dark & [class*='bg-[#F2F3F5]'], .dark & [class*='bg-[#F6F7F8]'], .dark & [class*='bg-[#F8F8F8]'],
+.dark & [class*='bg-[#F6F7F9]'], .dark & [class*='bg-[#F4F5F9]'], .dark & [class*='bg-[#FAFAFC]'],
+.dark & [class*='bg-[#FAFAFA]'], .dark & [class*='bg-[#EFEFF4]'] {
   background: var(--night);
 }
 
@@ -312,6 +316,7 @@ button:active {
 /* ③ 面板：古早 / 液态皮肤的卡片跟着换装（挂这两款主题时生效） */
 .rt-panel {
   background: var(--card);
+  color: var(--ink);
 }
 .lg-card, .lg-panel, .lg-sheet {
   background: color-mix(in srgb, var(--card) 55%, transparent);

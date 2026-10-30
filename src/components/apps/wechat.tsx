@@ -9548,8 +9548,10 @@ function ChatPage({
                       bvis.override
                         ? bvis.className
                         : m.role === 'me'
-                        ? 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black'
-                        : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
+                        ? // 第六十九轮：wx-bub-mine/theirs 语义锚点 —— 聊天设置的自定义 CSS
+                          // 示例主题靠它们把默认气泡整套换色（装扮泡走 bvis.className 不受影响）
+                          'wx-bub-mine bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black'
+                        : 'wx-bub-theirs bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
                     }`}
                     style={bvis.override ? bvis.style : undefined}
                   >
@@ -9579,8 +9581,9 @@ function ChatPage({
                                     bvis.tailColor
                                       ? ''
                                       : m.role === 'me'
-                                      ? 'bg-[#95EC69] dark:bg-[#3EB575]'
-                                      : 'bg-white dark:bg-[#1E1E1E]'
+                                      ? // 第六十九轮：wx-bub-tail-* 尾巴锚点 —— 示例主题让小三角跟气泡同色
+                                        'wx-bub-tail-mine bg-[#95EC69] dark:bg-[#3EB575]'
+                                      : 'wx-bub-tail-theirs bg-white dark:bg-[#1E1E1E]'
                                   }`
                             }`}
                             style={bvis.tailColor && !bvis.tailClass ? { backgroundColor: bvis.tailColor } : undefined}

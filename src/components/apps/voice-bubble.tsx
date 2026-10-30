@@ -245,13 +245,16 @@ export function VoiceMsgBubble({
    *  （inline backgroundColor 或 .bub-retro-qq 渐变类 / .bub-frosted / .bub-liquid）。
    *  关键动机：古早/液态主题的铭件接管 CSS（[data-rt-theme] .bg-white 等）带 !important，
    *  会盖掉对方语音气泡的装扮 inline 色（我方语音泡无 bg 类不受影响）——剥类后不再冲突 */
+  /** 第六十九轮：默认（无装扮）语音泡挂语义锚点类（wx-bub-mine/theirs、qq-bub-mine/theirs）——
+   *  聊天作用域的示例主题 CSS 靠它们把语音泡和文字泡一起整套换色（装扮泡/信息 App 不受影响） */
+  const anchor = decorated || theme === 'im' ? '' : ` ${isWx ? 'wx' : 'qq'}-bub-${mine ? 'mine' : 'theirs'}`;
   const bubbleCls = isWx
     ? `wx-voice-bubble relative h-[42px] rounded-[4px] px-3 ${hideTail ? '' : mine ? 'wx-voice-tail-right' : 'wx-voice-tail-left'} ${
         decorated ? '' : mine ? t.own : t.peer
-      }${isPlaying ? ' wx-voice-playing' : ''}`
+      }${isPlaying ? ' wx-voice-playing' : ''}${anchor}`
     : theme === 'im'
       ? `rounded-[18px] ${decorated ? '' : mine ? 'text-white' : t.peer}`
-      : `rounded-[12px] ${decorated ? '' : mine ? 'text-white' : t.peer}`;
+      : `rounded-[12px] ${decorated ? '' : mine ? 'text-white' : t.peer}${anchor}`;
 
   /** 胶囊装扮（毛玻璃/液态，第十八轮终版）：上下收窄（用户指定「上下变小一点」）——
    *  文本气泡由 bubbleVisual 直接压上下 padding；语音气泡高度固定（微信 42 / QQ 40），

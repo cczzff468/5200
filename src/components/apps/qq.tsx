@@ -7585,11 +7585,14 @@ function ChatPage({
                         bvis.override
                           ? bvis.className
                           : mine
-                          ? 'text-white'
+                          ? // 第六十九轮：qq-bub-mine/theirs 语义锚点 —— 聊天设置的自定义 CSS
+                            // 示例主题靠它们把默认气泡整套换色（装扮泡走 bvis.className 不受影响；
+                            // 我方默认蓝泡是内联色，示例主题用 !important 覆盖）
+                            'qq-bub-mine text-white'
                           : // 错误占位消息红字提示（与 chat.tsx 同款：〔消息发送失败…〕/〔对方暂时没有回复…〕）
                             m.error
                             ? 'bg-white text-[#FF3B30] dark:bg-[#2A2C31] dark:text-[#FF6B6B]'
-                            : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
+                            : 'qq-bub-theirs bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
                       }`}
                       style={
                         bvis.override
