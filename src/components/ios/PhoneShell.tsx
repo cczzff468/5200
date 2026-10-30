@@ -6,7 +6,7 @@ import { AnimatePresence } from 'framer-motion';
 import { selectResolvedTheme, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
 import { useIslandNotify } from '@/lib/ios/island-notify';
 import { useIncomingCall } from '@/lib/ios/incoming-call';
-import { scopeCss } from '@/lib/ios/custom-css';
+import { GLOBAL_CSS_SCOPE, scopeCss } from '@/lib/ios/custom-css';
 import { isVoiceHoldActive } from '@/lib/ios/voice-hold-flag';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { ensureAccountOwnerContacts, migrateFromServer } from '@/lib/ios/contacts-store';
@@ -389,8 +389,10 @@ export default function PhoneShell() {
   // 壳内内容（壁纸 → 主屏 → App → 全局层）：横竖屏共用同一份，只换外壳几何
   const shellInner = (
     <>
-        {/* 自定义 CSS（全局作用域）：所有界面/面板/按钮都受它影响（选择器已限定在手机壳内） */}
-        {globalCustomCss.trim() ? <style>{scopeCss(globalCustomCss, '[data-phone-shell]')}</style> : null}
+        {/* 自定义 CSS（全局作用域，基础优先级）：所有界面/面板/按钮都受它影响；选择器限定在
+            [data-phone-shell] 内不泄漏到手机外，且 <style> 渲染在壳内容首位 → 源顺序上
+            联系人聊天/线下的 CSS（更高优先级，前缀多一级属性）都能压制它（第七十轮） */}
+        {globalCustomCss.trim() ? <style>{scopeCss(globalCustomCss, GLOBAL_CSS_SCOPE)}</style> : null}
 
         {/* 壁纸层：自定义壁纸绘制见 CustomWallpaperLayers（D6：四周「边缘色延伸带」——
             取原图最外一行/列像素拉伸铺出，无 blur、接缝逐像素同色，肉眼几乎看不出垫了东西；

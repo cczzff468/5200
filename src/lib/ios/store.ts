@@ -77,6 +77,12 @@ export interface VisionPreset {
 /** 默认未配置：发图不触发识图，聊天行为与旧版完全一致 */
 export const DEFAULT_VISION_CONFIG: VisionConfig = { baseUrl: '', apiKey: '', model: '' };
 
+/** 复制对象并剔除一个 key（不修改原对象；联系人聊天 CSS 清除时用来删 chats 条目） */
+function omitKey<T extends Record<string, unknown>>(obj: T, key: string): T {
+  const { [key]: _drop, ...rest } = obj;
+  return rest as T;
+}
+
 /** 图像生成（生图）配置：与聊天（apiConfig）/识图（visionConfig）完全独立、互不覆盖（含 Key，密文持久化）。
  *  负责把 AI 回复里的照片标签 / 用户手动触发生成图片，支持「锁脸」（角色参考图）保持人物一致。
  *  保存后下一次生成时现场读取 → 自动生效，无需重启 */
@@ -394,8 +400,9 @@ interface SettingsState {
   /** 聊天输入框自定义（输入框占位文字 + 输入框上方快捷功能；微信/QQ 两 App 隔离，信息 App 不接入；
    *  持久化 settings.chatDecor，默认/液态两种界面主题下都生效） */
   chatDecor: ChatDecorConfig;
-  /** 自定义 CSS（第六十五轮）：global=全局所有界面 / chat-wx·chat-qq=对应 App 聊天页 /
-   *  offline=线下模式所有界面；schemes=已命名方案收藏。持久化 settings.customCss */
+  /** 自定义 CSS（第六十五轮首建 · 第七十轮按联系人隔离）：global=全局所有界面 /
+   *  chats=每个联系人一套聊天 CSS（key=app:联系人ID）/ offline=线下模式所有界面 /
+   *  schemes=已命名方案收藏。持久化 settings.customCss */
   customCss: CustomCssConfig;
   loaded: boolean;
 
@@ -413,7 +420,8 @@ interface SettingsState {
   setLiquidSkin: (app: BubbleAppId, patch: Partial<LiquidSkinSettings>) => void;
   /** 更新聊天输入框自定义（patch 合并到对应 App；立即持久化，聊天页实时响应） */
   setChatDecor: (app: DecorAppId, patch: Partial<ChatDecorSettings>) => void;
-  /** 应用/清除某个作用域的自定义 CSS（css 传空串 = 清除；立即持久化，对应界面实时响应） */
+  /** 应用/清除某个作用域的自定义 CSS（scope：'global'/'offline'/`chat:app:联系人ID`；
+   *  css 传空串 = 清除；立即持久化，对应界面实时响应；第七十轮聊天作用域按联系人隔离） */
   setCustomCssActive: (scope: CustomCssScope, css: string) => void;
   /** 替换自定义 CSS 方案收藏列表（立即持久化） */
   setCustomCssSchemes: (list: CustomCssScheme[]) => void;
@@ -934,7 +942,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
 
   setCustomCssActive: (scope, css) => {
     const cur = get().customCss;
-    const next = normalizeCustomCss({ ...cur, [scope]: css });
+    // 第七十轮（按联系人隔离）：chat:app:联系人ID → 写进 chats[key]（空串 = 删除该联系人的条目）；
+    // global / offline 仍是独立字段
+    const next =
+      scope === 'global' || scope === 'offline'
+        ? normalizeCustomCss({ ...cur, [scope]: css })
+        : normalizeCustomCss({ ...cur, chats: css.trim() ? { ...cur.chats, [scope.slice('chat:'.length)]: css } : omitKey(cur.chats, scope.slice('chat:'.length)) });
     set({ customCss: next });
     void localDB.put('settings', { key: 'customCss', value: next });
   },

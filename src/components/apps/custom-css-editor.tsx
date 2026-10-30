@@ -1,18 +1,18 @@
 'use client';
 
 /**
- * 自定义 CSS 编辑器（第六十五轮首建 · 第六十九轮重设计）—— 三处入口共用一套编辑器
+ * 自定义 CSS 编辑器（第六十五轮首建 · 第六十九轮重设计 · 第七十轮按联系人隔离）—— 三处入口共用一套编辑器
  * ---------------------------------------------------------------------------
  * - 主题界面（个性装扮 › 主题 Tab 最底部）：scope='global'，作用于整个手机；
- * - 联系人聊天设置（折叠区块「自定义CSS」，紧跟显示设置之后）：scope='chat-wx'/'chat-qq'，
- *   只作用于该 App 的聊天界面；
+ * - 联系人聊天设置（折叠区块「自定义CSS」，紧跟显示设置之后）：scope=`chat:wx:联系人ID` / `chat:qq:联系人ID`，
+ *   只作用于当前联系人的聊天界面（每个联系人一套，互不影响；第七十轮由按 App 升级为按联系人）；
  * - 线下模式 › 现场设置（「自定义CSS」卡片）：scope='offline'，只作用于线下所有界面。
  *
- * 第六十九轮（用户指定「示例 = 让用户照着添加自己想 要的主题」+「美化一下，简约美观」）：
- * - 「载入示例」按钮升级为「示例主题」chips —— 每枚 chip 是一整套配色主题（带色板预览点），
- *   点按即把整套主题模板填进编辑框，用户改几个颜色就是自己的主题（不再是一堆零散细节）；
+ * 第六十九轮（用户指定「示例 = 让用户照着添加自己想要的主题」+「美化一下，简约美观」）：
+ * - 「示例主题」chips 点按即把一整套主题模板填进编辑框，改几个颜色就是自己的主题；
  * - 编辑框升级为「代码窗口」造型（窗口栏 = 红黄绿圆点 + 文件名 + 字数/未应用小圆点）；
  * - 方案列表改扁平细线风格、按钮统一小圆角，整体更简约。
+ * 第七十轮（用户指定「示例一个就好了」）：每作用域只留一个「默认主题」chip。
  */
 import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -21,19 +21,27 @@ import {
   CUSTOM_CSS_MAX_LEN,
   CUSTOM_CSS_NAME_MAX,
   chatCssPresets,
+  chatCssScope,
+  readCustomCssActive,
   type CustomCssScope,
   type CustomCssScheme,
   type CssThemePreset,
 } from '@/lib/ios/custom-css';
 import { useSettings } from '@/lib/ios/store';
 
-/** 作用域元信息（说明文字 + 代码窗口文件名） */
-const SCOPE_META: Record<CustomCssScope, { title: string; hint: string; file: string }> = {
-  global: { title: '自定义 CSS', hint: '作用于整个手机：所有界面、面板、按钮（含线下模式）', file: 'phone.css' },
-  'chat-wx': { title: '自定义 CSS', hint: '只改微信的聊天界面，其他界面不受影响', file: 'chat-wx.css' },
-  'chat-qq': { title: '自定义 CSS', hint: '只改 QQ 的聊天界面，其他界面不受影响', file: 'chat-qq.css' },
-  offline: { title: '自定义 CSS', hint: '只改线下模式的所有界面和按钮', file: 'offline.css' },
-};
+/** 作用域元信息（说明文字 + 代码窗口文件名）；第七十轮：聊天作用域是动态 key（chat:app:联系人ID），改函数取 */
+function scopeMeta(scope: CustomCssScope): { title: string; hint: string; file: string } {
+  if (scope === 'global') {
+    return { title: '自定义 CSS', hint: '作用于整个手机：所有界面、面板、按钮（含线下模式）', file: 'phone.css' };
+  }
+  if (scope === 'offline') {
+    return { title: '自定义 CSS', hint: '只改线下模式的所有界面和按钮', file: 'offline.css' };
+  }
+  if (scope.startsWith('chat:qq:')) {
+    return { title: '自定义 CSS', hint: '只改这个联系人的 QQ 聊天界面，其他联系人与界面不受影响', file: 'chat-qq.css' };
+  }
+  return { title: '自定义 CSS', hint: '只改这个联系人的微信聊天界面，其他联系人与界面不受影响', file: 'chat-wx.css' };
+}
 
 export interface CustomCssEditorProps {
   scope: CustomCssScope;
@@ -47,10 +55,11 @@ export interface CustomCssEditorProps {
   variant?: 'card' | 'chat';
 }
 
-/** 单个作用域的编辑器本体（状态读写都走 useSettings.customCss） */
+/** 单个作用域的编辑器本体（状态读写都走 useSettings.customCss；聊天作用域按联系人隔离） */
 export function CustomCssEditor({ scope, presets, accent, onToast, variant = 'card' }: CustomCssEditorProps) {
-  const meta = SCOPE_META[scope];
-  const activeCss = useSettings((s) => s.customCss[scope]);
+  const meta = scopeMeta(scope);
+  // 统一读取：global/offline 独立字段，chat:app:id → chats[联系人key]（第七十轮）
+  const activeCss = useSettings((s) => readCustomCssActive(s.customCss, scope));
   const schemes = useSettings((s) => s.customCss.schemes);
   const setActive = useSettings((s) => s.setCustomCssActive);
   const setSchemes = useSettings((s) => s.setCustomCssSchemes);
@@ -362,16 +371,19 @@ export function CustomCssEditor({ scope, presets, accent, onToast, variant = 'ca
 export interface ChatCssSectionProps {
   /** 宿主 App（决定作用域与示例主题） */
   app: 'wx' | 'qq';
+  /** 当前联系人 ID（第七十轮：聊天 CSS 按联系人隔离，每个联系人一套） */
+  contactId: string;
   /** 宿主强调色（微信绿 / QQ 蓝） */
   accent: string;
   /** 弹提示 */
   onToast: (m: string) => void;
 }
 
-/** 聊天设置页的「自定义 CSS」折叠区块：只改该 App 的聊天界面 */
-export function ChatCssSection({ app, accent, onToast }: ChatCssSectionProps) {
+/** 聊天设置页的「自定义 CSS」折叠区块：只改当前联系人的聊天界面（其他联系人不受影响） */
+export function ChatCssSection({ app, contactId, accent, onToast }: ChatCssSectionProps) {
   const [open, setOpen] = useState(false);
-  const activeCss = useSettings((s) => s.customCss[app === 'qq' ? 'chat-qq' : 'chat-wx']);
+  const scope = chatCssScope(app, contactId);
+  const activeCss = useSettings((s) => readCustomCssActive(s.customCss, scope));
 
   return (
     <div className="mt-3 overflow-hidden rounded-[10px] bg-white dark:bg-[#1A1A1A]" data-testid={`chat-css-section-${app}`}>
@@ -408,7 +420,7 @@ export function ChatCssSection({ app, accent, onToast }: ChatCssSectionProps) {
           >
             <div className="pb-1">
               <CustomCssEditor
-                scope={app === 'qq' ? 'chat-qq' : 'chat-wx'}
+                scope={scope}
                 presets={chatCssPresets(app)}
                 accent={accent}
                 onToast={onToast}

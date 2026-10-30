@@ -1,25 +1,33 @@
 /**
- * 自定义 CSS（第六十五轮）——核心库
+ * 自定义 CSS（第六十五轮首建 · 第七十轮按联系人隔离）——核心库
  * ---------------------------------------------------------------------------
  * 三个作用域（各自独立存储、互不影响）：
  *   1. global   全局：整个手机的所有界面（所有面板/按钮/弹层，含线下模式）；
- *   2. chat-wx / chat-qq  聊天：只作用于对应 App 的聊天界面（消息/气泡/输入栏）；
+ *   2. chat:app:联系人ID  聊天：只作用于「当前联系人」的聊天界面（消息/气泡/输入栏），
+ *      每个联系人一套、互不影响（第七十轮：由按 App 升级为按联系人隔离）；
  *   3. offline  线下：只作用于线下模式的所有界面（开始页/见面页/存档/现场设置/历史）。
  *
- * 注入方式：CSS 文本经 scopeCss() 把每条选择器自动加上作用域前缀
- * （global → [data-phone-shell]；聊天 → [data-chat-css="qq"]；线下 → [data-offline-css]），
- * 再渲染成 <style> 标签 —— 用户写的选择器只落在对应界面里，不会泄漏到别处。
- * 第六十九轮：示例升级为「整套主题」模板（色板 + 深/浅双色 + 协调规则，
- * 用户照着改色就能得到自己的一套主题）；& 可写在选择器任意位置（.dark & 深色写法）。
+ * 注入方式：CSS 文本经 scopeCss() 把每条选择器自动加上作用域前缀，再渲染成 <style> 标
+ * —— 用户写的选择器只落在对应界面里，不会泄漏到别处。挂载点：
+ *   global → [data-phone-shell]（手机壳）；
+ *   聊天  → [data-phone-shell] [data-chat-css="wx:联系人ID"]（该联系人的聊天根）；
+ *   线下  → [data-phone-shell] [data-offline-css]（线下模式根）。
+ *
+ * ── 优先级（用户指定，极度重要）：联系人聊天 CSS ＞ 线下 CSS ＞ 全局 CSS ＞ 内置主题 ──
+ * 双保险实现：① 特异性阶梯——聊天/线下的前缀比全局多一级属性选择器
+ * （聊天/线下用户规则 (0,3,0) vs 全局用户规则 (0,2,0)，无论各自写什么选择器都稳定压制）；
+ * ② 源顺序——全局 <style> 渲染在手机壳内容首位，聊天/线下的 <style> 在各自组件内更靠后，
+ * 同特异性时后者赢。内置主题（古早/液态玻璃）只是普通类名样式，永远在最底层。
+ * 第六十九轮：& 可写在选择器任意位置（.dark & 深色写法），示例为「整套主题」模板。
  *
  * 方案收藏：CustomCssScheme（自定义名字 + CSS 本体 + 归属作用域），三处编辑器共用一份清单，
- * 各编辑器只列出自己作用域保存的方案。
+ * 各编辑器只列出自己作用域保存的方案（聊天方案跟着联系人走）。
  *
  * 持久化：zustand useSettings → IndexedDB settings.customCss（与 bubbleStyle / chatDecor 分键互不影响）。
  */
 
-/** 全部作用域 key（存储/读取用） */
-export type CustomCssScope = 'global' | 'chat-wx' | 'chat-qq' | 'offline';
+/** 全部作用域 key（存储/读取用）：global / offline / chat:app:联系人ID（如 chat:wx:9） */
+export type CustomCssScope = 'global' | 'offline' | `chat:${string}`;
 
 /** 单个已命名方案（用户「保存」下来的 CSS 快照） */
 export interface CustomCssScheme {
@@ -34,9 +42,9 @@ export interface CustomCssScheme {
 /** 自定义 CSS 全量配置（active = 当前应用的 CSS；空串 = 未应用） */
 export interface CustomCssConfig {
   global: string;
-  'chat-wx': string;
-  'chat-qq': string;
   offline: string;
+  /** 联系人聊天 CSS（key = `${app}:${联系人ID}` 如 "wx:9"，值 = 已应用的 CSS）——每个联系人一套 */
+  chats: Record<string, string>;
   /** 已命名方案收藏（跨作用域共用一份清单） */
   schemes: CustomCssScheme[];
 }
@@ -47,9 +55,45 @@ export const CUSTOM_CSS_MAX_LEN = 60000;
 export const CUSTOM_CSS_SCHEME_CAP = 30;
 /** 方案名字数上限 */
 export const CUSTOM_CSS_NAME_MAX = 24;
+/** 联系人聊天 CSS 同时保留的套数上限（防脏档无限膨胀） */
+export const CUSTOM_CSS_CHAT_CAP = 60;
 
 export function defaultCustomCss(): CustomCssConfig {
-  return { global: '', 'chat-wx': '', 'chat-qq': '', offline: '', schemes: [] };
+  return { global: '', offline: '', chats: {}, schemes: [] };
+}
+
+// ---------------- 联系人聊天作用域（第七十轮：按联系人隔离） ----------------
+
+/**
+ * 联系人存储 key：`${app}:${encodeURIComponent(contactId)}`（如 "wx:9" / "qq:c3"）。
+ * encodeURIComponent 保证 key 只含安全字符——它同时会被拼进 CSS 属性选择器
+ * `[data-chat-css="..."]`，绝不能出现引号/反斜杠。
+ */
+export function chatContactKey(app: 'wx' | 'qq', contactId: string): string {
+  return `${app}:${encodeURIComponent(String(contactId))}`;
+}
+
+/** 联系人编辑器的作用域 key：`chat:wx:9`（chats 存储 key 再去掉前缀） */
+export function chatCssScope(app: 'wx' | 'qq', contactId: string): CustomCssScope {
+  return `chat:${chatContactKey(app, contactId)}`;
+}
+
+/** 统一读取「某作用域当前已应用的 CSS」（编辑器/聊天页挂载共用，空串 = 未应用） */
+export function readCustomCssActive(cfg: CustomCssConfig, scope: CustomCssScope): string {
+  if (scope === 'global') return cfg.global;
+  if (scope === 'offline') return cfg.offline;
+  return cfg.chats[scope.slice('chat:'.length)] ?? '';
+}
+
+// ---------------- 作用域选择器（挂载 <style> 用，特异性阶梯见文件头） ----------------
+
+/** 全局（基础优先级）：手机壳内所有元素 */
+export const GLOBAL_CSS_SCOPE = '[data-phone-shell]';
+/** 线下（次高优先级）：多一级属性 → 特异性压制全局 */
+export const OFFLINE_CSS_SCOPE = '[data-phone-shell] [data-offline-css]';
+/** 联系人聊天（最高优先级）：多一级属性 → 特异性压制全局；与线下界面互斥不相遇 */
+export function chatCssScopeSelector(contactKey: string): string {
+  return `[data-phone-shell] [data-chat-css="${contactKey}"]`;
 }
 
 function normalizeCssText(v: unknown): string {
@@ -57,11 +101,27 @@ function normalizeCssText(v: unknown): string {
   return v.length > CUSTOM_CSS_MAX_LEN ? v.slice(0, CUSTOM_CSS_MAX_LEN) : v;
 }
 
-/** 任意来源（IndexedDB 旧档/脏数据）→ 合法配置；不合法回默认 */
+/** 任意来源（IndexedDB 旧档/脏数据）→ 合法配置；不合法回默认。
+ *  第七十轮迁移：旧档的 'chat-wx'/'chat-qq' 字段（按 App 的聊天 CSS）无法拆分到具体联系人，
+ *  直接弃用（方案库里的旧聊天方案归入 global 列表，CSS 文本不丢，可复制到联系人编辑器再用）。 */
 export function normalizeCustomCss(v: unknown): CustomCssConfig {
   const base = defaultCustomCss();
   if (!v || typeof v !== 'object') return base;
   const o = v as Record<string, unknown>;
+  // 联系人聊天 CSS：key 校验安全字符（会拼进属性选择器），空串剔除，最多保留 CHAT_CAP 套
+  const chats: Record<string, string> = {};
+  if (o.chats && typeof o.chats === 'object') {
+    let count = 0;
+    for (const [k, val] of Object.entries(o.chats as Record<string, unknown>)) {
+      if (count >= CUSTOM_CSS_CHAT_CAP) break;
+      // key 形如 "wx:9"：app 前缀 + encodeURIComponent 输出（字母数字 - _ . ! ~ * ' ( ) % 和分隔冒号，无引号/反斜杠）
+      if (!/^[a-z][a-zA-Z0-9\-_.!~*'():%]*$/.test(k)) continue;
+      const css = normalizeCssText(val);
+      if (!css.trim()) continue;
+      chats[k] = css;
+      count++;
+    }
+  }
   const schemes = Array.isArray(o.schemes)
     ? o.schemes
         .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
@@ -69,7 +129,8 @@ export function normalizeCustomCss(v: unknown): CustomCssConfig {
           id: typeof s.id === 'string' ? s.id : `css-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           name: typeof s.name === 'string' ? s.name.slice(0, CUSTOM_CSS_NAME_MAX) : '未命名',
           css: normalizeCssText(s.css),
-          scope: (typeof s.scope === 'string' && ['global', 'chat-wx', 'chat-qq', 'offline'].includes(s.scope)
+          // 合法：global / offline / chat:…；旧 'chat-wx'/'chat-qq' 方案归入 global 列表（文本不丢）
+          scope: (typeof s.scope === 'string' && (s.scope === 'global' || s.scope === 'offline' || s.scope.startsWith('chat:'))
             ? s.scope
             : 'global') as CustomCssScope,
           createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now(),
@@ -78,9 +139,8 @@ export function normalizeCustomCss(v: unknown): CustomCssConfig {
     : [];
   return {
     global: normalizeCssText(o.global),
-    'chat-wx': normalizeCssText(o['chat-wx']),
-    'chat-qq': normalizeCssText(o['chat-qq']),
     offline: normalizeCssText(o.offline),
+    chats,
     schemes,
   };
 }
@@ -251,9 +311,8 @@ export function scopeCss(css: string, scope: string): string {
   return out;
 }
 
-// ---------------- CSS 示例模板（第六十九轮终版：结构化参考模板，用户照着做自己的主题） ----------------
-// 格式对齐用户提供的参考示例：颜色变量区 + 分区编号 + 真实选择器 + 注释可选开关。
-// 三个作用域各有一组预设主题 chips，每枚 chip = 同一套模板填入不同色板。
+// ---------------- CSS 示例模板（第七十轮：每作用域只留一个「默认主题」，用户照着改色做自己的主题） ----------------
+// 格式：颜色变量区 + 分区编号 + 真实选择器 + 注释可选开关——改变量色就是一整套新主题。
 
 /** 一套可一键载入编辑框的示例主题（名字 + CSS 本体 + 色板预览小圆点） */
 export interface CssThemePreset {
@@ -376,27 +435,12 @@ input, textarea {
 /* & { font-family: "ZCOOL KuaiLe", sans-serif; } */`;
 }
 
-/** 全局示例主题 ×4（主题界面 › 自定义CSS 的示例 chips） */
+/** 全局示例：唯一的「默认主题」（主题界面 › 自定义CSS 的示例 chip） */
 export const globalCssPresets: CssThemePreset[] = [
   {
-    name: '奶油曲奇',
+    name: '默认主题',
     swatch: ['#F6EFE2', '#FFFDF4', '#C08A54'],
-    css: globalThemeCss({ name: '奶油曲奇', page: '#F6EFE2', night: '#191712', card: '#FFFDF4', ink: '#5C5243', accent: '#C08A54' }),
-  },
-  {
-    name: '薄荷苏打',
-    swatch: ['#E8F3EC', '#F7FCF8', '#4F9D69'],
-    css: globalThemeCss({ name: '薄荷苏打', page: '#E8F3EC', night: '#12201B', card: '#F7FCF8', ink: '#35543F', accent: '#4F9D69' }),
-  },
-  {
-    name: '夜航蓝',
-    swatch: ['#E9EEF6', '#F5F8FD', '#3E5C8F'],
-    css: globalThemeCss({ name: '夜航蓝', page: '#E9EEF6', night: '#101623', card: '#F5F8FD', ink: '#3A4A63', accent: '#3E5C8F' }),
-  },
-  {
-    name: '樱花信笺',
-    swatch: ['#F9EEF1', '#FFFAFB', '#D87891'],
-    css: globalThemeCss({ name: '樱花信笺', page: '#F9EEF1', night: '#201318', card: '#FFFAFB', ink: '#6B4550', accent: '#D87891' }),
+    css: globalThemeCss({ name: '默认主题', page: '#F6EFE2', night: '#191712', card: '#FFFDF4', ink: '#5C5243', accent: '#C08A54' }),
   },
 ];
 
@@ -515,47 +559,29 @@ ${tailPart}/* ══════════════════════
 /* .${hook}-chat-list { font-family: "ZCOOL KuaiLe", sans-serif; } */`;
 }
 
-/** 聊天示例主题 ×2/App（联系人 › 聊天设置 › 自定义CSS 的示例 chips） */
+/** 聊天示例：每个 App 唯一的「默认主题」（联系人 › 聊天设置 › 自定义CSS 的示例 chip） */
 export function chatCssPresets(app: 'wx' | 'qq'): CssThemePreset[] {
   if (app === 'qq') {
     return [
       {
-        name: '落日橙',
+        name: '默认主题',
         swatch: ['#F6EFE7', '#E89A5B', '#FFFFFF'],
         css: chatThemeCss('qq', {
-          name: '落日橙', bg: '#F6EFE7', bgN: '#1B1611',
+          name: '默认主题', bg: '#F6EFE7', bgN: '#1B1611',
           mine: '#E89A5B', mineN: '#8A5527', peer: '#FFFFFF', peerN: '#262019',
           input: '#FFF8EF', inputN: '#1F1A14',
-        }),
-      },
-      {
-        name: '青瓷',
-        swatch: ['#ECF2EF', '#7FBFA8', '#FFFFFF'],
-        css: chatThemeCss('qq', {
-          name: '青瓷', bg: '#ECF2EF', bgN: '#121A17',
-          mine: '#7FBFA8', mineN: '#2F6353', peer: '#FFFFFF', peerN: '#1D2622',
-          input: '#F4FAF7', inputN: '#151E1A',
         }),
       },
     ];
   }
   return [
     {
-      name: '素笺',
+      name: '默认主题',
       swatch: ['#F4EFE3', '#A9C98C', '#FFFFFF'],
       css: chatThemeCss('wx', {
-        name: '素笺', bg: '#F4EFE3', bgN: '#191813',
+        name: '默认主题', bg: '#F4EFE3', bgN: '#191813',
         mine: '#A9C98C', mineN: '#3F5C33', peer: '#FFFFFF', peerN: '#24231D',
         input: '#F0EAD9', inputN: '#141310',
-      }),
-    },
-    {
-      name: '海雾',
-      swatch: ['#E8EEF2', '#9CCBD8', '#FFFFFF'],
-      css: chatThemeCss('wx', {
-        name: '海雾', bg: '#E8EEF2', bgN: '#131A20',
-        mine: '#9CCBD8', mineN: '#2F5563', peer: '#FFFFFF', peerN: '#1E262C',
-        input: '#DFE8EE', inputN: '#0F151A',
       }),
     },
   ];
@@ -675,16 +701,11 @@ function offlineThemeCss(p: OfflinePalette): string {
 /* & { font-family: "ZCOOL KuaiLe", sans-serif; } */`;
 }
 
-/** 线下示例主题 ×2（线下模式 › 现场设置 › 自定义CSS 的示例 chips） */
+/** 线下示例：唯一的「默认主题」（线下模式 › 现场设置 › 自定义CSS 的示例 chip） */
 export const OFFLINE_CSS_PRESETS: CssThemePreset[] = [
   {
-    name: '暖阳',
+    name: '默认主题',
     swatch: ['#F8F1E3', '#FFFCF2', '#E8A23D'],
-    css: offlineThemeCss({ name: '暖阳', bg: '#F8F1E3', card: '#FFFCF2', chip: '#F2E7CF', start: '#E8A23D', ink: '#6B5B3E' }),
-  },
-  {
-    name: '墨石',
-    swatch: ['#EBEFF1', '#FAFCFD', '#5B7C8A'],
-    css: offlineThemeCss({ name: '墨石', bg: '#EBEFF1', card: '#FAFCFD', chip: '#DFE7EA', start: '#5B7C8A', ink: '#43555E' }),
+    css: offlineThemeCss({ name: '默认主题', bg: '#F8F1E3', card: '#FFFCF2', chip: '#F2E7CF', start: '#E8A23D', ink: '#6B5B3E' }),
   },
 ];

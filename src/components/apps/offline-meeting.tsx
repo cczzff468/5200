@@ -46,7 +46,7 @@ import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt, type PersonaSource } from '@/lib/ios/persona';
 import { useSettings } from '@/lib/ios/store';
 import { isLiquidTheme, isRetroTheme, type BubbleStyleConfig } from '@/lib/ios/bubble-style';
-import { OFFLINE_CSS_PRESETS, scopeCss } from '@/lib/ios/custom-css';
+import { OFFLINE_CSS_PRESETS, OFFLINE_CSS_SCOPE, scopeCss } from '@/lib/ios/custom-css';
 import { CustomCssEditor } from './custom-css-editor';
 import { getMemSettings, memAddEventFragment, memRecallBlock } from '@/lib/memory';
 import {
@@ -1920,8 +1920,9 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       data-testid={`offline-meet-${app}`}
       data-offline-css=""
     >
-      {/* 自定义 CSS（线下作用域）：只影响线下所有界面，选择器已限定在 [data-offline-css] 内 */}
-      {offlineCustomCss.trim() ? <style>{scopeCss(offlineCustomCss, '[data-offline-css]')}</style> : null}
+      {/* 自定义 CSS（线下作用域）：只影响线下所有界面；前缀 [data-phone-shell] [data-offline-css]
+          比全局多一级属性 → 特异性压制全局 CSS（第七十轮优先级阶梯） */}
+      {offlineCustomCss.trim() ? <style>{scopeCss(offlineCustomCss, OFFLINE_CSS_SCOPE)}</style> : null}
       <LocalToast msg={onToast ? '' : toast} />
 
       {/* 头部（第六十五轮改版，用户指定）：删掉包住整行的大椭圆胶囊——

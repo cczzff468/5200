@@ -420,9 +420,12 @@ export function ChatSettingsPage({
             信息端（sms）不参与，未传 contactId（如自己会话）也不显示） */}
         {variant !== 'sms' && contactId ? <ChatDisplaySection app={variant} contactId={contactId} /> : null}
 
-        {/* 自定义 CSS（第六十五轮，用户指定「联系人聊天设置界面添加自定义css，只改聊天界面」）：
-            折叠区块，作用域 = 该 App 的聊天页（消息/气泡/输入栏），按 App 隔离（wx/qq），与联系人无关 */}
-        {variant !== 'sms' ? <ChatCssSection app={variant} accent={accent} onToast={showToast} /> : null}
+        {/* 自定义 CSS（第六十五轮首建 · 第七十轮按联系人隔离）：折叠区块，作用域 = 当前联系人的
+            聊天页（消息/气泡/输入栏），每个联系人一套互不影响；信息端（sms）与无 contactId 的
+            自己会话不显示（和上方显示设置同规则） */}
+        {variant !== 'sms' && contactId ? (
+          <ChatCssSection app={variant} contactId={contactId} accent={accent} onToast={showToast} />
+        ) : null}
 
         {/* 回复条数：AI 按选定条数连发多条消息（独立二级页选择） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>

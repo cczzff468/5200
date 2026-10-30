@@ -239,7 +239,7 @@ import { MomentsSettingsPage } from './moments-settings';
 import { ThemeStylePage } from './bubble-style-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { bubbleVisual, isLiquidTheme, isRetroTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
-import { scopeCss } from '@/lib/ios/custom-css';
+import { chatContactKey, chatCssScopeSelector, scopeCss } from '@/lib/ios/custom-css';
 import { ChatSkinProvider } from '@/lib/ios/chat-skin';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
@@ -3336,9 +3336,11 @@ function ChatPage({
   const liquidSkinQq = useSettings((s) => s.liquidSkin.qq);
   // 聊天输入框自定义（本轮新增）：输入框占位文字 + 加号面板功能（默认/液态两种主题都生效）
   const chatDecorQq = useSettings((s) => s.chatDecor.qq);
-  // 自定义 CSS（第六十五轮）：聊天作用域 —— 只作用于 QQ 聊天页（根节点挂 data-chat-css="qq"，
-  // 选择器经 scopeCss 自动加前缀，不会泄漏到聊天页以外）
-  const chatCustomCss = useSettings((s) => s.customCss['chat-qq']);
+  // 自定义 CSS（第六十五轮首建 · 第七十轮按联系人隔离）：聊天作用域 —— 只作用于当前联系人的
+  // QQ 聊天页（根节点挂 data-chat-css="qq:联系人ID"，选择器经 scopeCss 自动加前缀，
+  // 且前缀比全局多一级属性 → 特异性压制全局 CSS；不会泄漏到聊天页以外/其他联系人）
+  const qqCssKey = chatContactKey('qq', peer.id);
+  const chatCustomCss = useSettings((s) => s.customCss.chats[qqCssKey]);
   const [msgs, setMsgs] = useState<QQMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
   // 每轮 AI 回合开头再异步刷新一次；回合内同步读最近一次构建结果（systemFull 拼装是同步的）
@@ -6965,7 +6967,7 @@ function ChatPage({
   return (
     <div
       ref={pageRef}
-      data-chat-css="qq"
+      data-chat-css={qqCssKey}
       className={`relative flex h-full w-full flex-col overflow-hidden ${liquid ? 'lg-root' : retro ? 'rt-chat-bg' : 'bg-[#F5F6F7] dark:bg-[#111214]'}`}
       onPointerDown={onSwipeStart}
       onPointerMove={onSwipeMove}
@@ -6976,8 +6978,9 @@ function ChatPage({
         swipe.current = null;
       }}
     >
-      {/* 自定义 CSS（聊天作用域）：只影响本聊天页，选择器已限定在 [data-chat-css="qq"] 内 */}
-      {chatCustomCss.trim() ? <style>{scopeCss(chatCustomCss, '[data-chat-css="qq"]')}</style> : null}
+      {/* 自定义 CSS（聊天作用域，按联系人隔离）：只影响本联系人的聊天页；前缀
+          [data-phone-shell] [data-chat-css="qq:联系人ID"] 比全局多一级属性 → 特异性压制全局 */}
+      {chatCustomCss?.trim() ? <style>{scopeCss(chatCustomCss, chatCssScopeSelector(qqCssKey))}</style> : null}
       {/* 正在输入三点跳动动画 + 面板上浮动画（qqPanelIn：加号面板/表情面板共用） */}
       <style>{'@keyframes qqTypingDot{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-4px);opacity:1}}@keyframes qqPanelIn{from{transform:translateY(65%);opacity:.35}to{transform:translateY(0);opacity:1}}'}</style>
       {/* 聊天背景层（聊天设置页设置：纯色/图片；顶栏与输入栏自身有底色，不受影响） */}
