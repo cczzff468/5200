@@ -66,7 +66,7 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
       type="button"
       data-testid={`mt-pay-bubble-${role}`}
       onClick={onClick}
-      className="relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 active:brightness-95"
+      className="chat-card chat-card-mtpay chat-card-body relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 active:brightness-95"
       style={{
         // 完成卡（终态）整体褪色：黄横幅/按钮变灰黄，白底不脏
         filter: faded ? 'grayscale(0.72) brightness(0.98)' : undefined,
@@ -93,7 +93,7 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
 
       {/* 黄色 3D 人物横幅 + 白色圆角金额面板：拼接为一个整体圆角块（黄上白下、无缝相连，用户要求恢复白面板） */}
       <span className="relative mt-2 block overflow-hidden rounded-[10px] ring-1 ring-black/[0.06]">
-        <span className="relative block h-[88px] overflow-hidden bg-gradient-to-r from-[#FFDB3D] to-[#FFC933]">
+        <span className="chat-card-banner relative block h-[88px] overflow-hidden bg-gradient-to-r from-[#FFDB3D] to-[#FFC933]">
           {bannerOk && (
             <img
               src={role === 'done' ? '/mt/proxy-banner-done.png' : '/mt/proxy-banner.png'}
@@ -139,7 +139,7 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
               </span>
             </>
           )}
-          <span className="mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[14px] font-bold text-black/85">查看详情</span>
+          <span className="chat-card-btn mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[14px] font-bold text-black/85">查看详情</span>
         </span>
       </span>
     </button>

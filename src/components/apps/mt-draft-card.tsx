@@ -95,13 +95,13 @@ export function MtDraftBubble({
   return (
     <div
       data-testid={`mt-draft-card-${d.status}`}
-      className={`relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 ${d.status === 'declined' || order?.status === 'canceled' ? 'grayscale-[0.72]' : ''}`}
+      className={`chat-card chat-card-mtdraft chat-card-body relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 ${d.status === 'declined' || order?.status === 'canceled' ? 'grayscale-[0.72]' : ''}`}
     >
       {/* 头部：美团 logo + 交易保障 */}
       <div className="flex items-center gap-1.5">
         <img src="/icons/meituan-app.png" alt="" className="h-[22px] w-[22px] rounded-full object-cover" />
         <span className="text-[13px] font-semibold text-black/85">美团</span>
-        <span className="rounded bg-[#FFF0D6] px-1.5 py-0.5 text-[10px] font-medium text-[#B26B00]">代点外卖</span>
+        <span className="chat-card-tag rounded bg-[#FFF0D6] px-1.5 py-0.5 text-[10px] font-medium text-[#B26B00]">代点外卖</span>
         <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#00B862]">
           <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />
           交易保障
@@ -152,7 +152,7 @@ export function MtDraftBubble({
             data-testid="mt-draft-confirm"
             onClick={confirm}
             disabled={busy}
-            className="h-9 flex-[1.4] rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[13px] font-bold text-black/85 shadow-[0_2px_8px_rgba(255,195,0,0.35)] active:opacity-85"
+            className="chat-card-btn h-9 flex-[1.4] rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[13px] font-bold text-black/85 shadow-[0_2px_8px_rgba(255,195,0,0.35)] active:opacity-85"
           >
             {busy ? '下单中…' : '确认下单'}
           </button>
@@ -181,7 +181,7 @@ export function MtDraftBubble({
             type="button"
             data-testid="mt-draft-gopay"
             onClick={() => d.orderId && goPay(d.orderId)}
-            className="mt-2.5 h-9 w-full rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[13px] font-bold text-black/85 active:opacity-85"
+            className="chat-card-btn mt-2.5 h-9 w-full rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[13px] font-bold text-black/85 active:opacity-85"
           >
             {d.orderId ? '去美团支付' : '查看订单'}
           </button>

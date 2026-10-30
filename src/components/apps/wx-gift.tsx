@@ -109,18 +109,18 @@ export function WxGiftCardBubble({
       data-testid="wx-gift-bubble"
       aria-label={`礼物卡片：${gift.name}，点击查看`}
       onClick={onClick}
-      className="relative block h-[84px] w-[206px] cursor-pointer text-left shadow-[0_5px_16px_rgba(0,0,0,0.14)] transition-transform duration-150 active:scale-[0.97]"
+      className="chat-card chat-card-gift relative block h-[84px] w-[206px] cursor-pointer text-left shadow-[0_5px_16px_rgba(0,0,0,0.14)] transition-transform duration-150 active:scale-[0.97]"
       style={gift.accepted ? { filter: 'grayscale(0.55) brightness(0.97)' } : undefined}
     >
       {/* 小尾巴：菱形凸出卡外（不被裁剪），尖角处带一点点圆弧（3px），颜色取卡身右上同段渐变 */}
       <span
         aria-hidden="true"
-        className={`absolute top-[12px] h-[13px] w-[13px] rotate-45 ${side === 'left' ? '-left-[3px]' : '-right-[3px]'}`}
+        className={`chat-card-tail absolute top-[12px] h-[13px] w-[13px] rotate-45 ${side === 'left' ? '-left-[3px]' : '-right-[3px]'}`}
         style={{ backgroundColor: '#2C4E92', borderRadius: side === 'left' ? '2px 2px 2px 3px' : '2px 3px 2px 2px' }}
       />
       {/* 卡身：圆角 + overflow-hidden 只裁内容层（星空/丝带/文案），不再裁掉尾巴 */}
       <span
-        className="relative block h-full w-full overflow-hidden rounded-[4px]"
+        className="chat-card-body relative block h-full w-full overflow-hidden rounded-[4px]"
         style={{ background: 'linear-gradient(160deg, #4467B4 0%, #2C4E92 46%, #20396E 100%)' }}
       >
         {/* 星空细碎白点 */}
@@ -150,7 +150,7 @@ export function WxGiftCardBubble({
         </span>
 
         {/* 左下角「礼物」标签 */}
-        <span className="absolute bottom-[8px] left-[12px] text-[12.5px] font-medium text-white/95">礼物</span>
+        <span className="chat-card-label absolute bottom-[8px] left-[12px] text-[12.5px] font-medium text-white/95">礼物</span>
       </span>
     </button>
   );

@@ -85,7 +85,7 @@ export function TbPayBubble({ pid, role, side, onClick }: { pid: string; role: '
       type="button"
       data-testid={`tb-pay-bubble-${role}`}
       onClick={onClick}
-      className="relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 active:brightness-95"
+      className="chat-card chat-card-tbpay chat-card-body relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 active:brightness-95"
       style={{
         // 完成卡（终态）整体褪色：橙横幅/按钮变灰，白底不脏
         filter: faded ? 'grayscale(0.72) brightness(0.98)' : undefined,
@@ -112,7 +112,7 @@ export function TbPayBubble({ pid, role, side, onClick }: { pid: string; role: '
 
       {/* 橙色横幅 + 白色圆角金额面板：拼接为一个整体圆角块（橙上白下、无缝相连） */}
       <span className="relative mt-2 block overflow-hidden rounded-[10px] ring-1 ring-black/[0.06]">
-        <span className="relative block h-[88px] overflow-hidden bg-gradient-to-r from-[#FF7A21] to-[#FF4400]">
+        <span className="chat-card-banner relative block h-[88px] overflow-hidden bg-gradient-to-r from-[#FF7A21] to-[#FF4400]">
           {bannerOk && (
             <img
               src={role === 'done' ? '/mt/proxy-banner-done.png' : '/mt/proxy-banner.png'}
@@ -159,7 +159,7 @@ export function TbPayBubble({ pid, role, side, onClick }: { pid: string; role: '
               </span>
             </>
           )}
-          <span className="mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[14px] font-bold text-white">查看详情</span>
+          <span className="chat-card-btn mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[14px] font-bold text-white">查看详情</span>
         </span>
       </span>
     </button>
@@ -682,7 +682,7 @@ export function TbShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
       role={order ? 'button' : undefined}
       aria-label={`淘宝订单分享 ¥${fmt2(share.amount)}，点击查看订单详情`}
       onClick={openOrderDetail}
-      className={`relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] ${order ? 'cursor-pointer transition-transform duration-150 active:scale-[0.97]' : ''}`}
+      className={`chat-card chat-card-tbshare chat-card-body relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] ${order ? 'cursor-pointer transition-transform duration-150 active:scale-[0.97]' : ''}`}
     >
       {/* 箭头指向头像侧（我发出 → 右；AI 角色发来 → 左） */}
       <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${side === 'left' ? '-left-[4px]' : '-right-[4px]'}`} />
@@ -715,7 +715,7 @@ export function TbShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1">
               <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-black/80">{ticket.title}</span>
-              {ticketBadge ? <span className={`shrink-0 rounded-full px-1.5 text-[9px] font-semibold leading-[1.7] ${ticketBadge.cls}`}>{ticketBadge.text}</span> : null}
+              {ticketBadge ? <span className={`chat-card-tag shrink-0 rounded-full px-1.5 text-[9px] font-semibold leading-[1.7] ${ticketBadge.cls}`}>{ticketBadge.text}</span> : null}
             </span>
             <span className="mt-0.5 block truncate text-[10.5px] leading-[1.5] text-black/45">{ticket.dateLabel} {ticket.start} · {ticket.venue}</span>
             <span className="block truncate text-[10.5px] leading-[1.5] text-black/45">{ticket.seats.join(' ')} · 取票号 {ticket.ticketNo}</span>

@@ -27,7 +27,7 @@ export function TextCardBubble({
 }) {
   const radius = variant === 'sms' ? 'rounded-[16px]' : variant === 'qq' ? 'rounded-[12px]' : 'rounded-[8px]';
   const inner =
-    'relative w-[212px] select-none overflow-hidden border border-black/[0.05] bg-[#FBF9F3] shadow-[0_6px_20px_rgba(158,142,113,0.16),0_1px_3px_rgba(0,0,0,0.04)] transition-transform active:scale-[0.985] dark:border-white/[0.08] dark:bg-[#2A282B] dark:shadow-[0_6px_20px_rgba(0,0,0,0.38)]';
+    'chat-card chat-card-text chat-card-body relative w-[212px] select-none overflow-hidden border border-black/[0.05] bg-[#FBF9F3] shadow-[0_6px_20px_rgba(158,142,113,0.16),0_1px_3px_rgba(0,0,0,0.04)] transition-transform active:scale-[0.985] dark:border-white/[0.08] dark:bg-[#2A282B] dark:shadow-[0_6px_20px_rgba(0,0,0,0.38)]';
   return onClick ? (
     <button
       type="button"

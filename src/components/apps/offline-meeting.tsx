@@ -46,7 +46,7 @@ import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt, type PersonaSource } from '@/lib/ios/persona';
 import { useSettings } from '@/lib/ios/store';
 import { isLiquidTheme, isRetroTheme, type BubbleStyleConfig } from '@/lib/ios/bubble-style';
-import { OFFLINE_CSS_TEMPLATE, OFFLINE_CSS_SCOPE, scopeCss } from '@/lib/ios/custom-css';
+import { OFFLINE_CSS_TEMPLATES, OFFLINE_CSS_SCOPE, scopeCss } from '@/lib/ios/custom-css';
 import { CustomCssEditor } from './custom-css-editor';
 import { getMemSettings, memAddEventFragment, memRecallBlock } from '@/lib/memory';
 import {
@@ -1122,7 +1122,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, avail
             （开始页/见面页/存档/现场设置/历史），与全局/聊天 CSS 互不影响；
             模板逐段列出线下界面所有能改的元素（off-card / off-chip / off-start / off-input 等稳定语义锚点） */}
         <Card>
-          <CustomCssEditor scope="offline" template={OFFLINE_CSS_TEMPLATE} accent={skin.editorAccent} onToast={onToast} />
+          <CustomCssEditor scope="offline" templates={OFFLINE_CSS_TEMPLATES} accent={skin.editorAccent} onToast={onToast} />
         </Card>
 
         {/* 背景读取说明 + 重新分析 */}

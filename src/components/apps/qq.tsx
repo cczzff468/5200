@@ -9026,7 +9026,7 @@ export function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPack
       type="button"
       data-testid="qq-rp-bubble"
       onClick={onClick}
-      className="relative block w-[176px] overflow-hidden rounded-[14px] text-left shadow-lg shadow-black/15 transition-all duration-300 active:scale-[0.97]"
+      className="chat-card chat-card-rp chat-card-body relative block w-[176px] overflow-hidden rounded-[14px] text-left shadow-lg shadow-black/15 transition-all duration-300 active:scale-[0.97]"
       style={{
         backgroundImage: 'linear-gradient(168deg, #FC8163 0%, #F5455C 55%, #F2394E 100%)',
         // 领取/退还/拒收后卡片颜色变灰（对照真实 QQ：已领取的红包封面褪色）
@@ -9049,7 +9049,7 @@ export function RedPacketBubble({ packet, showOpen, onClick }: { packet: MsgPack
             <span className="text-[19px] font-bold leading-none text-[#D8332F]">開</span>
           </span>
         ) : (
-          <span className="absolute inset-x-0 bottom-[9px] text-center text-[11px] font-medium tracking-[0.25em] text-[#FFE3C2]">QQ红包</span>
+          <span className="chat-card-label absolute inset-x-0 bottom-[9px] text-center text-[11px] font-medium tracking-[0.25em] text-[#FFE3C2]">QQ红包</span>
         )}
       </div>
     </button>
@@ -9089,7 +9089,7 @@ export function TransferBubble({ packet, mine, received, onClick }: { packet: Ms
       type="button"
       data-testid="qq-transfer-bubble"
       onClick={onClick}
-      className="block w-[206px] overflow-hidden rounded-[12px] text-left shadow-md shadow-black/10 transition-all duration-300 active:scale-[0.97]"
+      className="chat-card chat-card-tr chat-card-body block w-[206px] overflow-hidden rounded-[12px] text-left shadow-md shadow-black/10 transition-all duration-300 active:scale-[0.97]"
       style={{
         backgroundImage: 'linear-gradient(135deg, #29ABF2 0%, #0099FF 100%)',
         // 收款/退还/拒收/过期后卡片颜色变灰（对照真实 QQ：终态卡褪色）
@@ -9106,7 +9106,7 @@ export function TransferBubble({ packet, mine, received, onClick }: { packet: Ms
           <span className="mt-0.5 block truncate text-[13px] text-white/90" data-testid="qq-transfer-bubble-status">{!settled && packet.note && packet.note.trim() ? packet.note : status}</span>
         </span>
       </div>
-      <div className="border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">转账</div>
+      <div className="chat-card-label border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">转账</div>
     </button>
   );
 }
@@ -9119,7 +9119,7 @@ function FamilyBubble({ fam, mine, peerName, onClick }: { fam: QQFamData; mine: 
       type="button"
       data-testid="qq-family-bubble"
       onClick={onClick}
-      className="block w-[206px] overflow-hidden rounded-[12px] text-left shadow-md shadow-black/10 transition-all duration-300 active:scale-[0.97]"
+      className="chat-card chat-card-fam chat-card-body block w-[206px] overflow-hidden rounded-[12px] text-left shadow-md shadow-black/10 transition-all duration-300 active:scale-[0.97]"
       style={{
         backgroundImage: 'linear-gradient(135deg, #F7D488 0%, #EDB95E 100%)',
         // 领取/退回后卡片颜色变灰（与微信亲属卡一致）
@@ -9136,7 +9136,7 @@ function FamilyBubble({ fam, mine, peerName, onClick }: { fam: QQFamData; mine: 
           <span className="mt-0.5 block truncate text-[13px] text-white/90" data-testid="qq-family-bubble-status">{status}</span>
         </span>
       </div>
-      <div className="border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">亲属卡</div>
+      <div className="chat-card-label border-t border-white/25 px-3.5 py-1.5 text-[12.5px] text-white/95">亲属卡</div>
     </button>
   );
 }

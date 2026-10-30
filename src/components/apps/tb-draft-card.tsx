@@ -95,13 +95,13 @@ export function TbDraftBubble({
   return (
     <div
       data-testid={`tb-draft-card-${d.status}`}
-      className={`relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 ${d.status === 'declined' || order?.status === 'cancelled' ? 'grayscale-[0.72]' : ''}`}
+      className={`chat-card chat-card-tbdraft chat-card-body relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 ${d.status === 'declined' || order?.status === 'cancelled' ? 'grayscale-[0.72]' : ''}`}
     >
       {/* 头部：淘宝 logo + 交易保障 */}
       <div className="flex items-center gap-1.5">
         <img src="/icons/taobao.png" alt="" className="h-[22px] w-[22px] rounded-full object-cover" />
         <span className="text-[13px] font-semibold text-black/85">淘宝</span>
-        <span className="rounded bg-[#FFE2D2] px-1.5 py-0.5 text-[10px] font-medium text-[#C24E00]">AI 帮你买</span>
+        <span className="chat-card-tag rounded bg-[#FFE2D2] px-1.5 py-0.5 text-[10px] font-medium text-[#C24E00]">AI 帮你买</span>
         <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#FF5000]">
           <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />
           交易保障

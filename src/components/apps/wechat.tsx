@@ -2522,17 +2522,17 @@ export function FamilyBubble({ title, sub, settled, fromMe, onClick }: { title: 
       type="button"
       data-testid="wx-fc-bubble"
       onClick={onClick}
-      className="relative block w-[206px] text-left shadow-sm transition-all duration-300 active:brightness-[0.97]"
+      className="chat-card chat-card-fam relative block w-[206px] text-left shadow-sm transition-all duration-300 active:brightness-[0.97]"
       style={{ filter: settled ? 'grayscale(0.62) brightness(0.97)' : undefined }}
       aria-label={`${title}（${sub}）`}
     >
       {/* 小尾巴：白卡同色菱形（与红包/转账/礼物卡同轮统一），尖角处带一点圆弧 */}
       <span
         aria-hidden="true"
-        className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-white dark:bg-[#1E1E1E] ${fromMe === false ? '-left-[3px]' : '-right-[3px]'}`}
+        className={`chat-card-tail absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-white dark:bg-[#1E1E1E] ${fromMe === false ? '-left-[3px]' : '-right-[3px]'}`}
         style={{ borderRadius: fromMe === false ? '2px 2px 2px 3px' : '2px 3px 2px 2px' }}
       />
-      <span className="relative block overflow-hidden rounded-[4px] bg-white dark:bg-[#1E1E1E]">
+      <span className="chat-card-body relative block overflow-hidden rounded-[4px] bg-white dark:bg-[#1E1E1E]">
         <span aria-hidden="true" className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-[#FBF0C4] dark:bg-[#3B3722]" />
         <span
           aria-hidden="true"
@@ -2549,7 +2549,7 @@ export function FamilyBubble({ title, sub, settled, fromMe, onClick }: { title: 
             </span>
           </span>
         </span>
-        <span className="relative block px-3 pb-2 pt-2 text-[12px] text-black/30 dark:text-white/30">亲属卡</span>
+        <span className="chat-card-label relative block px-3 pb-2 pt-2 text-[12px] text-black/30 dark:text-white/30">亲属卡</span>
       </span>
     </button>
   );
@@ -4343,7 +4343,7 @@ export function RpBubble({ blessing, sub, settled, fromMe, onClick }: { blessing
       type="button"
       data-testid="wx-rp-bubble"
       onClick={onClick}
-      className="relative block w-[206px] text-left shadow-sm transition-all duration-300 active:brightness-95"
+      className="chat-card chat-card-rp relative block w-[206px] text-left shadow-sm transition-all duration-300 active:brightness-95"
       style={{
         // 领取/退还/拒收后卡片颜色变灰（对照真实微信：已领取的红包封面褪色）
         filter: settled ? 'grayscale(0.62) brightness(0.97)' : undefined,
@@ -4353,11 +4353,11 @@ export function RpBubble({ blessing, sub, settled, fromMe, onClick }: { blessing
       {/* 小尾巴：菱形凸出卡外（不被裁剪，与转账卡同款双层结构），尖角处带一点圆弧，颜色取卡身右上同段渐变 */}
       <span
         aria-hidden="true"
-        className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-[#EC5A42] ${fromMe === false ? '-left-[3px]' : '-right-[3px]'}`}
+        className={`chat-card-tail absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-[#EC5A42] ${fromMe === false ? '-left-[3px]' : '-right-[3px]'}`}
         style={{ borderRadius: fromMe === false ? '2px 2px 2px 3px' : '2px 3px 2px 2px' }}
       />
       {/* 卡身：圆角 + overflow-hidden 只裁内容层（渐变/高光/底部标签），不再裁掉尾巴 */}
-      <span className="relative block overflow-hidden rounded-[4px]" style={{ background: 'linear-gradient(135deg, #F2694C, #E94E38)' }}>
+      <span className="chat-card-body relative block overflow-hidden rounded-[4px]" style={{ background: 'linear-gradient(135deg, #F2694C, #E94E38)' }}>
         <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-10 h-24 w-24 rounded-full bg-white/10" />
         <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
           <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-white/90 bg-white/15" aria-hidden="true">
@@ -4369,7 +4369,7 @@ export function RpBubble({ blessing, sub, settled, fromMe, onClick }: { blessing
           </span>
         </span>
         {/* 「红包」标签：背景与卡身同色（去掉黑蒙层，仅保留文字，与转账卡同轮处理） */}
-        <span className="relative block px-3 py-[5px] text-[12px] text-white/90">红包</span>
+        <span className="chat-card-label relative block px-3 py-[5px] text-[12px] text-white/90">红包</span>
       </span>
     </button>
   );
@@ -4393,7 +4393,7 @@ export function TrBubble({ amount, status, received, refunded, fromMe, note, set
       type="button"
       data-testid="wx-tr-bubble"
       onClick={onClick}
-      className="relative block w-[206px] text-left shadow-sm transition-all duration-300 active:brightness-95"
+      className="chat-card chat-card-tr relative block w-[206px] text-left shadow-sm transition-all duration-300 active:brightness-95"
       style={{
         // 收款/退还/拒收后卡片颜色变灰（对照真实微信：已收款与已退还的转账卡都褪色）
         filter: received || refunded ? 'grayscale(0.62) brightness(0.97)' : undefined,
@@ -4403,11 +4403,11 @@ export function TrBubble({ amount, status, received, refunded, fromMe, note, set
       {/* 小尾巴：菱形凸出卡外（不被裁剪），尖角处带一点点圆弧（3px），颜色取卡身右上同段渐变 */}
       <span
         aria-hidden="true"
-        className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-[#F2A233] ${fromMe ? '-right-[3px]' : '-left-[3px]'}`}
+        className={`chat-card-tail absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-[#F2A233] ${fromMe ? '-right-[3px]' : '-left-[3px]'}`}
         style={{ borderRadius: fromMe ? '2px 3px 2px 2px' : '2px 2px 2px 3px' }}
       />
       {/* 卡身：圆角 + overflow-hidden 只裁内容层（渐变/高光/底部标签），不再裁掉尾巴 */}
-      <span className="relative block overflow-hidden rounded-[4px]" style={{ background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)' }}>
+      <span className="chat-card-body relative block overflow-hidden rounded-[4px]" style={{ background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)' }}>
         <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
           <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-white/90" aria-hidden="true">
             {refunded ? <Undo2 className="h-5 w-5 text-white" strokeWidth={2.2} /> : received ? <Check className="h-5 w-5 text-white" strokeWidth={2.4} /> : <ArrowLeftRight className="h-5 w-5 text-white" strokeWidth={2} />}
@@ -4420,7 +4420,7 @@ export function TrBubble({ amount, status, received, refunded, fromMe, note, set
           </span>
         </span>
         {/* 「转账」标签：背景与卡身同色（第 22 轮去掉黑蒙层，仅保留文字） */}
-        <span className="relative block px-3 py-[4px] text-[12px] text-white/90">转账</span>
+        <span className="chat-card-label relative block px-3 py-[4px] text-[12px] text-white/90">转账</span>
       </span>
     </button>
   );

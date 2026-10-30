@@ -592,6 +592,197 @@ export function chatCssTemplate(app: 'wx' | 'qq'): CssTemplate {
   return app === 'qq' ? QQ_CSS_TEMPLATE : WX_CSS_TEMPLATE;
 }
 
+// ================= 聊天卡片模板（第七十二轮：红包/转账/亲属卡/礼物/代付/外卖全可改） =================
+// 每张卡片都挂了语义锚点类，一套类名微信/QQ 通用：
+//   .chat-card        所有聊天卡片（整体阴影等）
+//   .chat-card-body   卡身（圆角 / 底色改这里）
+//   .chat-card-tail   小尾巴（微信红包/转账/亲属卡/礼物卡的菱形尾巴）
+//   .chat-card-label  底部标签条（红包/转账/亲属卡/礼物那行小字）
+//   .chat-card-tag    小标签（代点外卖 / AI帮你买 / 已买单…）
+//   .chat-card-banner 代付卡的横幅色块
+//   .chat-card-btn    卡片里的主按钮（查看详情 / 确认下单）
+// 具体卡片：.chat-card-rp 红包 / -tr 转账 / -fam 亲属卡 / -gift 礼物 / -mtpay 美团代付 /
+//   -tbpay 淘宝代付 / -mtdraft 外卖草稿 / -tbdraft 代买草稿 / -mtshare · -tbshare 订单分享 / -text 文字卡片
+// 注意：卡身渐变色是程序内联写死的 → 覆盖它要带 !important（模板里已带）。
+
+/** 微信 · 聊天卡片完整模板（红包/转账/亲属卡/礼物/代付/外卖/订单分享/文字卡） */
+const WX_CSS_CARD_TEMPLATE: CssTemplate = {
+  name: '微信卡片模板',
+  desc: '红包 / 转账 / 亲属卡 / 礼物 / 代付 / 外卖 / 标签 / 圆角',
+  css: `/* ═══════════════════════════════════════════════
+   微信 · 聊天卡片完整模板（联系人专属）
+   ═══════════════════════════════════════════════
+   作用范围：只有这个联系人聊天页里的卡片——
+   红包、转账、亲属卡、礼物、美团/淘宝代付、
+   外卖与代买草稿、订单分享、文字卡片。
+   每一段 = 一张卡；把值改成你想要的，不想要的整段删掉。
+   下面填的都是卡片现在的默认样式——不改直接应用 ≈ 没变化。
+   注意：卡片颜色是程序写死的，规则里带 !important 才能盖住。 */
+
+/* ── 1. 通用：所有卡片的圆角 / 阴影一起改 ── */
+.chat-card-body { border-radius: 4px; }
+/* 圆角想更圆润？解开下面这行 */
+/* .chat-card-body { border-radius: 14px; } */
+
+/* ── 2. 红包卡（红橙渐变 + 小尾巴） ── */
+.chat-card-rp .chat-card-body {
+  background: linear-gradient(135deg, #F2694C, #E94E38) !important;
+}
+.chat-card-rp .chat-card-tail { background: #EC5A42 !important; }
+
+/* ── 3. 转账卡（橙色渐变 + 小尾巴） ── */
+.chat-card-tr .chat-card-body {
+  background: linear-gradient(135deg, #F6AC3D, #EF9A2E) !important;
+}
+.chat-card-tr .chat-card-tail { background: #F2A233 !important; }
+
+/* ── 4. 亲属卡（米白卡身 + 小尾巴） ── */
+.chat-card-fam .chat-card-body { background: #FFFFFF; }
+.dark & .chat-card-fam .chat-card-body { background: #1E1E1E; }
+.chat-card-fam .chat-card-tail { background: #FFFFFF; }
+.dark & .chat-card-fam .chat-card-tail { background: #1E1E1E; }
+
+/* ── 5. 礼物卡（深蓝星空） ── */
+.chat-card-gift .chat-card-body {
+  background: linear-gradient(160deg, #4467B4 0%, #2C4E92 46%, #20396E 100%) !important;
+}
+.chat-card-gift .chat-card-tail { background: #2C4E92 !important; }
+
+/* ── 6. 美团系卡片：找人代付 / 代点外卖 / 订单分享（白卡 + 黄横幅） ── */
+.chat-card-mtpay, .chat-card-mtdraft, .chat-card-mtshare { background: #FFFFFF; }
+.chat-card-mtpay .chat-card-banner {
+  background: linear-gradient(to right, #FFDB3D, #FFC933) !important;
+}
+.chat-card-mtpay .chat-card-btn, .chat-card-mtdraft .chat-card-btn {
+  background: linear-gradient(to right, #FFD900, #FFC300) !important;
+}
+
+/* ── 7. 淘宝系卡片：找人代付 / AI 帮买 / 订单分享（白卡 + 橙横幅） ── */
+.chat-card-tbpay, .chat-card-tbdraft, .chat-card-tbshare { background: #FFFFFF; }
+.chat-card-tbpay .chat-card-banner {
+  background: linear-gradient(to right, #FF7A21, #FF4400) !important;
+}
+.chat-card-tbpay .chat-card-btn {
+  background: linear-gradient(to right, #FF7A21, #FF4400) !important;
+}
+
+/* ── 8. 文字卡片（象牙白纸面） ── */
+.chat-card-text {
+  background: #FBF9F3;
+  border-color: rgba(0, 0, 0, 0.05);
+}
+.dark & .chat-card-text {
+  background: #2A282B;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ── 9. 底部标签条（红包/转账/亲属卡/礼物 那行小字） ── */
+.chat-card-label {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+}
+
+/* ── 10. 小标签（代点外卖 / AI帮你买 / 已买单…） ── */
+.chat-card-tag { border-radius: 99px; }
+/* 想让小标签统一变一个颜色？解开下面两行 */
+/* .chat-card-tag { background: #FFE8D2 !important; color: #B25B00 !important; } */
+
+/* ── 11. 想再动手？解开这些注释 ── */
+/* 红包变成蓝色系 */
+/* .chat-card-rp .chat-card-body { background: linear-gradient(135deg, #5AC8FA, #0A84FF) !important; } */
+/* .chat-card-rp .chat-card-tail { background: #0A84FF !important; } */
+
+/* 卡片阴影统一加重 */
+/* .chat-card { filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.18)); } */`,
+};
+
+/** QQ · 聊天卡片完整模板（红包/转账/亲属卡/代付/外卖/订单分享/文字卡；QQ 卡无尾巴、无礼物卡） */
+const QQ_CSS_CARD_TEMPLATE: CssTemplate = {
+  name: 'QQ卡片模板',
+  desc: '红包 / 转账 / 亲属卡 / 代付 / 外卖 / 标签 / 圆角',
+  css: `/* ═══════════════════════════════════════════════
+   QQ · 聊天卡片完整模板（联系人专属）
+   ═══════════════════════════════════════════════
+   作用范围：只有这个联系人聊天页里的卡片——
+   QQ红包、转账、亲属卡、美团/淘宝代付、外卖与
+   代买草稿、订单分享、文字卡片。
+   每一段 = 一张卡；把值改成你想要的，不想要的整段删掉。
+   下面填的都是卡片现在的默认样式——不改直接应用 ≈ 没变化。
+   注意：卡片颜色是程序写死的，规则里带 !important 才能盖住。 */
+
+/* ── 1. 通用：所有卡片的圆角一起改 ── */
+.chat-card-body { border-radius: 12px; }
+/* 圆角想更圆润？解开下面这行 */
+/* .chat-card-body { border-radius: 18px; } */
+
+/* ── 2. QQ红包卡（红粉渐变封面） ── */
+.chat-card-rp {
+  background: linear-gradient(168deg, #FC8163 0%, #F5455C 55%, #F2394E 100%) !important;
+}
+
+/* ── 3. 转账卡（QQ蓝渐变） ── */
+.chat-card-tr {
+  background: linear-gradient(135deg, #29ABF2 0%, #0099FF 100%) !important;
+}
+
+/* ── 4. 亲属卡（金色渐变） ── */
+.chat-card-fam {
+  background: linear-gradient(135deg, #F7D488 0%, #EDB95E 100%) !important;
+}
+
+/* ── 5. 美团系卡片：找人代付 / 代点外卖 / 订单分享（白卡 + 黄横幅） ── */
+.chat-card-mtpay, .chat-card-mtdraft, .chat-card-mtshare { background: #FFFFFF; }
+.chat-card-mtpay .chat-card-banner {
+  background: linear-gradient(to right, #FFDB3D, #FFC933) !important;
+}
+.chat-card-mtpay .chat-card-btn, .chat-card-mtdraft .chat-card-btn {
+  background: linear-gradient(to right, #FFD900, #FFC300) !important;
+}
+
+/* ── 6. 淘宝系卡片：找人代付 / AI 帮买 / 订单分享（白卡 + 橙横幅） ── */
+.chat-card-tbpay, .chat-card-tbdraft, .chat-card-tbshare { background: #FFFFFF; }
+.chat-card-tbpay .chat-card-banner {
+  background: linear-gradient(to right, #FF7A21, #FF4400) !important;
+}
+.chat-card-tbpay .chat-card-btn {
+  background: linear-gradient(to right, #FF7A21, #FF4400) !important;
+}
+
+/* ── 7. 文字卡片（象牙白纸面） ── */
+.chat-card-text {
+  background: #FBF9F3;
+  border-color: rgba(0, 0, 0, 0.05);
+}
+.dark & .chat-card-text {
+  background: #2A282B;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ── 8. 底部标签条（转账/亲属卡/QQ红包 那行小字） ── */
+.chat-card-label {
+  color: rgba(255, 255, 255, 0.95);
+  border-color: rgba(255, 255, 255, 0.25);
+  font-size: 12.5px;
+}
+
+/* ── 9. 小标签（代点外卖 / AI帮你买 / 已买单…） ── */
+.chat-card-tag { border-radius: 99px; }
+/* 想让小标签统一变一个颜色？解开下面两行 */
+/* .chat-card-tag { background: #FFE8D2 !important; color: #B25B00 !important; } */
+
+/* ── 10. 想再动手？解开这些注释 ── */
+/* 红包变成蓝色系 */
+/* .chat-card-rp { background: linear-gradient(168deg, #5AC8FA 0%, #0A84FF 100%) !important; } */
+
+/* 卡片阴影统一加重 */
+/* .chat-card { filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.18)); } */`,
+};
+
+/** 聊天模板组：界面完整模板 + 卡片模板（「示例」弹层按此列出） */
+export function chatCssTemplates(app: 'wx' | 'qq'): CssTemplate[] {
+  return app === 'qq' ? [QQ_CSS_TEMPLATE, QQ_CSS_CARD_TEMPLATE] : [WX_CSS_TEMPLATE, WX_CSS_CARD_TEMPLATE];
+}
+
 // ================= 线下（线下模式 › 现场设置 › 自定义CSS） =================
 
 /** 线下模板：线下模式所有界面的完整清单（默认值 = 默认毛玻璃皮肤当前样式） */
@@ -678,3 +869,9 @@ export const OFFLINE_CSS_TEMPLATE: CssTemplate = {
 /* @import url("https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap"); */
 /* & { font-family: "ZCOOL KuaiLe", sans-serif; } */`,
 };
+
+/** 全局模板组（个性装扮 › 主题 Tab；放文件末尾，避开 const 提升顺序问题） */
+export const GLOBAL_CSS_TEMPLATES: CssTemplate[] = [GLOBAL_CSS_TEMPLATE];
+
+/** 线下模板组（线下模式 › 现场设置） */
+export const OFFLINE_CSS_TEMPLATES: CssTemplate[] = [OFFLINE_CSS_TEMPLATE];

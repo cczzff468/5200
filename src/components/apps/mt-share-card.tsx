@@ -151,7 +151,7 @@ export function MtShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
       role={order ? 'button' : undefined}
       aria-label={`美团订单分享 ¥${fmt2(share.amount)}${share.paidBy ? `（${share.paidBy}已买单）` : ''}，点击查看订单详情`}
       onClick={openOrderDetail}
-      className={`relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] ${order ? 'cursor-pointer transition-transform duration-150 active:scale-[0.97]' : ''}`}
+      className={`chat-card chat-card-mtshare chat-card-body relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] ${order ? 'cursor-pointer transition-transform duration-150 active:scale-[0.97]' : ''}`}
     >
       {/* 箭头指向头像侧（我发出 → 右；AI 角色发来 → 左） */}
       <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${side === 'left' ? '-left-[4px]' : '-right-[4px]'}`} />
@@ -161,7 +161,7 @@ export function MtShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
         <img src="/icons/meituan-app.png?v=2" alt="" className="h-[22px] w-[22px] rounded-md object-cover" />
         <span className="text-[13px] font-semibold text-black/85">美团</span>
         {share.paidBy ? (
-          <span data-testid="mt-share-paidby" className="rounded-full bg-[#E2F7EC] px-1.5 py-[2px] text-[10px] font-medium leading-none text-[#00A354]">
+          <span data-testid="mt-share-paidby" className="chat-card-tag rounded-full bg-[#E2F7EC] px-1.5 py-[2px] text-[10px] font-medium leading-none text-[#00A354]">
             {share.paidBy}已买单
           </span>
         ) : null}
