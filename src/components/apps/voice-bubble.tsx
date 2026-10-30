@@ -239,14 +239,19 @@ export function VoiceMsgBubble({
 
   /** 圆角：微信 4px（用户指定微圆角）；QQ 12px；信息 18px。微信尾巴由 ::before 伪元素绘制（globals.css）。
    *  装扮接管（第十八轮）：微信语音气泡跟随装扮 —— 纯色/七彩保留原生尾巴（随 inline
-   *  backgroundColor 经 background-color:inherit 自动同色），毛玻璃/液态胶囊隐藏尾巴 */
+   *  backgroundColor 经 background-color:inherit 自动同色），毛玻璃/液态胶囊隐藏尾巴。
+   *  第六十四轮（用户指定「语音气泡也跟随气泡样式颜色变化」）：QQ/信息端装扮时同样
+   *  剥离原生配色类（bg-white / dark:bg-[#2A2C31]）——底色/文字色全部交给装扮
+   *  （inline backgroundColor 或 .bub-retro-qq 渐变类 / .bub-frosted / .bub-liquid）。
+   *  关键动机：古早/液态主题的铭件接管 CSS（[data-rt-theme] .bg-white 等）带 !important，
+   *  会盖掉对方语音气泡的装扮 inline 色（我方语音泡无 bg 类不受影响）——剥类后不再冲突 */
   const bubbleCls = isWx
     ? `wx-voice-bubble relative h-[42px] rounded-[4px] px-3 ${hideTail ? '' : mine ? 'wx-voice-tail-right' : 'wx-voice-tail-left'} ${
         decorated ? '' : mine ? t.own : t.peer
       }${isPlaying ? ' wx-voice-playing' : ''}`
     : theme === 'im'
-      ? `rounded-[18px] ${mine ? 'text-white' : t.peer}`
-      : `rounded-[12px] ${mine ? 'text-white' : t.peer}`;
+      ? `rounded-[18px] ${decorated ? '' : mine ? 'text-white' : t.peer}`
+      : `rounded-[12px] ${decorated ? '' : mine ? 'text-white' : t.peer}`;
 
   /** 胶囊装扮（毛玻璃/液态，第十八轮终版）：上下收窄（用户指定「上下变小一点」）——
    *  文本气泡由 bubbleVisual 直接压上下 padding；语音气泡高度固定（微信 42 / QQ 40），
