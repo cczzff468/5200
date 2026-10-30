@@ -57,6 +57,11 @@ import { SRDOOR_Z, STUDY_X0, STUDY_X1, STUDY_Z0, STUDY_Z1, YDOOR_X, GARDEN_X0, G
 import { weatherBusSet, seasonNow, type Season } from './weather-bus';
 import { companionStep, createCompanionRT, type CompanionCmd, type CompanionEvent, type CompanionRT, type PoseSlot } from './companion-rt';
 import { notifyTaBubbleIfHidden } from './cabin-notify';
+import { silenceThreeClockWarn } from './three-quiet';
+
+// C4 技术债：R3F 9.x 内部仍 new THREE.Clock()（three r183 起已弃用）→ 每次进小屋
+// 控制台都刷弃用警告。模块加载时先装上静默过滤器（透传其余 log/warn/error）再挂 Canvas。
+silenceThreeClockWarn();
 
 // ---------------- 对外 Props ----------------
 

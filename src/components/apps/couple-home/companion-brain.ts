@@ -79,16 +79,16 @@ const ACT_RULES = [
   '  · come：走到用户身边；',
   '  · goto：去某个房间，需带 room 参数（lr=客厅 br=卧室 kt=厨房 ba=卫生间 bal=阳台），如 {"type":"goto","room":"br"}；',
   '  · sit：找个椅子/沙发坐下；lie：上床躺下睡觉；watch：坐到电视前看电视；lamp：把最近的灯打开；',
-  '  · play：走到钢琴或吉他前弹奏一曲（家里没有乐器就不发这个动作）；可带 song 参数点歌，曲库只有这几首：小星星、两只老虎、生日快乐、欢乐颂、小蜜蜂、茉莉花 —— 用户说「弹个小星星」→ {"type":"play","song":"小星星"}；用户点的歌不在曲库里时，选风格最接近的一首，并在回复里自然地说出你弹的曲名；不带 song 就是随性即兴；',
+  '  · play：走到钢琴或吉他前弹奏一曲（家里没有乐器就不发这个动作）；可带 song 参数点歌，任何歌都能点：经典曲库（小星星、两只老虎、生日快乐、欢乐颂、小蜜蜂、茉莉花、铃儿响叮当、玛丽的小羊、致爱丽丝、卡农）直接命中秒弹；其他歌用户说了什么就原样传什么（如用户说「弹一首晴天」→ {"type":"play","song":"晴天"}），你现场记谱也能弹出主旋律——千万别因为不在曲库里就拒绝或擅自换成别的歌；不带 song 就是随性即兴；用户点名了乐器时带 inst 参数（"piano"/"guitar"，如「用吉他弹个晴天」→ {"type":"play","song":"晴天","inst":"guitar"}）；',
   '  · cook：走到灶台前做一顿饭（做完菜会自动端上餐桌）；',
-  '  · music：走到音箱/唱片机前放首歌（也可带 song 参数，同曲库）；door：把最近一扇关着的门打开；',
+  '  · music：走到音箱/唱片机前放首歌（song 参数同 play，任何歌都能点，会尽量找原曲播放）；door：把最近一扇关着的门打开；',
   '  · eat：坐到餐桌边吃饭（要等饭做好了才有得吃，做饭之后可以接 eat）；',
   '  · dance：原地跳舞；stretch：伸懒腰；water：走到花盆/花箱旁浇花；read：找地方坐下看书；',
   '  · window：走到窗边开/关窗（可带 open 参数：{"type":"window","open":false} 关窗挡雨 / true 开窗通风；不带 = 关上开着的窗）；',
   '  · hug：走过去拥抱用户；holdhand：牵起用户的手（之后会一直牵着）；free：停止动作、自由活动（也可以松开手）；',
   '- 例：用户说「去卧室等我」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"goto","room":"br"},{"type":"sit"}]}<<END>>（走过去坐下）；',
   '- 例：用户说「给我弹首钢琴曲」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"play"}]}<<END>>；',
-  '- 例：用户说「弹个小星星听」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"play","song":"小星星"}]}<<END>>（曲名必须是曲库里的）；',
+  '- 例：用户说「弹个小星星听」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"play","song":"小星星"}]}<<END>>（用户点任何歌都照传 song，不限于这几首）；',
   '- 例：用户说「我饿了」→ 可以 <<ACT>>{"actions":[{"type":"cook"}]}<<END>>（做饭给用户吃）；',
   '- 用户没有让你做任何事、只是闲聊时：不要输出动作块，正常聊天就好（偶尔想主动贴近时也可以发 hug/come，但别频繁）；',
   '- 你自己说的「我走过去/我坐下/我去弹琴」只有配合动作块才会真的发生，别光说不做。',
@@ -184,7 +184,7 @@ export async function cabinChatTurn(
 /** 解析后的 AI 回复：多条气泡消息 + 拦截到的动作序列 */
 export interface ParsedReply {
   msgs: string[];
-  actions: { type: string; room?: RoomId; song?: string; open?: boolean }[];
+  actions: { type: string; room?: RoomId; song?: string; open?: boolean; inst?: 'piano' | 'guitar' }[];
   /** 原始全文（记忆提取用） */
   raw: string;
 }
@@ -208,7 +208,7 @@ const ROOM_IDS = new Set(['lr', 'br', 'kt', 'ba', 'bal', 'sr', 'yd']);
  */
 export function parseAiReply(text: string): ParsedReply {
   const raw = text ?? '';
-  const actions: { type: string; room?: RoomId; song?: string; open?: boolean }[] = [];
+  const actions: { type: string; room?: RoomId; song?: string; open?: boolean; inst?: 'piano' | 'guitar' }[] = [];
   let body = raw;
   const m = ACT_RE.exec(raw);
   if (m) {
@@ -218,14 +218,15 @@ export function parseAiReply(text: string): ParsedReply {
       if (Array.isArray(parsed.actions)) {
         for (const a of parsed.actions) {
           if (!a || typeof a !== 'object') continue;
-          const rec = a as { type?: unknown; room?: unknown; song?: unknown; open?: unknown };
+          const rec = a as { type?: unknown; room?: unknown; song?: unknown; open?: unknown; inst?: unknown };
           if (typeof rec.type !== 'string') continue;
           const t = rec.type.trim();
           if (!ACT_KINDS.has(t)) continue;
           const room = typeof rec.room === 'string' && ROOM_IDS.has(rec.room) ? (rec.room as RoomId) : undefined;
           const song = typeof rec.song === 'string' && rec.song.trim() ? rec.song.trim().slice(0, 24) : undefined;
           const open = typeof rec.open === 'boolean' ? rec.open : undefined;
-          actions.push({ type: t, ...(room ? { room } : {}), ...(song ? { song } : {}), ...(open !== undefined ? { open } : {}) });
+          const inst = rec.inst === 'piano' || rec.inst === 'guitar' ? rec.inst : undefined;
+          actions.push({ type: t, ...(room ? { room } : {}), ...(song ? { song } : {}), ...(open !== undefined ? { open } : {}), ...(inst ? { inst } : {}) });
         }
       }
     } catch {
@@ -243,4 +244,61 @@ export function parseAiReply(text: string): ParsedReply {
     .filter((l) => l.length > 0 && !/^<<.*>>$/.test(l))
     .slice(0, 10); // 1~10 条（要求上限）
   return { msgs, actions, raw };
+}
+
+// ---------------- v10 意图兑底：点歌指令本地识别 ----------------
+
+/** 点歌意图（extractSongIntent 产物） */
+export interface SongIntent {
+  type: 'play' | 'music';
+  /** 点的歌名（没点名 = 即兴/随便放） */
+  song?: string;
+  /** 用户点名乐器：guitar/piano（null = 寻路就近选） */
+  inst: 'piano' | 'guitar' | null;
+}
+
+/** 演奏动词（弹/来首/唱首/点歌…；「弹」要求后接量词/琴类才兑底，避免「我想弹你」误触发） */
+const PLAY_HINT = /(弹|唱|来|点)\s*一?\s*(?:首|个|段|曲|歌|下|遍)|弹(?:钢琴|吉他|吉它|琴|曲子)|唱(?:一?首歌?|歌)|点歌|点一?首/;
+/** 放歌动词（音箱/唱片机场景：「放首歌/放音乐/放一首X」） */
+const MUSIC_HINT = /放\s*一?\s*(?:首|曲|段)|放\s*一?个\s*[^\s，。！？]{1,20}\s*听|放\s*一?\s*(?:首|个|点|些)?\s*(?:歌|音乐|曲子)|(?:音箱|音响|唱片机?|黑胶)/;
+/** 歌名提取：书名号/引号优先 */
+const SONG_BRACKET_RE = /[《「“\u0022']([^》」”\u0022']{1,24})[》」”\u0022']/;
+/** 歌名提取：动词 + 量词 + 歌名串（到空白/标点/句尾） */
+const SONG_LOOSE_RE = /(?:弹|唱|来|放|点)\s*一?\s*(?:首|个|段|曲|歌|下|遍)\s*([^\s，。！？,.!?、~～]{1,20})/;
+/** 歌名尾部语气清理：「小星星听」→「小星星」、「生日快乐歌」→「生日快乐」 */
+const SONG_TAIL_RE = /(?:的歌|歌|听|吧|呗|啦|哦|哈|呀|呢|嘛|呦)+$/;
+
+/**
+ * v10 点歌意图兑底：模型偶尔不输出动作块（尤其内置兑底模型），但用户话里是明确的
+ * 「弹 X / 放首歌」指令时，本地补一个 play/music 动作——保证「我说什么歌 TA 就弹什么歌」
+ * 这条体验线永远成立，不依赖任何模型的格式遵循度。
+ * 保守设计：必须有明确演奏动词；歌名提取不到就发不带 song 的动作（即兴/随便放）。
+ */
+export function extractSongIntent(text: string): SongIntent | null {
+  const t = (text ?? '').trim();
+  if (!t || t.length > 60) return null; // 超长文本多半是闲聊不是指令
+  const wantsPlay = PLAY_HINT.test(t);
+  const wantsMusic = !wantsPlay && MUSIC_HINT.test(t);
+  if (!wantsPlay && !wantsMusic) return null;
+  const inst: 'piano' | 'guitar' | null = /吉他|吉它|guitar/i.test(t)
+    ? 'guitar'
+    : /钢琴/.test(t)
+      ? 'piano'
+      : null;
+  // 歌名：书名号优先 → 动词+量词+串 → 没有 = 即兴/随便放
+  let song: string | undefined;
+  const br = t.match(SONG_BRACKET_RE);
+  if (br?.[1]) song = br[1].trim();
+  else {
+    const loose = t.match(SONG_LOOSE_RE);
+    if (loose?.[1]) song = loose[1].trim();
+  }
+  if (song) {
+    song = song.replace(SONG_TAIL_RE, '').trim().slice(0, 24);
+    // 单字/残量词（「来一首个」的「个」）不成歌名 → 当即兴处理
+    if (!song || song.length < 2) song = undefined;
+  }
+  // play：没提到琴类也没歌名时再验一道（「来一首个」这种残句不值得兑底）
+  if (wantsPlay && !song && !/钢琴|吉他|吉它|琴|曲|歌/.test(t)) return null;
+  return { type: wantsPlay ? 'play' : 'music', ...(song ? { song } : {}), inst };
 }

@@ -33,6 +33,7 @@ import {
   type PianoTimbre,
   twinkleTempoMs,
 } from './instrument';
+import { onSongState } from './ai-song';
 
 /** 音名 → 频率（演示曲排程用） */
 const NOTE_FREQ = new Map<string, number>([...PIANO_WHITE, ...PIANO_BLACK].map((k) => [k.name, k.freq]));
@@ -163,7 +164,7 @@ function GuitarPanel({
   // 按住滑动扫弦：记录上一根被拨的弦，滑入新弦时再拨（每根弦每次按住只拨一次入列去重）
   const lastStrum = useRef<{ pid: number; idx: number }[]>([]);
 
-  // 弦抖动动效（回放/外部音符事件点亮时只动不发声）
+  // 弦抖动动效（回放/外部音符事件点亮时只动不发声）——v10 C2：650ms 更明显
   const flashString = useCallback((idx: number) => {
     setVibing((v) => (v.includes(idx) ? v : [...v, idx]));
     const old = vibeTimers.current.get(idx);
@@ -173,7 +174,7 @@ function GuitarPanel({
       setTimeout(() => {
         setVibing((v) => v.filter((i) => i !== idx));
         vibeTimers.current.delete(idx);
-      }, 520),
+      }, 650),
     );
   }, []);
 
@@ -272,17 +273,25 @@ function GuitarPanel({
           lastStrum.current = lastStrum.current.filter((s) => s.pid !== e.pointerId);
         }}
       >
-        {GUITAR_STRINGS.map((s, i) => (
+        {GUITAR_STRINGS.map((s, i) => {
+          const hot = vibing.includes(i);
+          return (
           <div key={s.name + i} className="relative flex-1">
-            {/* 弦体：低音弦缠丝金色 / 高音弦银亮，拨动时抖动 */}
+            {/* 弦体：低音弦缠丝金色 / 高音弦银亮，拨动时抖动 + 高亮发光（v10 C2） */}
             <div
               className="absolute left-1/2 top-0 h-full w-[3.5px] -translate-x-1/2 rounded-full"
               style={{
-                background: s.wound
-                  ? 'linear-gradient(90deg,#b98f3e,#f3dd9a 45%,#b98f3e)'
-                  : 'linear-gradient(90deg,#9fa6ac,#f2f5f7 45%,#9fa6ac)',
-                boxShadow: '0 0 4px rgba(0,0,0,0.45)',
-                animation: vibing.includes(i) ? 'stringVibe 0.5s ease-out' : undefined,
+                background: hot
+                  ? s.wound
+                    ? 'linear-gradient(90deg,#ffd76e,#fff3c4 45%,#ffd76e)'
+                    : 'linear-gradient(90deg,#e8f0f5,#ffffff 45%,#e8f0f5)'
+                  : s.wound
+                    ? 'linear-gradient(90deg,#b98f3e,#f3dd9a 45%,#b98f3e)'
+                    : 'linear-gradient(90deg,#9fa6ac,#f2f5f7 45%,#9fa6ac)',
+                boxShadow: hot
+                  ? '0 0 4px rgba(0,0,0,0.45), 0 0 14px rgba(255,215,140,0.95), 0 0 26px rgba(255,200,110,0.5)'
+                  : '0 0 4px rgba(0,0,0,0.45)',
+                animation: hot ? 'stringVibe 0.5s ease-out' : undefined,
               }}
             />
             {/* 弦枕环 */}
@@ -292,7 +301,8 @@ function GuitarPanel({
               {s.name}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
       {/* 已按和弦徽标（按住和弦条时显示，扫弦出和弦把位） */}
       {heldChord && (
@@ -386,10 +396,13 @@ function PianoStage({
   timbre,
   onTimbre,
   onClose,
+  aiSongTitle,
 }: {
   timbre: PianoTimbre;
   onTimbre: (v: PianoTimbre) => void;
   onClose: () => void;
+  /** v10 C2：AI 正在弹的曲名（null = 没在弹）——键床上方曲名字幕 */
+  aiSongTitle: string | null;
 }) {
   const [pressed, setPressed] = useState<string[]>([]);
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -438,6 +451,7 @@ function PianoStage({
   );
 
   // 音符事件点亮对应琴键 + 上浮气泡（手弹经 emitNote 回路、演示曲同样点亮）
+  // v10 C2：点亮时长 300 → 430ms，视觉更跟手
   useEffect(() => {
     return onNote((e) => {
       if (e.kind !== 'piano') return;
@@ -449,7 +463,7 @@ function PianoStage({
         setTimeout(() => {
           setLit((l) => l.filter((n) => n !== e.name));
           litTimers.current.delete(e.name);
-        }, 300),
+        }, 430),
       );
       spawnBubble(e.name);
     });
@@ -619,11 +633,19 @@ function PianoStage({
       </div>
       {/* 键床（v6.7：删中部幕布舞台，工具条与琴键直接相贴）：象牙白键 + 亮面黑键（2+3 真实排布）+ 键上音符气泡 */}
       <div className="relative min-h-0 flex-1 border-t border-white/10 bg-[#050506]">
+      {/* 曲名字幕（v10 C2：AI 点歌弹奏时显示；演示字幕共存时上下叠放） */}
+      <div className="pointer-events-none absolute left-1/2 top-2 z-20 flex -translate-x-1/2 flex-col items-center gap-1">
+        {aiSongTitle && (
+          <div className="whitespace-nowrap rounded-full bg-[#f4b3c2]/25 px-3 py-1 text-[10.5px] font-semibold text-[#ffd9e4] ring-1 ring-[#f4b3c2]/50 backdrop-blur-sm">
+            ♪ 《{aiSongTitle}》 · TA 弹奏中
+          </div>
+        )}
         {demoOn && (
-          <div className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 whitespace-nowrap rounded-full bg-white/10 px-3 py-1 text-[10.5px] font-semibold text-white/85 backdrop-blur-sm">
+          <div className="whitespace-nowrap rounded-full bg-white/10 px-3 py-1 text-[10.5px] font-semibold text-white/85 backdrop-blur-sm">
             ♪ 小星星 演示中 · 点红点停止
           </div>
         )}
+      </div>
         {bubbles.map((b) => (
           <span
             key={b.id}
@@ -645,10 +667,10 @@ function PianoStage({
                     WebkitTapHighlightColor: 'transparent',
                     borderRadius: '0 0 4px 4px',
                     background: on
-                      ? 'linear-gradient(180deg,#ffe0ea 0%,#f9cfdd 100%)'
+                      ? 'linear-gradient(180deg,#ffd7e4 0%,#ff9fc2 100%)'
                       : 'linear-gradient(180deg,#ffffff 0%,#f4f3ee 62%,#e7e5dc 100%)',
                     boxShadow: on
-                      ? 'inset 0 2px 4px rgba(180,90,110,0.28), inset 0 -3px 4px -2px rgba(120,60,80,0.3)'
+                      ? 'inset 0 2px 4px rgba(180,90,110,0.28), inset 0 -3px 4px -2px rgba(120,60,80,0.3), 0 0 16px rgba(255,140,180,0.6), 0 0 30px rgba(255,120,170,0.35)'
                       : 'inset -1px 0 1.5px -1px rgba(60,55,40,0.35), inset 1px 0 1.5px -1px rgba(255,255,255,0.95), inset 0 -5px 6px -4px rgba(70,64,48,0.5)',
                     transform: on ? 'scaleY(0.975)' : undefined,
                     transformOrigin: 'top',
@@ -679,10 +701,11 @@ function PianoStage({
                   WebkitTapHighlightColor: 'transparent',
                   borderRadius: '0 0 3.5px 3.5px',
                   background: isOn
-                    ? 'linear-gradient(180deg,#4a4a54 0%,#26262e 100%)'
+                    ? 'linear-gradient(180deg,#7d7d8c 0%,#2c2c36 100%)'
                     : 'linear-gradient(180deg,#34343b 0%,#0e0e13 62%,#1f1f26 100%)',
-                  boxShadow:
-                    '0 3px 5px rgba(0,0,0,0.65), inset 0 2px 2px rgba(255,255,255,0.22), inset -1.5px 0 3px rgba(0,0,0,0.6), inset 0 -2px 2px rgba(255,255,255,0.1)',
+                  boxShadow: isOn
+                    ? '0 3px 5px rgba(0,0,0,0.65), inset 0 2px 2px rgba(255,255,255,0.28), inset -1.5px 0 3px rgba(0,0,0,0.6), inset 0 -2px 2px rgba(255,255,255,0.1), 0 0 14px rgba(255,150,185,0.55), 0 0 26px rgba(255,120,170,0.3)'
+                    : '0 3px 5px rgba(0,0,0,0.65), inset 0 2px 2px rgba(255,255,255,0.22), inset -1.5px 0 3px rgba(0,0,0,0.6), inset 0 -2px 2px rgba(255,255,255,0.1)',
                   transform: isOn ? 'scaleY(0.96)' : undefined,
                   transformOrigin: 'top',
                 }}
@@ -712,6 +735,14 @@ export default function InstrumentOverlay({
   onClose: () => void;
 }) {
   const stop = useCallback((e: React.SyntheticEvent) => e.stopPropagation(), []);
+
+  // v10 C2：AI 弹奏时显示曲名字幕（钢琴键床上方胶囊 / 吉他标题条；订阅 ai-song 曲目状态）
+  const [aiSong, setAiSong] = useState<{ title: string; kind: string } | null>(null);
+  useEffect(() => {
+    return onSongState((s) => {
+      setAiSong(s.playing && s.title && s.kind ? { title: s.title, kind: s.kind } : null);
+    });
+  }, []);
 
   // 音色（钢琴/吉他各自记忆，切面板不丢）
   const [pianoTimbre, setPianoTimbre] = useState<PianoTimbre>('grand');
@@ -745,7 +776,7 @@ export default function InstrumentOverlay({
       >
         {kind === 'piano' ? (
           // 钢琴：深色舞台一体面板（工具条内含红点演示/FX 音色/节拍器/结束）
-          <PianoStage timbre={pianoTimbre} onTimbre={setPianoTimbre} onClose={onClose} />
+          <PianoStage timbre={pianoTimbre} onTimbre={setPianoTimbre} onClose={onClose} aiSongTitle={aiSong && aiSong.kind !== 'guitar' ? aiSong.title : null} />
         ) : (
           <>
             {/* 标题条（毛玻璃）：左标题｜音色收缩选择 + 结束（吉他） */}
@@ -753,8 +784,14 @@ export default function InstrumentOverlay({
               className={`flex h-11 shrink-0 items-center justify-between gap-2 rounded-full pl-4 pr-1.5 ${GLASS}`}
             >
               <div className="flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-[#453e39]">
-                <Music className="h-4 w-4 shrink-0 text-[#d97f95]" />
-                <span className="truncate">弹吉他</span>
+                <Music className={`h-4 w-4 shrink-0 text-[#d97f95] ${aiSong ? 'animate-pulse' : ''}`} />
+                <span className="truncate">
+                  {aiSong?.kind === 'guitar' ? (
+                    <span className="text-[#c05c78]">♪ 《{aiSong.title}》 · TA 弹奏中</span>
+                  ) : (
+                    '弹吉他'
+                  )}
+                </span>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <TimbrePicker options={GUITAR_TIMBRES} value={timbre as GuitarTimbre} onChange={pickTimbre} />

@@ -236,9 +236,11 @@ export function companionAnchor(
     lz = Math.min(lz, (entry.fp[1] ?? 0) / 2 - 0.16);
   }
   // v10.3 外围走位点：坐/躺/吃饭（座位类）需要先走到家具外；目录里带了 out（如吊床）优先用
+  // v12 修复：play（钢琴 dz0.72 在琴身内/吉他贴墙）与 cook（灶台 dz0.55）的锚点同样落在
+  // 家具 footprint 内/边缘 —— 不先走外围点的话 A* 目标格被占不可达，path 空 → 直线怼墙永远到不了
   let wx: number | undefined;
   let wz: number | undefined;
-  if (kind === 'sit' || kind === 'lie' || kind === 'read' || kind === 'eat') {
+  if (kind === 'sit' || kind === 'lie' || kind === 'read' || kind === 'eat' || kind === 'play' || kind === 'cook') {
     const back = kind === 'lie' ? -1.45 : 0.55;
     const out = an.out ?? [lx, lz + back];
     wx = item.x + out[0] * cos + out[1] * sin;
@@ -699,6 +701,8 @@ export function companionStep(
         toIdle(rt, partnerPose);
         return true;
       }
+      // v12 walk 总时长计时（arrive 后清零重计坐姿时长；另作 15s 传送兜底用）
+      rt.actT += dt;
       const done = followPath(ta, rt.path, dt, collide);
       if (!done) stepToward(ta, t0.x, t0.z, ARRIVE, dt, WALK_SPEED, collide);
       // —— 卡死检测：0.9s 位移 < 0.05 → 自救阶梯（开门 → 重算×2 → 传送兜底，绝不放弃任务） ——
@@ -750,6 +754,27 @@ export function companionStep(
             rt.stuckZ = ta.z;
           }
         }
+      }
+      // —— v12 walk 总时长兜底：碰撞抖动会让 moved 永远 > 0.05（位移卡死检测失效），
+      //    TA 贴着家具边缘反复弹动却永远到不了锚点 —— 走路超过 15s 未到达 → 直接传送兜底，
+      //    下帧 remain < arriveR 自然进入 arrive 分支，任务一定完成 ——
+      if (rt.actT > 15) {
+        const bedIt = cmd.kind === 'lie' ? items.find((f) => f.id === rt.itemId) ?? null : null;
+        const spot = bedIt
+          ? sleepSpot(bedIt, me, poseRef.pose === 'lie')
+          : rt.anchor
+            ? { x: rt.anchor.tx, z: rt.anchor.tz }
+            : nearestFree(grid.blocked, t0.x, t0.z);
+        ta.x = spot.x;
+        ta.z = spot.z;
+        ta.moving = false;
+        rt.path = [];
+        rt.stuckT = 0;
+        rt.stuckTotal = 0;
+        rt.repaths = 0;
+        rt.repathed = false;
+        rt.stuckX = ta.x;
+        rt.stuckZ = ta.z;
       }
       const remain = Math.hypot(t0.x - ta.x, t0.z - ta.z);
       // v10.3：座位类目标（锚点在外围点附近，可能被相邻家具挤得略偏）放宽到位圈到 0.42
@@ -806,7 +831,8 @@ export function companionStep(
                         : 'sit';
           partnerPose.y = a?.y ?? 0;
           rt.phase = 'sit';
-          rt.sitUntil = rt.actT + stickyDur(cmd, cmd.kind);
+          // v12：actT 现在累计了 walk 时长（传送兜底用），坐姿保持时长不再叠加它
+          rt.sitUntil = stickyDur(cmd, cmd.kind);
           rt.actT = 0;
           onEvent({ ev: 'arrive', kind: cmd.kind, itemId: rt.itemId ?? undefined, memo: cmd.memo, song: cmd.song });
         } else if (cmd.kind === 'lamp' || cmd.kind === 'music') {

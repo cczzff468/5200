@@ -133,7 +133,7 @@ import { startWebSpeechSession, isWebSpeechSupported, type WebSpeechSession } fr
 import { createVoiceSegmenter, startManualRecording, transcribeBlob, type ManualRecording, type VoiceSegmenter } from '@/lib/ios/cabin-voice';
 import { speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
 import { type MemConvoTurn } from '@/lib/memory';
-import { buildCabinSystem, cabinChatTurn, parseAiReply, type CabinContext } from './companion-brain';
+import { buildCabinSystem, cabinChatTurn, extractSongIntent, parseAiReply, type CabinContext } from './companion-brain';
 import {
   buildDreamText,
   dayStr,
@@ -160,7 +160,7 @@ import {
 } from './cabin-mind';
 import { search as ncmSearch, songUrl as ncmSongUrl } from '@/lib/ios/music-api';
 import CabinHistorySheet from './CabinHistorySheet';
-import { playAiSongOnce, stopAiSong } from './ai-song';
+import { prefetchSong, playRequestedSong, stopAiSong } from './ai-song';
 import {
   cabinAfterChatTurn,
   cabinBehaviorMemoryOncePerDay,
@@ -1055,6 +1055,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
     if (cmd.kind !== 'free') companionStateRef.current = 'walking';
     else companionStateRef.current = 'idle';
     setSleepingUi(false); // 任何新指令都会把睡着的小人叫醒
+    // v10 A2 点歌预取：TA 还在走向乐器/音箱的路上就开始记谱（曲库命中的零开销），
+    // 到位时谱子大概率已就绪 → 即刻开弹，LLM 记谱延迟被走路时间吃掉
+    if ((cmd.kind === 'play' || cmd.kind === 'music') && cmd.song?.trim()) prefetchSong(cmd.song);
   }, []);
 
   /** v11 F2 日记素材：记一件 TA 今天做的事（跨天自动重置，同一天去重防刷屏） */
@@ -1097,26 +1100,36 @@ export default function CoupleHome({ close }: { close: () => void }) {
     }
   }, []);
 
-  /** B1 音箱放真歌：点歌名 → 网易云搜歌 → 直链播放；失败返回 false（调用方回落合成旋律） */
-  const playRealSong = useCallback(async (song?: string): Promise<boolean> => {
-    stopRealSong();
-    try {
-      const kw = (song ?? '').trim() || '轻音乐 纯音乐';
-      const res = await ncmSearch(kw, 1, 6);
-      const first = res.songs?.[0];
-      if (!first) return false;
-      const u = await ncmSongUrl(first.id, 'standard');
-      if (!u.url) return false;
-      const audio = new Audio(u.url);
-      audio.volume = 0.5;
-      audio.loop = true;
-      realAudioRef.current = audio;
-      await audio.play();
-      return true;
-    } catch {
-      return false;
-    }
-  }, [stopRealSong]);
+  /** B1 音箱放真歌：点歌名 → 网易云搜歌 → 直链播放；失败自动重试一次（换下一首候选/关键词降级），
+   *  两次都失败返回 false（调用方回落八音盒合成旋律 —— v10 C3） */
+  const playRealSong = useCallback(
+    async (song?: string): Promise<boolean> => {
+      stopRealSong();
+      /** 单次尝试：candidateIdx = 用搜到的第几首；kwSuffix = 关键词降级后缀 */
+      const tryOnce = async (candidateIdx: number, kwSuffix = ''): Promise<boolean> => {
+        try {
+          const kw = `${(song ?? '').trim() || '轻音乐 纯音乐'}${kwSuffix}`;
+          const res = await ncmSearch(kw, 1, 6);
+          const pick = res.songs?.[candidateIdx] ?? res.songs?.[0];
+          if (!pick) return false;
+          const u = await ncmSongUrl(pick.id, 'standard');
+          if (!u.url) return false;
+          const audio = new Audio(u.url);
+          audio.volume = 0.5;
+          audio.loop = true;
+          realAudioRef.current = audio;
+          await audio.play();
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      if (await tryOnce(0)) return true;
+      // C3 重试：第一次失败（搜不到/直链 403/播放被网络掐断）→ 换第二首候选再试一次
+      return tryOnce(1, (song ?? '').trim() && !(song ?? '').includes('纯音乐') ? ' 轻音乐' : '');
+    },
+    [stopRealSong],
+  );
 
   /** 需求结算快捷方式（伴随活动） */
   const settleMind = useCallback(
@@ -1147,10 +1160,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
           setPartnerPlaying(e.itemId ?? null);
           settleMind({ mood: 14, energy: -3 }, 'play');
           noteTaAction('弹了一首曲子');
-          // v9 点歌出声：真实乐器音色弹奏（钢琴 grand / 吉他拨弦），音符可视化由 partnerPlayingId 联动
+          // v10 点歌出声：真实乐器音色弹奏（钢琴 grand / 吉他拨弦），音符可视化由 partnerPlayingId 联动；
+          // 谱子三层取（曲库 → 记谱缓存 → LLM 现记，走路时已预取）——via 决定 toast 文案
           const inst = itemsRef.current.find((f) => f.id === e.itemId);
-          const played = playAiSongOnce(inst?.kind === 'guitar' ? 'guitar' : 'piano', e.song);
-          toast(played === '即兴' ? `${companion?.name ?? 'TA'}即兴弹了一段小曲～` : `${companion?.name ?? 'TA'}弹起了《${played}》～`);
+          const playKind = inst?.kind === 'guitar' ? 'guitar' : 'piano';
+          void playRequestedSong(playKind, e.song).then((r) => {
+            const name = companion?.name ?? 'TA';
+            if (r.via === 'llm') toast(`${name}现记了《${r.title}》的谱子，弹给你听～`);
+            else if (r.via === 'improv') toast(e.song?.trim() ? `《${e.song}》的谱没想起来，${name}即兴弹了一段～` : `${name}即兴弹了一段小曲～`);
+            else toast(`${name}弹起了《${r.title}》～`);
+          });
         } else if (e.kind === 'cook') { companionStateRef.current = 'cooking'; settleMind({}, 'cook'); }
         else if (e.kind === 'eat') { companionStateRef.current = 'eating'; settleMind({ food: 42, energy: 6, mood: 6 }, 'eat'); noteTaAction('吃了一顿饭'); }
         else if (e.kind === 'read') { companionStateRef.current = 'sitting'; settleMind({ mood: 6 }, 'read'); noteTaAction('看了会儿书'); }
@@ -1196,8 +1215,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
           }
           void playRealSong(e.song).then((ok) => {
             if (!ok) {
-              playAiSongOnce('musicbox', e.song, { loop: true, vol: 0.3 });
-              toast(`放了首《${e.song ?? '轻音乐'}》～（真歌源连不上，用八音盒代替啦）`);
+              // C3 两次都连不上真歌源 → 八音盒轻声循环（谱子同样三层取：曲库/缓存/现记）
+              void playRequestedSong('musicbox', e.song, { loop: true, vol: 0.3 }).then((r) => {
+                toast(
+                  r.via === 'improv' && e.song?.trim()
+                    ? `真歌源连不上，《${e.song}》的谱也没想起，用八音盒放了首轻音乐～`
+                    : `放了首《${r.title}》～（真歌源连不上，用八音盒代替啦）`,
+                );
+              });
             } else {
               toast(`音箱里放起了《${e.song ?? '一首好听的歌'}》，真的能听到哦～`);
             }
@@ -1608,11 +1633,37 @@ export default function CoupleHome({ close }: { close: () => void }) {
           await new Promise((r) => setTimeout(r, Math.min(3600, 900 + m.length * 70)));
         }
       }
-      // ⑦ 拦截动作块 → 寻路执行（多步排队；song 参数透传点歌）
+      // ⑦ 拦截动作块 → 寻路执行（多步排队；song/inst 参数透传点歌与乐器偏好）
       if (parsed.actions.length > 0) {
         const acts = parsed.actions.slice(0, 3);
-        companionQueueRef.current = acts.slice(1).map((a) => ({ kind: a.type as CompanionCmd['kind'], room: a.room, song: a.song, open: a.open, memo: 'ai-act' }));
-        issueCompanionCmd({ kind: acts[0].type as CompanionCmd['kind'], room: acts[0].room, song: acts[0].song, open: acts[0].open, memo: 'ai-act' });
+        // v10 意图增强：模型发了 play/music 但 song/inst 没带全（参数遵循度不稳定），
+        // 用户话里点名的歌与乐器本地补上 —— 「我说什么歌就弹什么歌」不依赖模型记参数
+        const intent = extractSongIntent(text);
+        if (intent) {
+          for (const a of acts) {
+            if (a.type !== 'play' && a.type !== 'music') continue;
+            if (!a.song && intent.song) a.song = intent.song;
+            if (a.type === 'play' && !a.inst && intent.inst) a.inst = intent.inst;
+          }
+        }
+        const instIdOf = (inst?: 'piano' | 'guitar') =>
+          inst ? itemsRef.current.find((f) => f.kind === inst && (f.y ?? 0) < 0.45)?.id : undefined;
+        companionQueueRef.current = acts.slice(1).map((a) => ({
+          kind: a.type as CompanionCmd['kind'],
+          room: a.room,
+          song: a.song,
+          open: a.open,
+          ...(a.type === 'play' && a.inst ? { itemId: instIdOf(a.inst) } : {}),
+          memo: 'ai-act',
+        }));
+        issueCompanionCmd({
+          kind: acts[0].type as CompanionCmd['kind'],
+          room: acts[0].room,
+          song: acts[0].song,
+          open: acts[0].open,
+          ...(acts[0].type === 'play' && acts[0].inst ? { itemId: instIdOf(acts[0].inst) } : {}),
+          memo: 'ai-act',
+        });
         // —— v10 A10 行为强化：刚做完的事被夸/被嫌弃 → 记下来影响以后 ——
         const m2 = mindRef.current;
         if (m2 && companion && ['play', 'cook', 'music', 'eat', 'dance'].includes(lastActRef.current)) {
@@ -1621,6 +1672,22 @@ export default function CoupleHome({ close }: { close: () => void }) {
           } else if (/难听|不好听|难吃|太吵|不好吃|吵死了/.test(text)) {
             reinforceActivity(companion.id, m2, lastActRef.current, false);
           }
+        }
+      } else {
+        // v10 意图兜底：模型没发动作块（内置兜底模型偶尔偷懒，只回一句「我这就去弹」），
+        // 但用户话里是明确的弹琴/放歌指令 → 本地补发动作，让 TA 说到做到
+        const intent = extractSongIntent(text);
+        if (intent) {
+          const instItem =
+            intent.type === 'play' && intent.inst
+              ? itemsRef.current.find((f) => f.kind === intent.inst && (f.y ?? 0) < 0.45)
+              : undefined;
+          issueCompanionCmd({
+            kind: intent.type,
+            ...(intent.song ? { song: intent.song } : {}),
+            ...(instItem ? { itemId: instItem.id } : {}),
+            memo: 'intent-fallback',
+          });
         }
       }
       // ⑧ 对话记忆入库（标准管线：碎片 → 核心 → 长期；scene=拾光小屋）

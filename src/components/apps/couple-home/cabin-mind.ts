@@ -428,7 +428,7 @@ export interface ScheduleSlot {
 
 /** 按小时取作息（周末赖床/午后茶） */
 export function scheduleSlot(hour: number, weekend: boolean): ScheduleSlot {
-  const h = weekend ? hour : hour;
+  const h = hour;
   if (h >= 23 || h < 6) return { plan: '夜深了，该上床睡觉了', act: 'sleep' };
   if (weekend && h < 9) return { plan: '周末赖床，再眯一会儿' };
   if (h < 7) return { plan: '刚醒，迷迷糊糊的' };
