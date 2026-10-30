@@ -1253,6 +1253,23 @@
     0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
+/* 复古小圆钮（线下模式顶部按钮等圆形图标钮的独立椭圆包裹：银灰拟物 + 8px 圆角，第六十五轮） */
+.rt-chip {
+  background: linear-gradient(180deg, #FDFDFE 0%, #E9EAEE 55%, #DCDDE2 100%);
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 1px #AFB1B9,
+    0 1px 2px rgba(24, 28, 44, 0.14);
+}
+.dark .rt-chip {
+  background: linear-gradient(180deg, #52525C 0%, #43434D 55%, #38383F 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 0 0 1px #26262E,
+    0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
 /* 复古发送键（微信古早 = 深草绿实心小方角；QQ 古早 = 复古蓝） */
 .rt-send,
 .rt-send-qq {

@@ -23,6 +23,13 @@ import {
   type ChatDecorSettings,
   type DecorAppId,
 } from './chat-decor';
+import {
+  defaultCustomCss,
+  normalizeCustomCss,
+  type CustomCssConfig,
+  type CustomCssScheme,
+  type CustomCssScope,
+} from './custom-css';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
@@ -387,6 +394,9 @@ interface SettingsState {
   /** 聊天输入框自定义（输入框占位文字 + 输入框上方快捷功能；微信/QQ 两 App 隔离，信息 App 不接入；
    *  持久化 settings.chatDecor，默认/液态两种界面主题下都生效） */
   chatDecor: ChatDecorConfig;
+  /** 自定义 CSS（第六十五轮）：global=全局所有界面 / chat-wx·chat-qq=对应 App 聊天页 /
+   *  offline=线下模式所有界面；schemes=已命名方案收藏。持久化 settings.customCss */
+  customCss: CustomCssConfig;
   loaded: boolean;
 
   /** 设置主屏图标风格（立即持久化；HomeScreen/多任务实时响应） */
@@ -403,6 +413,10 @@ interface SettingsState {
   setLiquidSkin: (app: BubbleAppId, patch: Partial<LiquidSkinSettings>) => void;
   /** 更新聊天输入框自定义（patch 合并到对应 App；立即持久化，聊天页实时响应） */
   setChatDecor: (app: DecorAppId, patch: Partial<ChatDecorSettings>) => void;
+  /** 应用/清除某个作用域的自定义 CSS（css 传空串 = 清除；立即持久化，对应界面实时响应） */
+  setCustomCssActive: (scope: CustomCssScope, css: string) => void;
+  /** 替换自定义 CSS 方案收藏列表（立即持久化） */
+  setCustomCssSchemes: (list: CustomCssScheme[]) => void;
 
   load: () => Promise<void>;
   /** 锁屏总开关：关闭时同时停用密码并立即回到主屏幕 */
@@ -481,12 +495,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
   bubbleSchemes: [],
   liquidSkin: defaultLiquidSkinConfig(),
   chatDecor: defaultChatDecorConfig(),
+  customCss: defaultCustomCss(),
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec, islandPersistentRec, bubbleStyleRec, bubbleSchemesRec, liquidSkinRec, chatDecorRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec, islandPersistentRec, bubbleStyleRec, bubbleSchemesRec, liquidSkinRec, chatDecorRec, customCssRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -513,6 +528,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'bubbleSchemes'),
         localDB.get('settings', 'liquidSkin'),
         localDB.get('settings', 'chatDecor'),
+        localDB.get('settings', 'customCss'),
       ]);
 
       // 性能：八个含密文信封的字段并行解密（getKey 并发单飞，密钥只读一次 IDB）——
@@ -830,6 +846,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         liquidSkin: normalizeLiquidSkinConfig(liquidSkinRec?.value),
         // 聊天输入框自定义：无记录/脏数据回默认（normalize 内部校验文字长度/功能 key）
         chatDecor: normalizeChatDecorConfig(chatDecorRec?.value),
+        // 自定义 CSS：无记录/脏数据回默认（normalize 内部夹长度/方案数量）
+        customCss: normalizeCustomCss(customCssRec?.value),
         loaded: true,
       });
       // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
@@ -912,6 +930,20 @@ export const useSettings = create<SettingsState>((set, get) => ({
     const next = normalizeChatDecorConfig({ ...cur, [app]: { ...cur[app], ...patch } });
     set({ chatDecor: next });
     void localDB.put('settings', { key: 'chatDecor', value: next });
+  },
+
+  setCustomCssActive: (scope, css) => {
+    const cur = get().customCss;
+    const next = normalizeCustomCss({ ...cur, [scope]: css });
+    set({ customCss: next });
+    void localDB.put('settings', { key: 'customCss', value: next });
+  },
+
+  setCustomCssSchemes: (list) => {
+    const cur = get().customCss;
+    const next = normalizeCustomCss({ ...cur, schemes: list });
+    set({ customCss: next });
+    void localDB.put('settings', { key: 'customCss', value: next });
   },
 
   setAppFont: (id) => {

@@ -22,6 +22,8 @@ import { Check, Palette, RotateCcw, Trash2 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { LiquidSkinPanel } from './liquid-skin-settings';
 import { ChatDecorPanel } from './chat-decor-settings';
+import { CustomCssEditor } from './custom-css-editor';
+import { GLOBAL_CSS_EXAMPLE } from '@/lib/ios/custom-css';
 import type { LiquidSkinSettings } from '@/lib/ios/liquid-skin';
 import { useSettings } from '@/lib/ios/store';
 import {
@@ -799,6 +801,19 @@ function ThemeContent({
           </div>
         </FadeInSection>
       )}
+
+      {/* 5. 自定义 CSS（第六十五轮，用户指定）：全局作用域 —— 所有界面/面板/按钮（含线下模式）；
+          支持文件上传 + 保存为方案（自定义名字）+ 应用/清除两枚主按钮 + 示例可照改；
+          三 App 主题页共用同一份全局 CSS（作用域是整台手机，与 App 无关） */}
+      <FadeInSection index={2} className="mt-4" role="region" ariaLabel="自定义 CSS">
+        <SectionLabel accent={meta.accent}>自定义CSS</SectionLabel>
+        <div className="mt-2.5">
+          <CustomCssEditor scope="global" example={GLOBAL_CSS_EXAMPLE} accent={meta.accent} onToast={onToast} />
+        </div>
+        <p className="mt-2 px-2 text-[11.5px] leading-[1.5] text-black/35 dark:text-white/35">
+          想只改某个聊天界面？去对应 App 的 联系人 › 聊天设置 › 自定义CSS；想只改线下模式？去 线下模式 › 现场设置 › 自定义CSS。
+        </p>
+      </FadeInSection>
     </>
   );
 }

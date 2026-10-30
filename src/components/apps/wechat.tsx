@@ -271,6 +271,7 @@ import { liquidTabLabel, LIQUID_TABS, type LiquidTabKey } from '@/lib/ios/liquid
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
 import { BubbleTail } from './bubble-tail';
 import { bubbleVisual, isLiquidTheme, isRetroTheme } from '@/lib/ios/bubble-style';
+import { scopeCss } from '@/lib/ios/custom-css';
 import { ChatSkinProvider, useChatSkin } from '@/lib/ios/chat-skin';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
@@ -5093,6 +5094,8 @@ function ChatPage({
   const liquidSkinWx = useSettings((s) => s.liquidSkin.wx);
   // 聊天输入框自定义（本轮新增）：输入框占位文字 + 加号面板功能（默认/液态两种主题都生效）
   const chatDecorWx = useSettings((s) => s.chatDecor.wx);
+  // 自定义 CSS（第六十五轮）：聊天作用域 —— 只作用于微信聊天页（根节点挂 data-chat-css="wx"）
+  const chatCustomCss = useSettings((s) => s.customCss['chat-wx']);
   const [msgs, setMsgs] = useState<WxMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
   // 每轮 AI 回合开头再异步刷新一次；回合内同步读最近一次构建结果（systemFull 拼装是同步的）——
@@ -8841,6 +8844,7 @@ function ChatPage({
       ref={pageRef}
       data-liquid-theme={liquid ? 'true' : 'false'}
       data-rt-theme={retro ? 'true' : 'false'}
+      data-chat-css="wx"
       className={
         liquid
           ? 'lg-root absolute inset-0 z-20 flex h-full w-full flex-col text-black dark:text-white'
@@ -8849,6 +8853,8 @@ function ChatPage({
           : 'absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white'
       }
     >
+      {/* 自定义 CSS（聊天作用域）：只影响本聊天页，选择器已限定在 [data-chat-css="wx"] 内 */}
+      {chatCustomCss.trim() ? <style>{scopeCss(chatCustomCss, '[data-chat-css="wx"]')}</style> : null}
       {/* 聊天背景层（聊天设置页设置：纯色/图片；顶栏与输入栏自身有底色，不受影响） */}
       {bg.mode !== 'default' && (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />

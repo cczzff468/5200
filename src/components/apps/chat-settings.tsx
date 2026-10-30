@@ -40,6 +40,7 @@ import { useSettings } from '@/lib/ios/store';
 import { getBoundBookIds, loadBooks, saveBooks, type WorldBook } from '@/lib/ios/worldbook';
 import { LocalToast, useLocalToast } from './page-toast';
 import { ChatDisplaySection } from './chat-display-settings';
+import { ChatCssSection } from './custom-css-editor';
 import { useChatSkin } from '@/lib/ios/chat-skin';
 
 export type ChatSettingsVariant = 'wx' | 'qq' | 'sms';
@@ -286,9 +287,12 @@ export function ChatSettingsPage({
   /** 关系编辑弹窗（多账号关系感知：保存当前账号视角下的关系） */
   const [relationOpen, setRelationOpen] = useState(false);
   const [relationDraft, setRelationDraft] = useState('');
+  /** 页内 toast（自定义 CSS 编辑器等区块的操作反馈） */
+  const [toast, showToast] = useLocalToast();
 
   return (
     <div className={`absolute inset-0 z-40 flex h-full w-full flex-col ${pageCls}`}>
+      <LocalToast msg={toast} />
       {/* 顶栏 */}
       <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${headerH} items-center px-2`}>
@@ -415,6 +419,10 @@ export function ChatSettingsPage({
         {/* 显示设置（本轮：折叠区块——头像样式 / 已读未读回执 / 时间显示，按联系人隔离；
             信息端（sms）不参与，未传 contactId（如自己会话）也不显示） */}
         {variant !== 'sms' && contactId ? <ChatDisplaySection app={variant} contactId={contactId} /> : null}
+
+        {/* 自定义 CSS（第六十五轮，用户指定「联系人聊天设置界面添加自定义css，只改聊天界面」）：
+            折叠区块，作用域 = 该 App 的聊天页（消息/气泡/输入栏），按 App 隔离（wx/qq），与联系人无关 */}
+        {variant !== 'sms' ? <ChatCssSection app={variant} accent={accent} onToast={showToast} /> : null}
 
         {/* 回复条数：AI 按选定条数连发多条消息（独立二级页选择） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
