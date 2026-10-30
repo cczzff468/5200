@@ -482,7 +482,8 @@ function ArchivePanel({ archives, meetActive, hasProgress, onClose, onCreate, on
   };
 
   return (
-    <div className={`absolute inset-0 z-30 flex flex-col overflow-hidden ${skin.pageCls} text-black dark:text-white`}>
+    /* off-panel-archive：存档面板根锚点（线下自定义 CSS 模板可单独改存档页） */
+    <div className={`off-panel-archive absolute inset-0 z-30 flex flex-col overflow-hidden ${skin.pageCls} text-black dark:text-white`}>
       <div className="flex items-start justify-between px-5 pb-3 pt-[58px]">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-black/35 dark:text-white/35">Save Files</p>
@@ -700,7 +701,8 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, avail
   const up = (patch: Partial<OfflineMeetSettings>) => setD((prev) => ({ ...prev, ...patch }));
 
   return (
-    <div className={`absolute inset-0 z-30 flex flex-col overflow-hidden ${skin.pageCls} text-black dark:text-white`}>
+    /* off-panel-settings：现场设置面板根锚点（线下自定义 CSS 模板可单独改设置页） */
+    <div className={`off-panel-settings absolute inset-0 z-30 flex flex-col overflow-hidden ${skin.pageCls} text-black dark:text-white`}>
       <div className="flex items-start justify-between px-5 pb-3 pt-[58px]">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-black/35 dark:text-white/35">Meeting Preferences</p>
@@ -1990,8 +1992,9 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
 
       {/* 主体 */}
       {!meet ? (
-        /* —— 极简开始页：头像 + 名字 + 开始见面（承接条数在「现场设置」最上方配置） —— */
-        <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-16">
+        /* —— 极简开始页：头像 + 名字 + 开始见面（承接条数在「现场设置」最上方配置） ——
+           off-hero：开始页中心区锚点（线下自定义 CSS 模板可单独改开始页） */
+        <div className="off-hero flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-16">
           <div className="flex flex-col items-center gap-2.5">
             <MeetAvatar contact={contact} size={76} />
             <p className="text-[17px] font-semibold text-black/85 dark:text-white/90">{shownName}</p>
@@ -2024,8 +2027,8 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       ) : (
         /* —— 见面进行中 —— */
         <>
-          {/* 叙事流 */}
-          <div ref={scrollRef} className="mt-3 flex-1 space-y-4 overflow-y-auto px-4 pb-3 thin-scrollbar">
+          {/* 叙事流（off-feed：见面页消息流锚点，线下自定义 CSS 可单独改） */}
+          <div ref={scrollRef} className="off-feed mt-3 flex-1 space-y-4 overflow-y-auto px-4 pb-3 thin-scrollbar">
             {meet.entries.map((e) =>
               e.role === 'char' ? (
                 <div key={e.id} className={`rounded-[20px] rounded-tl-[8px] p-4 ${skin.cardCls}`}>
@@ -2118,13 +2121,13 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
             </div>
           ) : null}
 
-          {/* 底部：继续 / 重Roll 圆钮 + 输入框（保存走顶部收藏钮） */}
+          {/* 底部：继续 / 重Roll 圆钮 + 输入框（保存走顶部收藏钮）；off-dock = 底部输入区锚点 */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               sendInput();
             }}
-            className="flex items-center gap-1.5 px-3 pb-[30px] pt-1"
+            className="off-dock flex items-center gap-1.5 px-3 pb-[30px] pt-1"
           >
             <button
               type="button"
@@ -2172,9 +2175,9 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
         </>
       )}
 
-      {/* 过去的见面（历史记录，只读回看） */}
+      {/* 过去的见面（历史记录，只读回看）；off-panel-history = 历史页锚点 */}
       {historyOpen ? (
-        <div className={`absolute inset-0 z-40 flex flex-col overflow-hidden ${skin.pageCls} text-black dark:text-white`}>
+        <div className={`off-panel-history absolute inset-0 z-40 flex flex-col overflow-hidden ${skin.pageCls} text-black dark:text-white`}>
           <div className="flex items-center gap-2 px-4 pb-3 pt-[58px]">
             <button
               type="button"

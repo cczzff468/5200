@@ -293,7 +293,10 @@ export function ChatSettingsPage({
   const [toast, showToast] = useLocalToast();
 
   return (
-    <div className={`absolute inset-0 z-40 flex h-full w-full flex-col ${pageCls}`}>
+    <div
+      className={`absolute inset-0 z-40 flex h-full w-full flex-col ${pageCls}`}
+      data-chat-set-app={variant}
+    >
       <LocalToast msg={toast} />
       {/* 顶栏 */}
       <div className={`shrink-0 pt-[54px] ${barCls}`}>
@@ -822,7 +825,10 @@ export function ChatReplyCountPage({
   const testPrefix = variant;
 
   return (
-    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${pageCls}`}>
+    <div
+      className={`absolute inset-0 z-50 flex h-full w-full flex-col ${pageCls}`}
+      data-chat-set-app={variant}
+    >
       {/* 顶栏 */}
       <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className={`flex ${headerH} items-center px-2`}>
@@ -1273,7 +1279,7 @@ function translateTokens(variant: ChatSettingsVariant) {
         ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white'
         : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white',
     cardCls: sms
-      ? 'overflow-hidden rounded-[14px] bg-black/[0.045] dark:bg-white/[0.08]'
+      ? 'chat-set-card overflow-hidden rounded-[14px] bg-black/[0.045] dark:bg-white/[0.08]'
       : wx
         ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]'
         : 'rounded-[14px] bg-white dark:bg-[#232529]',
@@ -1283,7 +1289,7 @@ function translateTokens(variant: ChatSettingsVariant) {
         ? 'border-black/5 dark:border-white/10'
         : 'border-black/[0.04] dark:border-white/[0.06]',
     rowCls: sms
-      ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[15.5px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+      ? 'chat-set-row flex w-full items-center justify-between px-4 py-3 text-left text-[15.5px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
       : wx
         ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
         : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]',
@@ -1572,7 +1578,10 @@ export function SmsChatSettingsPage({
   const [relationOpen, setRelationOpen] = useState(false);
   const [relationDraft, setRelationDraft] = useState('');
   return (
-    <div className={`absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}>
+    <div
+      className={`chat-set-page absolute inset-0 z-50 flex h-full w-full flex-col ${t.pageCls}`}
+      data-chat-set-app="sms"
+    >
       {/* 顶栏 */}
       <div className={`shrink-0 pt-[54px] ${barCls}`}>
         <div className="relative flex h-12 items-center px-2">

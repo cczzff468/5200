@@ -22,7 +22,7 @@ import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar'
 import { LiquidSkinPanel } from './liquid-skin-settings';
 import { ChatDecorPanel } from './chat-decor-settings';
 import { CustomCssEditor } from './custom-css-editor';
-import { GLOBAL_CSS_TEMPLATES } from '@/lib/ios/custom-css';
+import { globalCssTemplates } from '@/lib/ios/custom-css';
 import type { LiquidSkinSettings } from '@/lib/ios/liquid-skin';
 import { useSettings } from '@/lib/ios/store';
 import {
@@ -816,12 +816,14 @@ function ThemeContent({
 // ================= 自定义 CSS 界面内容（本轮：从主题 Tab 底部独立成顶部第三个 Tab；去掉指路卡只留编辑器） =================
 
 /** 自定义 CSS 内容（全局作用域）：全局 CSS 作用于整台手机（页面/面板/按钮/状态栏，含线下模式）；
- *  编辑器内置示例模板与方案管理（全内联无弹窗）。 */
+ *  编辑器内置示例模板与方案管理（全内联无弹窗）。
+ *  第七十六轮（用户指定）：模板按宿主 App 过滤——微信只显示「微信模板 + 手机公共」，
+ *  QQ 只显示「QQ模板 + 手机公共」，信息只显示「信息模板 + 手机公共」，不再全部显示。 */
 function CssContent({ app, onToast }: { app: BubbleAppId; onToast: (m: string) => void }) {
   const meta = PLATFORM_META[app];
   return (
     <FadeInSection index={0} role="region" ariaLabel="全局自定义 CSS">
-      <CustomCssEditor scope="global" templates={GLOBAL_CSS_TEMPLATES} accent={meta.accent} onToast={onToast} />
+      <CustomCssEditor scope="global" templates={globalCssTemplates(app)} accent={meta.accent} onToast={onToast} />
     </FadeInSection>
   );
 }

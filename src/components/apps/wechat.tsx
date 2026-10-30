@@ -12904,7 +12904,7 @@ function FriendDetailPage({
   // Task 28-b 「音视频通话」底部 ActionSheet（语音通话/视频通话 + 取消；点遮罩也可取消）
   const [callSheetOpen, setCallSheetOpen] = useState(false);
   return (
-    <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
+    <div className="wx-fdetail-page absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
       {/* 顶栏：返回 + ··· */}
       <div className="shrink-0 pt-[54px]">
         <div className="flex h-11 items-center px-2">
