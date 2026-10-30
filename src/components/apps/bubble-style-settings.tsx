@@ -1,24 +1,23 @@
 'use client';
 
 /**
- * 聊天装扮设置（第十七轮建立 · 本轮重构：顶部双 Tab 一页直切 + 整体简约）
+ * 聊天装扮设置（第十七轮建立 · 本轮：顶部三 Tab + 主题界面简约美化）
  * ---------------------------------------------------------------------------
  * 入口：QQ 个人抽屉 / 设置 › 个性装扮；微信「发现」页 › 主题；
  *       信息 App › 聊天设置 › 主题。
  *
- * 本轮（用户指定：主题界面顶部两个 Tab，不再要主页中转）：
- *  1. 单页直进：导航栏下方一枚 iOS 分段胶囊（主题 / 气泡），
- *     滑动小白丸指示，点选即切、轻淡入过渡；
- *  2. 「主题」Tab：顶部实时大预览卡（选哪个主题就显示哪个主题的整页样式，
- *     液态顶栏名字区联动液态设置所见即所得）+ 主题选择卡 +
- *     「液态玻璃设置」收缩面板（紧跟液态玻璃主题下方，无独立界面）；
- *  3. 「气泡」Tab：实时预览 + 四格样式 + HSL 颜色 + 收藏夹；
+ * 本轮（用户指定：主题界面顶部再加「自定义CSS」Tab + 主题界面美化）：
+ *  1. 顶部 iOS 分段胶囊扩为三 Tab：主题 / 气泡 / 自定义CSS ——
+ *     全局自定义 CSS 编辑器从主题 Tab 底部独立成页；
+ *  2. 「主题」Tab 简约美化：主题选择卡选中态改细 accent 描边 + 轻光晕，
+ *     名字随 accent 上色，未选中 hover 轻浮起；
+ *  3. 「气泡」Tab：实时预览 + 四格样式 + HSL 颜色 + 收藏夹（不变）；
  *  4. 主题切换仍联动气泡（液态玻璃 ↔ 原生默认，setBubbleTheme 内实现）；
  *     气泡界面单独换样式不动主题（patchAppStyle 只写 kind）。
  */
 import { useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, Palette, RotateCcw, Trash2 } from 'lucide-react';
+import { Check, MapPin, MessageCircle, Palette, RotateCcw, Trash2 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { LiquidSkinPanel } from './liquid-skin-settings';
 import { ChatDecorPanel } from './chat-decor-settings';
@@ -603,38 +602,39 @@ export interface ThemeStylePageProps {
   wxMe?: { name: string; avatar: string | null };
 }
 
-/** 装扮页（顶部双 Tab 一页直切）：导航栏下方一枚 iOS 分段胶囊（主题 / 气泡），
+/** 装扮页（顶部三 Tab 一页直切）：导航栏下方一枚 iOS 分段胶囊（主题 / 气泡 / 自定义CSS），
  *  滑动小白丸指示，点选即切、轻淡入过渡；返回键直接回宿主 App；三个 App 入口 API 不变。 */
 export function ThemeStylePage({ app, onBack, onToast, title = '主题', wxMe }: ThemeStylePageProps) {
-  /** 顶部双 Tab：theme = 主题（默认）；bubble = 气泡 */
-  const [tab, setTab] = useState<'theme' | 'bubble'>('theme');
+  /** 顶部三 Tab：theme = 主题（默认）；bubble = 气泡；css = 自定义 CSS（全局作用域） */
+  const [tab, setTab] = useState<'theme' | 'bubble' | 'css'>('theme');
   /** 共用滚动容器：切 Tab 回到顶部（设置页习惯） */
   const scrollRef = useRef<HTMLDivElement>(null);
   const bg = 'bg-[#F4F5F7] dark:bg-[#0E1014]';
   const navCls = 'bg-[#F4F5F7]/75! dark:bg-[#0E1014]/75!';
 
-  const switchTab = (k: 'theme' | 'bubble') => {
+  const switchTab = (k: 'theme' | 'bubble' | 'css') => {
     if (k === tab) return;
     setTab(k);
     navigator.vibrate?.(6);
     scrollRef.current?.scrollTo({ top: 0 });
   };
 
-  const tabs: { key: 'theme' | 'bubble'; label: string }[] = [
+  const tabs: { key: 'theme' | 'bubble' | 'css'; label: string }[] = [
     { key: 'theme', label: '主题' },
     { key: 'bubble', label: '气泡' },
+    { key: 'css', label: '自定义CSS' },
   ];
 
   return (
     <IOSScreen className={`relative ${bg}`}>
       <IOSNavBar title={title} large={false} left={<IOSBackButton onClick={onBack} label="" />} className={navCls} />
 
-      {/* 顶部双 Tab：iOS 分段胶囊（主题 / 气泡），滑动小白丸指示，点选即切 */}
+      {/* 顶部三 Tab：iOS 分段胶囊（主题 / 气泡 / 自定义CSS），滑动小白丸指示，点选即切 */}
       <div className="relative z-10 flex shrink-0 justify-center px-4 pb-1.5 pt-2">
         <div
           role="tablist"
           aria-label="装扮分类"
-          className="flex w-[218px] rounded-full bg-black/[0.055] p-[3px] dark:bg-white/[0.08]"
+          className="flex w-full max-w-[320px] rounded-full bg-black/[0.055] p-[3px] dark:bg-white/[0.08]"
         >
           {tabs.map((t) => {
             const active = tab === t.key;
@@ -646,7 +646,7 @@ export function ThemeStylePage({ app, onBack, onToast, title = '主题', wxMe }:
                 aria-selected={active}
                 data-testid={`dress-tab-${t.key}`}
                 onClick={() => switchTab(t.key)}
-                className="relative z-10 flex-1 rounded-full py-[6px] text-[13.5px] font-semibold leading-none"
+                className="relative z-10 flex-1 rounded-full py-[6px] text-[13px] font-semibold leading-none"
               >
                 {active && (
                   <motion.span
@@ -678,8 +678,10 @@ export function ThemeStylePage({ app, onBack, onToast, title = '主题', wxMe }:
         >
           {tab === 'theme' ? (
             <ThemeContent app={app} onToast={onToast} wxMe={wxMe} />
-          ) : (
+          ) : tab === 'bubble' ? (
             <BubbleStyleContent app={app} onToast={onToast} />
+          ) : (
+            <CssContent app={app} onToast={onToast} />
           )}
         </motion.div>
       </div>
@@ -741,28 +743,33 @@ function ThemeContent({
                     onToast(theme === 'liquid' ? '已切换液态玻璃主题' : theme === 'retro' ? '已切换古早主题' : '已恢复默认主题');
                   }
                 }}
-                className={`w-full rounded-[18px] bg-white p-2 pb-1.5 text-left ring-1 transition-all active:scale-[0.98] dark:bg-[#1C1E23] ${
-                  selected ? 'ring-[1.5px]' : 'ring-black/[0.05] dark:ring-white/[0.08]'
+                className={`w-full rounded-[18px] bg-white p-2 pb-1.5 text-left ring-1 transition-all duration-200 active:scale-[0.98] dark:bg-[#1C1E23] ${
+                  selected
+                    ? 'ring-2'
+                    : 'ring-black/[0.05] hover:-translate-y-[2px] hover:shadow-[0_6px_18px_rgba(17,24,39,0.07)] hover:ring-black/[0.12] dark:ring-white/[0.08] dark:hover:ring-white/[0.16]'
                 }`}
                 style={
                   selected
-                    ? { ['--tw-ring-color' as string]: meta.accent, boxShadow: `0 8px 22px ${withAlpha(meta.accent, 0.16)}` }
-                    : { boxShadow: '0 3px 12px rgba(17,24,39,0.05)' }
+                    ? { ['--tw-ring-color' as string]: meta.accent, boxShadow: `0 6px 18px ${withAlpha(meta.accent, 0.13)}` }
+                    : { boxShadow: '0 2px 10px rgba(17,24,39,0.04)' }
                 }
               >
                 <div className="relative">
                   <ThemeMiniThumb theme={theme} accent={meta.accent} app={app} />
                   {selected && (
                     <span
-                      className="absolute right-1.5 top-1.5 flex h-[17px] w-[17px] items-center justify-center rounded-full text-white shadow-md"
-                      style={{ backgroundColor: meta.accent }}
+                      className="absolute right-1.5 top-1.5 flex h-[16px] w-[16px] items-center justify-center rounded-full text-white ring-2 ring-white/95"
+                      style={{ backgroundColor: meta.accent, boxShadow: '0 2px 6px rgba(0,0,0,0.20)' }}
                     >
-                      <Check className="h-[10px] w-[10px]" strokeWidth={3.4} />
+                      <Check className="h-[9px] w-[9px]" strokeWidth={3.4} />
                     </span>
                   )}
                 </div>
                 <div className="flex items-center justify-center pb-[2px] pt-[7px]">
-                  <span className="truncate text-[12.5px] font-semibold leading-none text-black/85 dark:text-white/90">
+                  <span
+                    className="truncate text-[12.5px] font-semibold leading-none text-black/85 dark:text-white/90"
+                    style={selected ? { color: meta.accent } : undefined}
+                  >
                     {BUBBLE_THEME_LABEL[theme]}
                   </span>
                 </div>
@@ -802,17 +809,60 @@ function ThemeContent({
         </FadeInSection>
       )}
 
-      {/* 5. 自定义 CSS（第六十五轮，用户指定）：全局作用域 —— 所有界面/面板/按钮（含线下模式）；
-          支持文件上传 + 保存为方案（自定义名字）+ 应用/清除两枚主按钮 + 示例可照改；
-          三 App 主题页共用同一份全局 CSS（作用域是整台手机，与 App 无关） */}
-      <FadeInSection index={2} className="mt-4" role="region" ariaLabel="自定义 CSS">
-        <SectionLabel accent={meta.accent}>自定义CSS</SectionLabel>
+    </>
+  );
+}
+
+// ================= 自定义 CSS 界面内容（本轮：从主题 Tab 底部独立成顶部第三个 Tab） =================
+
+/** 自定义 CSS 内容（全局作用域）：编辑器 + 「只想改一处」指路卡 ——
+ *  全局 CSS 作用于整台手机（页面/面板/按钮/状态栏，含线下模式）；
+ *  单个联系人的聊天 CSS 在聊天设置里；线下模式 CSS 在现场设置里。 */
+function CssContent({ app, onToast }: { app: BubbleAppId; onToast: (m: string) => void }) {
+  const meta = PLATFORM_META[app];
+  return (
+    <>
+      <FadeInSection index={0} role="region" ariaLabel="全局自定义 CSS">
+        <SectionLabel accent={meta.accent}>全局自定义 CSS</SectionLabel>
         <div className="mt-2.5">
           <CustomCssEditor scope="global" templates={GLOBAL_CSS_TEMPLATES} accent={meta.accent} onToast={onToast} />
         </div>
-        <p className="mt-2 px-2 text-[11.5px] leading-[1.5] text-black/35 dark:text-white/35">
-          想只改某个聊天界面？去对应 App 的 联系人 › 聊天设置 › 自定义CSS；想只改线下模式？去 线下模式 › 现场设置 › 自定义CSS。
-        </p>
+      </FadeInSection>
+
+      <FadeInSection index={1} className="mt-4" role="region" ariaLabel="更多自定义 CSS 入口">
+        <SectionLabel accent={meta.accent}>只想改一处？</SectionLabel>
+        <div className="mt-2.5 rounded-[20px] bg-white/70 p-4 backdrop-blur-xl ring-1 ring-black/[0.05] dark:bg-white/[0.06] dark:ring-white/[0.10]">
+          <ul className="space-y-3.5">
+            <li className="flex items-start gap-2.5">
+              <span
+                aria-hidden="true"
+                className="mt-[1px] grid h-[27px] w-[27px] shrink-0 place-items-center rounded-[10px]"
+                style={{ backgroundColor: withAlpha(meta.accent, 0.12), color: meta.accent }}
+              >
+                <MessageCircle className="h-[14px] w-[14px]" strokeWidth={2.2} />
+              </span>
+              <span className="min-w-0 text-[13px] leading-[1.65] text-black/55 dark:text-white/60">
+                <b className="font-semibold text-black/80 dark:text-white/85">只改某个联系人的聊天界面</b>
+                <br />
+                聊天页右上角「···」› 聊天设置 › 自定义CSS
+              </span>
+            </li>
+            <li className="flex items-start gap-2.5">
+              <span
+                aria-hidden="true"
+                className="mt-[1px] grid h-[27px] w-[27px] shrink-0 place-items-center rounded-[10px]"
+                style={{ backgroundColor: withAlpha(meta.accent, 0.12), color: meta.accent }}
+              >
+                <MapPin className="h-[14px] w-[14px]" strokeWidth={2.2} />
+              </span>
+              <span className="min-w-0 text-[13px] leading-[1.65] text-black/55 dark:text-white/60">
+                <b className="font-semibold text-black/80 dark:text-white/85">只改线下模式</b>
+                <br />
+                线下模式 › 现场设置 › 自定义CSS
+              </span>
+            </li>
+          </ul>
+        </div>
       </FadeInSection>
     </>
   );
