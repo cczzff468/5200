@@ -1403,14 +1403,15 @@
   right: -5px;
   top: 12px;
 }
-/* 古早 QQ 顶部小逗号 beak 尾巴（第六十二轮收细：凸 5px/高 9px/距顶 5px）：
-   尾巴覆盖气泡 y5-14 色带——渐变取该色带两端的插值色（42px 单行泡折算），
+/* 古早 QQ 底部弯钩尾巴（第六十三轮，用户指定「小尾巴放下面，跟七彩差不多」）：
+   与七彩 im 尾巴同款信息式剪影（14×18 贴底悬挂）——渐变对齐泡身底部 18px 色带
+   （42px 单行泡折算 y24-42：我方 #C3C3C3→#B9B9B9 / 对方 #B3CDE7→#A9C9E5），
    与泡身过渡视觉无缝；深色成对切换——.dark 用平色 background 接管（与泡身同色对） */
 .rt-beak-mine {
-  background: linear-gradient(180deg, #CDCDCD 0%, #C8C8C8 100%);
+  background: linear-gradient(180deg, #C3C3C3 0%, #B9B9B9 100%);
 }
 .rt-beak-theirs {
-  background: linear-gradient(180deg, #BFD6EB 0%, #BAD1E9 100%);
+  background: linear-gradient(180deg, #B3CDE7 0%, #A9C9E5 100%);
 }
 .dark .rt-beak-mine {
   background: #4E4E57;

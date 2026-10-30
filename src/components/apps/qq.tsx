@@ -238,7 +238,7 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { ThemeStylePage } from './bubble-style-settings';
 import { fmtMsgTime, readTextOf, useChatDisplay, type ChatDisplayConfig } from '@/lib/ios/chat-display';
-import { bubbleVisual, isLiquidTheme, isRetroTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT, RETRO_BEAK_CLIP_LEFT, RETRO_BEAK_CLIP_RIGHT, RETRO_BEAK_CLIP_TYPING_LEFT } from '@/lib/ios/bubble-style';
+import { bubbleVisual, isLiquidTheme, isRetroTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { ChatSkinProvider } from '@/lib/ios/chat-skin';
 import { chatPlaceholder, resolveQuickKeys } from '@/lib/ios/chat-decor';
 import { ChatQuickBar, type QuickBarItem } from './chat-quick-bar';
@@ -7554,7 +7554,7 @@ function ChatPage({
                         decorated={bvis.override}
                         style={
                           bvis.override
-                            ? bvis.style /* 古早四角统一 12px（retroQqRadius），语音泡无 beak 无需盖角 */
+                            ? bvis.style /* 古早四角统一 12px（retroQqRadius），语音泡无尾巴无需盖角 */
                             : m.role === 'me'
                               ? { backgroundColor: '#0099FF' }
                               : undefined
@@ -7583,11 +7583,14 @@ function ChatPage({
                         bvis.override
                           ? {
                               ...bvis.style,
-                              // 信息式组尾小角：装扮纯色/七彩（im 尾巴）时，组尾尾巴侧底角收 5px
-                              //（inline borderRadius 会盖掉类圆角，故在此一并算好四角）；胶囊装扮保持 999px
+                              // 信息式组尾小角：装扮纯色/七彩（im 尾巴）与古早（retro 尾巴）时，
+                              // 组尾尾巴侧底角收 5px（inline borderRadius 会盖掉类圆角，故在此一并算好四角；
+                              // im 基角 18px / retro 基角 12px=retroQqRadius）；胶囊装扮保持 999px
                               ...(bvis.tail === 'im'
                                 ? { borderRadius: lastOfGroup ? (mine ? '18px 18px 5px 18px' : '18px 18px 18px 5px') : '18px' }
-                                : {}),
+                                : bvis.tail === 'retro'
+                                  ? { borderRadius: lastOfGroup ? (mine ? '12px 12px 5px 12px' : '12px 12px 12px 5px') : '12px' }
+                                  : {}),
                             }
                           : mine
                           ? { backgroundColor: '#0099FF' }
@@ -7597,10 +7600,10 @@ function ChatPage({
                       {/* 气泡小尾巴（第五十一轮，用户指定：QQ 换色/七彩气泡变成信息 App 同款）：
                           装扮 solid/七彩 = 信息 App 同款底部弯钩剪影尾巴（14×18px，随 tailColor 上色，
                           我方右侧/对方左侧，与头像底端对齐）；毛玻璃/液态胶囊无尾巴。
-                          第六十一轮：参考图复测缩至真实比例；第六十二轮（用户复验「过大过厚，
-                          细一点」）：再收细——凸 5px/高 9px/距顶 5px、内嵌 3px，凹弧外缘同款
-                          （尖端陡回、近泡身平顺并入）。渐变随 .rt-beak-* 类对齐泡身色带
-                          （深色自适应；自定义色时 tailColor 平色）。QQ 泡已去描边，定位无补偿 */}
+                          第六十三轮（用户指定「古早气泡小尾巴放下面，跟七彩差不多」）：QQ 古早
+                          尾巴从顶部 beak 改为同款底部弯钩剪影（同几何同定位）；非自定义色时颜色
+                          走 .rt-beak-* 类（渐变对齐泡身底部色带 + 深色自适应；自定义色时
+                          tailColor 平色）。QQ 泡已去描边，定位无补偿 */}
                       {bvis.tail === 'im' && (
                         <span
                           aria-hidden="true"
@@ -7611,11 +7614,11 @@ function ChatPage({
                       {bvis.tail === 'retro' && (
                         <span
                           aria-hidden="true"
-                          className={`absolute top-[5px] ${mine ? '-right-[5px]' : '-left-[5px]'} h-[9px] w-[8px] ${
+                          className={`absolute bottom-0 ${mine ? '-right-[6px]' : '-left-[6px]'} h-[18px] w-[14px] ${
                             bvis.tailColor ? '' : mine ? 'rt-beak-mine' : 'rt-beak-theirs'
                           }`}
                           style={{
-                            clipPath: mine ? RETRO_BEAK_CLIP_RIGHT : RETRO_BEAK_CLIP_LEFT,
+                            clipPath: mine ? TAIL_CLIP_RIGHT : TAIL_CLIP_LEFT,
                             ...(bvis.tailColor ? { background: bvis.tailColor } : {}),
                           }}
                         />
@@ -7770,8 +7773,13 @@ function ChatPage({
                   tvis.override
                     ? {
                         ...tvis.style,
-                        // 信息式尾巴侧底角收 5px（与文本气泡组尾同口径；胶囊装扮保持 999px）
-                        ...(tvis.tail === 'im' ? { borderRadius: '18px 18px 18px 5px' } : {}),
+                        // 信息式尾巴侧底角收 5px（与文本气泡组尾同口径；im 基角 18px /
+                        // 古早基角 12px=retroQqRadius；胶囊装扮保持 999px）
+                        ...(tvis.tail === 'im'
+                          ? { borderRadius: '18px 18px 18px 5px' }
+                          : tvis.tail === 'retro'
+                            ? { borderRadius: '12px 12px 12px 5px' }
+                            : {}),
                       }
                     : undefined
                 }
@@ -7784,12 +7792,13 @@ function ChatPage({
                   />
                 )}
                 {tvis.tail === 'retro' && (
-                  /* 古早 beak（第六十二轮收细）：正在输入指示是对方气泡——左侧迷你版
-                     （按同款几何等比缩至 7×8、凸 4px、距顶 4px）；QQ 泡无描边，定位无补偿 */
+                  /* 古早底部弯钩尾巴（第六十三轮，用户指定「放下面，跟七彩差不多」）：
+                     与文本气泡同款信息式剪影（14×18、凸 6px、贴底）；颜色走 .rt-beak-theirs
+                     类（深色自适应；自定义色时 tailColor 平色） */
                   <span
                     aria-hidden="true"
-                    className={`absolute top-[4px] -left-[4px] h-[8px] w-[7px] ${tvis.tailColor ? '' : 'rt-beak-theirs'}`}
-                    style={{ clipPath: RETRO_BEAK_CLIP_TYPING_LEFT, ...(tvis.tailColor ? { background: tvis.tailColor } : {}) }}
+                    className={`absolute bottom-0 -left-[6px] h-[18px] w-[14px] ${tvis.tailColor ? '' : 'rt-beak-theirs'}`}
+                    style={{ clipPath: TAIL_CLIP_LEFT, ...(tvis.tailColor ? { background: tvis.tailColor } : {}) }}
                   />
                 )}
                 <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">
