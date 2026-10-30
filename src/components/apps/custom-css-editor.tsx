@@ -1,41 +1,44 @@
 'use client';
 
 /**
- * 自定义 CSS 编辑器（第六十五轮）—— 三处入口共用一套编辑器
+ * 自定义 CSS 编辑器（第六十五轮首建 · 第六十九轮重设计）—— 三处入口共用一套编辑器
  * ---------------------------------------------------------------------------
  * - 主题界面（个性装扮 › 主题 Tab 最底部）：scope='global'，作用于整个手机；
  * - 联系人聊天设置（折叠区块「自定义CSS」，紧跟显示设置之后）：scope='chat-wx'/'chat-qq'，
  *   只作用于该 App 的聊天界面；
  * - 线下模式 › 现场设置（「自定义CSS」卡片）：scope='offline'，只作用于线下所有界面。
  *
- * 功能（用户指定）：代码编辑框 + 示例（可按照改）+ 文件上传（.css）+
- * 保存为方案（自定义名字，按作用域归类列表，可再次填入/应用/删除）+
- * 底部「应用 / 清除」两枚主按钮（应用=立即生效；清除=移除已应用的 CSS 恢复默认）。
+ * 第六十九轮（用户指定「示例 = 让用户照着添加自己想 要的主题」+「美化一下，简约美观」）：
+ * - 「载入示例」按钮升级为「示例主题」chips —— 每枚 chip 是一整套配色主题（带色板预览点），
+ *   点按即把整套主题模板填进编辑框，用户改几个颜色就是自己的主题（不再是一堆零散细节）；
+ * - 编辑框升级为「代码窗口」造型（窗口栏 = 红黄绿圆点 + 文件名 + 字数/未应用小圆点）；
+ * - 方案列表改扁平细线风格、按钮统一小圆角，整体更简约。
  */
 import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronDown, Code2, Eraser, FileUp, Play, Trash2, Wand2 } from 'lucide-react';
+import { Check, ChevronDown, Code2, Eraser, FileUp, Play, Trash2 } from 'lucide-react';
 import {
   CUSTOM_CSS_MAX_LEN,
   CUSTOM_CSS_NAME_MAX,
-  chatCssExample,
+  chatCssPresets,
   type CustomCssScope,
   type CustomCssScheme,
+  type CssThemePreset,
 } from '@/lib/ios/custom-css';
 import { useSettings } from '@/lib/ios/store';
 
-/** 作用域元信息（标题/说明文字） */
-const SCOPE_META: Record<CustomCssScope, { title: string; hint: string }> = {
-  global: { title: '自定义 CSS', hint: '作用于整个手机：所有界面、所有面板、所有按钮（含线下模式）。' },
-  'chat-wx': { title: '自定义 CSS', hint: '只作用于微信的聊天界面（消息、气泡、输入栏），其他界面不受影响。' },
-  'chat-qq': { title: '自定义 CSS', hint: '只作用于 QQ 的聊天界面（消息、气泡、输入栏），其他界面不受影响。' },
-  offline: { title: '自定义 CSS', hint: '只作用于线下模式的所有界面（开始页、见面页、存档、现场设置、历史）。' },
+/** 作用域元信息（说明文字 + 代码窗口文件名） */
+const SCOPE_META: Record<CustomCssScope, { title: string; hint: string; file: string }> = {
+  global: { title: '自定义 CSS', hint: '作用于整个手机：所有界面、面板、按钮（含线下模式）', file: 'phone.css' },
+  'chat-wx': { title: '自定义 CSS', hint: '只改微信的聊天界面，其他界面不受影响', file: 'chat-wx.css' },
+  'chat-qq': { title: '自定义 CSS', hint: '只改 QQ 的聊天界面，其他界面不受影响', file: 'chat-qq.css' },
+  offline: { title: '自定义 CSS', hint: '只改线下模式的所有界面和按钮', file: 'offline.css' },
 };
 
 export interface CustomCssEditorProps {
   scope: CustomCssScope;
-  /** 示例 CSS（点「载入示例」填进编辑框，用户可在此基础上修改） */
-  example: string;
+  /** 示例主题（chips 点按填入编辑框，用户在整套模板上改色做自己的主题） */
+  presets: CssThemePreset[];
   /** 主色（按钮/选中态） */
   accent: string;
   /** 弹提示 */
@@ -45,7 +48,7 @@ export interface CustomCssEditorProps {
 }
 
 /** 单个作用域的编辑器本体（状态读写都走 useSettings.customCss） */
-export function CustomCssEditor({ scope, example, accent, onToast, variant = 'card' }: CustomCssEditorProps) {
+export function CustomCssEditor({ scope, presets, accent, onToast, variant = 'card' }: CustomCssEditorProps) {
   const meta = SCOPE_META[scope];
   const activeCss = useSettings((s) => s.customCss[scope]);
   const schemes = useSettings((s) => s.customCss.schemes);
@@ -60,7 +63,6 @@ export function CustomCssEditor({ scope, example, accent, onToast, variant = 'ca
 
   const mineSchemes = schemes.filter((s) => s.scope === scope);
   const dirty = draft !== activeCss;
-  const charCount = draft.length;
 
   const apply = () => {
     const v = draft.trim().slice(0, CUSTOM_CSS_MAX_LEN);
@@ -75,9 +77,9 @@ export function CustomCssEditor({ scope, example, accent, onToast, variant = 'ca
     onToast('已清除，恢复默认样式');
   };
 
-  const loadExample = () => {
-    setDraft(example);
-    onToast('已载入示例，可修改后点「应用」');
+  const loadPreset = (p: CssThemePreset) => {
+    setDraft(p.css);
+    onToast(`已载入「${p.name}」，改改颜色点「应用」`);
   };
 
   const onFile = (f: File | null | undefined) => {
@@ -102,7 +104,7 @@ export function CustomCssEditor({ scope, example, accent, onToast, variant = 'ca
       onToast('先写点 CSS 再保存');
       return;
     }
-    const name = nameDraft.trim().slice(0, CUSTOM_CSS_NAME_MAX) || `我的样式 ${mineSchemes.length + 1}`;
+    const name = nameDraft.trim().slice(0, CUSTOM_CSS_NAME_MAX) || `我的主题 ${mineSchemes.length + 1}`;
     const scheme: CustomCssScheme = {
       id: `css-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name,
@@ -133,19 +135,23 @@ export function CustomCssEditor({ scope, example, accent, onToast, variant = 'ca
 
   return (
     <div className={shellCls} data-testid={`custom-css-editor-${scope}`} data-scope={scope}>
-      {/* 标题行：作用范围说明 + 已应用徽标 */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[15px] font-semibold text-black/85 dark:text-white/90">
-            <Code2 className="h-[16px] w-[16px]" style={{ color: accent }} aria-hidden="true" />
-            {meta.title}
-          </p>
-          <p className="mt-0.5 text-[12px] leading-[1.5] text-black/40 dark:text-white/40">{meta.hint}</p>
+      {/* 标题行：图标 + 标题/说明 + 已应用徽标 */}
+      <div className="flex items-center gap-2.5">
+        <span
+          className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[10px]"
+          style={{ backgroundColor: `color-mix(in srgb, ${accent} 12%, transparent)`, color: accent }}
+          aria-hidden="true"
+        >
+          <Code2 className="h-[15px] w-[15px]" strokeWidth={2.2} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[14.5px] font-semibold leading-tight text-black/85 dark:text-white/90">{meta.title}</p>
+          <p className="mt-[2px] truncate text-[11.5px] leading-[1.45] text-black/40 dark:text-white/40">{meta.hint}</p>
         </div>
         {activeCss ? (
           <span
-            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-[3px] text-[10.5px] font-semibold text-white"
-            style={{ backgroundColor: accent }}
+            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-[3px] text-[10.5px] font-medium"
+            style={{ backgroundColor: `color-mix(in srgb, ${accent} 12%, transparent)`, color: accent }}
           >
             <Check className="h-[10px] w-[10px]" strokeWidth={3} aria-hidden="true" />
             已应用
@@ -153,112 +159,145 @@ export function CustomCssEditor({ scope, example, accent, onToast, variant = 'ca
         ) : null}
       </div>
 
-      {/* 代码编辑框 */}
-      <textarea
-        value={draft}
-        onChange={(e) => setDraft(e.target.value.slice(0, CUSTOM_CSS_MAX_LEN))}
-        spellCheck={false}
-        rows={8}
-        placeholder={'/* 在这里写 CSS，或点下方「载入示例」 */'}
-        aria-label={`自定义 CSS 编辑框（${meta.title}）`}
-        data-testid={`custom-css-textarea-${scope}`}
-        className="mt-3 w-full resize-y rounded-[12px] border border-black/[0.08] bg-black/[0.02] p-3 font-mono text-[12px] leading-[1.65] text-black/85 outline-none transition-colors placeholder:text-black/25 focus:border-black/30 dark:border-white/[0.12] dark:bg-black/25 dark:text-white/85 dark:placeholder:text-white/25 dark:focus:border-white/35"
-      />
-      <div className="mt-1 flex items-center justify-between text-[10.5px] text-black/30 dark:text-white/30">
-        <span>{dirty ? '有未应用的修改' : '与当前应用一致'}</span>
-        <span className="tabular-nums">
-          {charCount} / {CUSTOM_CSS_MAX_LEN}
-        </span>
-      </div>
-
-      {/* 工具行：载入示例 + 上传文件 */}
-      <div className="mt-2.5 grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={loadExample}
-          data-testid={`custom-css-example-${scope}`}
-          className="flex h-9 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-black/[0.03] text-[12.5px] font-medium text-black/60 transition-colors active:bg-black/[0.07] dark:border-white/[0.10] dark:bg-white/[0.06] dark:text-white/65 dark:active:bg-white/[0.10]"
-        >
-          <Wand2 className="h-[14px] w-[14px]" aria-hidden="true" />
-          载入示例
-        </button>
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          data-testid={`custom-css-upload-${scope}`}
-          className="flex h-9 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-black/[0.03] text-[12.5px] font-medium text-black/60 transition-colors active:bg-black/[0.07] dark:border-white/[0.10] dark:bg-white/[0.06] dark:text-white/65 dark:active:bg-white/[0.10]"
-        >
-          <FileUp className="h-[14px] w-[14px]" aria-hidden="true" />
-          上传 CSS 文件
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".css,text/css"
-          className="hidden"
-          aria-hidden="true"
-          tabIndex={-1}
-          onChange={(e) => {
-            onFile(e.target.files?.[0]);
-            e.target.value = '';
-          }}
+      {/* 代码窗口：窗口栏（红黄绿圆点 + 文件名 + 未应用小圆点/字数）+ 编辑区 */}
+      <div className="mt-3 overflow-hidden rounded-[14px] ring-1 ring-black/[0.08] focus-within:ring-[1.5px] focus-within:ring-black/30 dark:ring-white/[0.12] dark:focus-within:ring-white/35">
+        <div className="flex items-center gap-2 border-b border-black/[0.06] bg-black/[0.03] px-3 py-[7px] dark:border-white/[0.08] dark:bg-white/[0.04]">
+          <span className="flex gap-[5px]" aria-hidden="true">
+            <i className="h-[9px] w-[9px] rounded-full bg-[#FF5F57]/80" />
+            <i className="h-[9px] w-[9px] rounded-full bg-[#FEBC2E]/80" />
+            <i className="h-[9px] w-[9px] rounded-full bg-[#28C840]/80" />
+          </span>
+          <span className="font-mono text-[11px] text-black/40 dark:text-white/40">{meta.file}</span>
+          <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10.5px] tabular-nums text-black/35 dark:text-white/35">
+            {dirty ? (
+              <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                <i className="h-[6px] w-[6px] rounded-full bg-current" aria-hidden="true" />
+                未应用
+              </span>
+            ) : null}
+            {draft.length.toLocaleString()} / {CUSTOM_CSS_MAX_LEN.toLocaleString()}
+          </span>
+        </div>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value.slice(0, CUSTOM_CSS_MAX_LEN))}
+          spellCheck={false}
+          rows={8}
+          placeholder={'/* 在这里写 CSS，或点下面的示例主题 */'}
+          aria-label={`自定义 CSS 编辑框（${meta.title}）`}
+          data-testid={`custom-css-textarea-${scope}`}
+          className="block w-full resize-y bg-[#FCFBF8] px-3.5 py-3 font-mono text-[12px] leading-[1.7] text-black/85 outline-none placeholder:text-black/25 dark:bg-[#151517] dark:text-white/85 dark:placeholder:text-white/25"
         />
       </div>
 
-      {/* 保存方案（自定义名字） */}
-      <div className="mt-3">
-        <div className="flex gap-2">
-          <input
-            value={nameDraft}
-            onChange={(e) => setNameDraft(e.target.value)}
-            maxLength={CUSTOM_CSS_NAME_MAX}
-            placeholder="方案名字，如：我的按压手感"
-            aria-label="方案名称"
-            data-testid={`custom-css-name-${scope}`}
-            className="h-9 min-w-0 flex-1 rounded-full border border-black/[0.08] bg-white px-3 text-[12.5px] text-black outline-none placeholder:text-black/25 focus:border-black/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/25 dark:focus:border-white/35"
-          />
+      {/* 示例主题 chips：每枚 = 一整套主题（色板预览点 + 名字），点按填入编辑框 */}
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <span className="shrink-0 py-[3px] text-[11.5px] text-black/35 dark:text-white/35">示例主题</span>
+        {presets.map((p, i) => (
           <button
+            key={p.name}
             type="button"
-            onClick={saveScheme}
-            disabled={!draft.trim()}
-            data-testid={`custom-css-save-${scope}`}
-            className="h-9 shrink-0 rounded-full px-4 text-[12.5px] font-semibold text-white transition-transform active:scale-95 disabled:opacity-40"
-            style={{ backgroundColor: accent }}
+            onClick={() => loadPreset(p)}
+            aria-label={`载入示例主题 ${p.name}`}
+            data-testid={i === 0 ? `custom-css-example-${scope}` : undefined}
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white/60 py-[5px] pl-2 pr-2.5 text-[12px] font-medium text-black/65 transition-colors active:bg-black/[0.06] dark:border-white/[0.10] dark:bg-white/[0.06] dark:text-white/70 dark:active:bg-white/[0.10]"
           >
-            保存
+            <span className="flex gap-[3px]" aria-hidden="true">
+              {p.swatch.map((c) => (
+                <i key={c} className="h-[9px] w-[9px] rounded-full ring-1 ring-black/[0.06] dark:ring-white/10" style={{ backgroundColor: c }} />
+              ))}
+            </span>
+            {p.name}
           </button>
-        </div>
+        ))}
+      </div>
 
-        {/* 已保存方案列表（本作用域） */}
-        {mineSchemes.length > 0 ? (
-          <ul className="mt-2.5 space-y-1.5">
+      {/* 上传 CSS 文件（.css） */}
+      <button
+        type="button"
+        onClick={() => fileRef.current?.click()}
+        data-testid={`custom-css-upload-${scope}`}
+        className="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-[12px] border border-dashed border-black/[0.15] text-[12.5px] font-medium text-black/45 transition-colors active:bg-black/[0.04] dark:border-white/[0.16] dark:text-white/45 dark:active:bg-white/[0.06]"
+      >
+        <FileUp className="h-[14px] w-[14px]" aria-hidden="true" />
+        上传 CSS 文件
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".css,text/css"
+        className="hidden"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={(e) => {
+          onFile(e.target.files?.[0]);
+          e.target.value = '';
+        }}
+      />
+
+      {/* 保存方案（自定义名字） */}
+      <div className="mt-2.5 flex gap-2">
+        <input
+          value={nameDraft}
+          onChange={(e) => setNameDraft(e.target.value)}
+          maxLength={CUSTOM_CSS_NAME_MAX}
+          placeholder="给这套主题起个名字…"
+          aria-label="方案名称"
+          data-testid={`custom-css-name-${scope}`}
+          className="h-9 min-w-0 flex-1 rounded-[12px] border border-black/[0.08] bg-white px-3 text-[12.5px] text-black outline-none placeholder:text-black/25 focus:border-black/30 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white dark:placeholder:text-white/25 dark:focus:border-white/35"
+        />
+        <button
+          type="button"
+          onClick={saveScheme}
+          disabled={!draft.trim()}
+          data-testid={`custom-css-save-${scope}`}
+          className="h-9 shrink-0 rounded-[12px] px-4 text-[12.5px] font-semibold text-white transition-transform active:scale-95 disabled:opacity-40"
+          style={{ backgroundColor: accent }}
+        >
+          保存
+        </button>
+      </div>
+
+      {/* 已保存方案列表（本作用域，扁平细线风格） */}
+      {mineSchemes.length > 0 ? (
+        <div className="mt-2.5">
+          <p className="px-0.5 pb-1 text-[11px] text-black/35 dark:text-white/35">我的方案</p>
+          <ul className="divide-y divide-black/[0.05] dark:divide-white/[0.07]">
             {mineSchemes.map((s) => {
               const active = s.css === activeCss;
               return (
                 <li
                   key={s.id}
                   data-testid={`custom-css-scheme-${scope}`}
-                  className="flex items-center gap-2 rounded-full border border-black/[0.06] bg-white/70 py-1.5 pl-3 pr-1.5 dark:border-white/[0.08] dark:bg-white/[0.05]"
+                  className="flex items-center gap-1 py-[7px]"
                 >
+                  <i
+                    className="h-[6px] w-[6px] shrink-0 rounded-full"
+                    style={{ backgroundColor: active ? accent : 'transparent', boxShadow: active ? 'none' : 'inset 0 0 0 1.5px rgba(127,127,127,0.4)' }}
+                    aria-hidden="true"
+                  />
                   <button
                     type="button"
                     onClick={() => {
                       setDraft(s.css);
                       onToast(`已把「${s.name}」填入编辑框`);
                     }}
-                    className="min-w-0 flex-1 text-left"
+                    className="min-w-0 flex-1 py-0.5 text-left"
                     title="点按填入编辑框"
                   >
                     <span className="flex items-center gap-1.5">
                       <span className="truncate text-[13px] font-medium text-black/80 dark:text-white/85">{s.name}</span>
                       {active ? (
-                        <span className="shrink-0 rounded-full px-1.5 py-[1px] text-[9.5px] font-semibold text-white" style={{ backgroundColor: accent }}>
+                        <span
+                          className="shrink-0 rounded-full px-1.5 py-[1px] text-[9.5px] font-semibold"
+                          style={{ backgroundColor: `color-mix(in srgb, ${accent} 12%, transparent)`, color: accent }}
+                        >
                           应用中
                         </span>
                       ) : null}
                     </span>
                     <span className="mt-[1px] block truncate text-[10.5px] tabular-nums text-black/35 dark:text-white/35">
-                      {s.css.split('\n').length} 行 · {s.css.length} 字符
+                      {s.css.split('\n').length} 行 · {s.css.length.toLocaleString()} 字符
                     </span>
                   </button>
                   <button
@@ -266,28 +305,30 @@ export function CustomCssEditor({ scope, example, accent, onToast, variant = 'ca
                     aria-label={`应用 ${s.name}`}
                     title="直接应用"
                     onClick={() => applyScheme(s)}
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors active:opacity-60"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] transition-colors active:bg-black/[0.06] dark:active:bg-white/[0.08]"
                     style={{ color: accent }}
                   >
-                    <Play className="h-[13px] w-[13px]" aria-hidden="true" />
+                    <Play className="h-[14px] w-[14px]" aria-hidden="true" />
                   </button>
                   <button
                     type="button"
                     aria-label={`删除 ${s.name}`}
                     title="删除"
                     onClick={() => removeScheme(s)}
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-black/30 transition-colors active:bg-[#FF3B30]/12 active:text-[#FF3B30] dark:text-white/35 dark:active:text-[#FF6B6B]"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-black/30 transition-colors active:bg-[#FF3B30]/12 active:text-[#FF3B30] dark:text-white/35 dark:active:text-[#FF6B6B]"
                   >
-                    <Trash2 className="h-[13px] w-[13px]" aria-hidden="true" />
+                    <Trash2 className="h-[14px] w-[14px]" aria-hidden="true" />
                   </button>
                 </li>
               );
             })}
           </ul>
-        ) : (
-          <p className="mt-2 text-[11.5px] text-black/30 dark:text-white/30">还没有保存的方案——写好 CSS 后起个名字保存，随时可以再应用。</p>
-        )}
-      </div>
+        </div>
+      ) : (
+        <p className="mt-2.5 px-0.5 text-[11.5px] leading-[1.5] text-black/30 dark:text-white/30">
+          保存的主题会出现在这里，随时一键换装。
+        </p>
+      )}
 
       {/* 底部两枚主按钮：应用 / 清除 */}
       <div className="mt-4 grid grid-cols-2 gap-2.5">
@@ -295,8 +336,8 @@ export function CustomCssEditor({ scope, example, accent, onToast, variant = 'ca
           type="button"
           onClick={apply}
           data-testid={`custom-css-apply-${scope}`}
-          className="flex h-11 items-center justify-center gap-1.5 rounded-full text-[14.5px] font-semibold text-white shadow-md transition-transform active:scale-[0.97] disabled:opacity-40"
-          style={{ backgroundColor: accent, boxShadow: `0 6px 18px ${accent}40` }}
+          className="flex h-11 items-center justify-center gap-1.5 rounded-[14px] text-[14.5px] font-semibold text-white shadow-sm transition-transform active:scale-[0.97] disabled:opacity-40"
+          style={{ backgroundColor: accent, boxShadow: `0 4px 14px color-mix(in srgb, ${accent} 35%, transparent)` }}
         >
           <Play className="h-[15px] w-[15px]" aria-hidden="true" />
           应用
@@ -306,7 +347,7 @@ export function CustomCssEditor({ scope, example, accent, onToast, variant = 'ca
           onClick={clearAll}
           disabled={!activeCss && !draft}
           data-testid={`custom-css-clear-${scope}`}
-          className="flex h-11 items-center justify-center gap-1.5 rounded-full border border-black/[0.10] bg-black/[0.03] text-[14.5px] font-semibold text-black/55 transition-colors active:bg-black/[0.07] disabled:opacity-40 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-white/60 dark:active:bg-white/[0.10]"
+          className="flex h-11 items-center justify-center gap-1.5 rounded-[14px] bg-black/[0.04] text-[14.5px] font-semibold text-black/55 ring-1 ring-black/[0.06] transition-colors active:bg-black/[0.08] disabled:opacity-40 dark:bg-white/[0.06] dark:text-white/60 dark:ring-white/[0.08] dark:active:bg-white/[0.10]"
         >
           <Eraser className="h-[15px] w-[15px]" aria-hidden="true" />
           清除
@@ -319,7 +360,7 @@ export function CustomCssEditor({ scope, example, accent, onToast, variant = 'ca
 // ================= 聊天设置折叠区块（镜像 ChatDisplaySection 的展开交互） =================
 
 export interface ChatCssSectionProps {
-  /** 宿主 App（决定作用域与示例） */
+  /** 宿主 App（决定作用域与示例主题） */
   app: 'wx' | 'qq';
   /** 宿主强调色（微信绿 / QQ 蓝） */
   accent: string;
@@ -368,7 +409,7 @@ export function ChatCssSection({ app, accent, onToast }: ChatCssSectionProps) {
             <div className="pb-1">
               <CustomCssEditor
                 scope={app === 'qq' ? 'chat-qq' : 'chat-wx'}
-                example={chatCssExample(app)}
+                presets={chatCssPresets(app)}
                 accent={accent}
                 onToast={onToast}
                 variant="chat"

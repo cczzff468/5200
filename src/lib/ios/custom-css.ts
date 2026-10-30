@@ -9,6 +9,8 @@
  * 注入方式：CSS 文本经 scopeCss() 把每条选择器自动加上作用域前缀
  * （global → [data-phone-shell]；聊天 → [data-chat-css="qq"]；线下 → [data-offline-css]），
  * 再渲染成 <style> 标签 —— 用户写的选择器只落在对应界面里，不会泄漏到别处。
+ * 第六十九轮：示例升级为「整套主题」模板（色板 + 深/浅双色 + 协调规则，
+ * 用户照着改色就能得到自己的一套主题）；& 可写在选择器任意位置（.dark & 深色写法）。
  *
  * 方案收藏：CustomCssScheme（自定义名字 + CSS 本体 + 归属作用域），三处编辑器共用一份清单，
  * 各编辑器只列出自己作用域保存的方案。
@@ -128,12 +130,13 @@ function matchBrace(src: string, start: number): number {
   return -1;
 }
 
-/** 单条选择器加前缀（html/body/:root → 作用域本身；& 嵌套 → 替换；组合器开头 → 直接拼接） */
+/** 单条选择器加前缀（html/body/:root → 作用域本身；& 嵌套任意位置 → 替换；组合器开头 → 直接拼接）
+ *  第六十九轮：& 支持出现在选择器任意位置（`.dark &` = 深色模式下的作用域祖先写法，
+ *  主题示例靠它做「浅色一套 / 深色一套」双色模板） */
 function prefixOneSelector(sel: string, scope: string): string {
   const s = sel.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').trim();
   if (!s) return s;
-  if (s === '&') return scope;
-  if (s.startsWith('&')) return scope + s.slice(1);
+  if (s.includes('&')) return s.replace(/&/g, scope);
   if (/^(html|body|:root)$/i.test(s)) return scope;
   if (/^[>+~]/.test(s)) return `${scope} ${s}`;
   return `${scope} ${s}`;
@@ -248,93 +251,276 @@ export function scopeCss(css: string, scope: string): string {
   return out;
 }
 
-// ---------------- 示例 CSS（用户可以按照这个改） ----------------
+// ---------------- 主题示例（第六十九轮：整套主题模板，用户照着改成自己的主题） ----------------
 
-/** 全局示例（主题界面 › 自定义CSS）：作用于整个手机 */
-export const GLOBAL_CSS_EXAMPLE = `/* ===== 全局自定义 CSS 示例（可修改后点「应用」）=====
- * 作用于整个手机：所有界面、所有面板、所有按钮（含线下模式）。
- * 选择器会自动限定在手机范围内，不会影响页面其他区域。
- */
+/** 一套可一键载入编辑框的示例主题（名字 + CSS 本体 + 色板预览小圆点） */
+export interface CssThemePreset {
+  name: string;
+  css: string;
+  /** 编辑器示例 chips 上的色板预览点（2~4 个颜色） */
+  swatch: string[];
+}
 
-/* 例1：所有按钮按下时轻微缩小（按压手感） */
+/** 全局主题模板：色板 + 页面底 + 按钮手感 + 皮肤面板 + 滚动条 + 光标 */
+interface GlobalPalette {
+  name: string;
+  page: string;
+  night: string;
+  card: string;
+  ink: string;
+  accent: string;
+}
+
+function globalThemeCss(p: GlobalPalette): string {
+  return `/* ═════════════════════════════════════════════════════
+   主题 · ${p.name}（全局示例 —— 照着做一套你自己的主题）
+   ──────────────────────────────────────────
+   ① 改下面的颜色  ② 点「应用」看效果  ③ 满意就「保存」起名
+   ═════════════════════════════════════════════════════ */
+
+/* 色板：整套主题都从这几个颜色长出来 */
+:root {
+  --page:  ${p.page};   /* 页面底色（浅色模式） */
+  --night: ${p.night};  /* 页面底色（深色模式） */
+  --card:  ${p.card};   /* 面板 / 卡片 */
+  --ink:   ${p.ink};    /* 面板上的文字 */
+  --theme: ${p.accent}; /* 主题色（光标 / 滚动条） */
+}
+
+/* ① 页面底：各 App 常见的灰白页面底，全部换成主题底色 */
+[class*='bg-[#EDEDED]'], [class*='bg-[#F5F6F8]'],
+[class*='bg-[#F5F6F7]'], [class*='bg-[#F2F3F5]'],
+[class*='bg-[#F6F7F9]'], [class*='bg-[#F7F7F7]'] {
+  background: var(--page);
+}
+/*   同一批页面在深色模式下换主题夜色 */
+.dark & [class*='bg-[#EDEDED]'], .dark & [class*='bg-[#F5F6F8]'],
+.dark & [class*='bg-[#F5F6F7]'], .dark & [class*='bg-[#F2F3F5]'],
+.dark & [class*='bg-[#F6F7F9]'], .dark & [class*='bg-[#F7F7F7]'] {
+  background: var(--night);
+}
+
+/* ② 按钮手感：按下去轻轻缩，松手弹回来 */
+button {
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1.4),
+    background-color 0.18s, color 0.18s, opacity 0.18s;
+}
 button:active {
-  transform: scale(0.97);
+  transform: scale(0.955);
 }
 
-/* 例2：复古主题的白色面板描边加深一档 */
+/* ③ 面板：古早 / 液态皮肤的卡片跟着换装（挂这两款主题时生效） */
 .rt-panel {
-  box-shadow: inset 0 0 0 1.5px #9FA3AE, 0 1px 2px rgba(24, 28, 44, 0.07);
+  background: var(--card);
+}
+.lg-card, .lg-panel, .lg-sheet {
+  background: color-mix(in srgb, var(--card) 55%, transparent);
 }
 
-/* 例3：液态玻璃的圆钮更通透 */
-.lg-chip {
-  background: rgba(255, 255, 255, 0.45);
-}
-
-/* 例4：所有滚动条变成半透明细条 */
-::-webkit-scrollbar {
-  width: 3px;
-  height: 3px;
-}
+/* ④ 滚动条：细条 + 主题色 */
+::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(127, 127, 127, 0.35);
+  background: color-mix(in srgb, var(--theme) 55%, transparent);
   border-radius: 99px;
 }
-`;
 
-/** 聊天作用域示例（聊天设置 › 自定义CSS）：只作用于该 App 的聊天页 */
-export function chatCssExample(app: 'wx' | 'qq'): string {
-  const list = app === 'qq' ? 'qq-chat-list' : 'wx-chat-list';
-  const name = app === 'qq' ? 'QQ' : '微信';
-  return `/* ===== ${name}聊天界面自定义 CSS 示例（可修改后点「应用」）=====
- * 只作用于${name}的聊天页面（消息、气泡、输入栏），其他界面不受影响。
- */
-
-/* 例1：消息区文字整体放大 */
-[data-testid="${list}"] {
-  font-size: 16.5px;
+/* ⑤ 输入光标：主题色 */
+input, textarea { caret-color: var(--theme); }`;
 }
 
-/* 例2：消息区四周加轻微暗角（vignette） */
-[data-testid="${list}"] {
-  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.10);
+/** 全局示例主题 ×4（主题界面 › 自定义CSS 的示例 chips） */
+export const globalCssPresets: CssThemePreset[] = [
+  {
+    name: '奶油曲奇',
+    swatch: ['#F6EFE2', '#FFFDF4', '#C08A54'],
+    css: globalThemeCss({ name: '奶油曲奇', page: '#F6EFE2', night: '#191712', card: '#FFFDF4', ink: '#5C5243', accent: '#C08A54' }),
+  },
+  {
+    name: '薄荷苏打',
+    swatch: ['#E8F3EC', '#F7FCF8', '#4F9D69'],
+    css: globalThemeCss({ name: '薄荷苏打', page: '#E8F3EC', night: '#12201B', card: '#F7FCF8', ink: '#35543F', accent: '#4F9D69' }),
+  },
+  {
+    name: '夜航蓝',
+    swatch: ['#E9EEF6', '#F5F8FD', '#3E5C8F'],
+    css: globalThemeCss({ name: '夜航蓝', page: '#E9EEF6', night: '#101623', card: '#F5F8FD', ink: '#3A4A63', accent: '#3E5C8F' }),
+  },
+  {
+    name: '樱花信笺',
+    swatch: ['#F9EEF1', '#FFFAFB', '#D87891'],
+    css: globalThemeCss({ name: '樱花信笺', page: '#F9EEF1', night: '#201318', card: '#FFFAFB', ink: '#6B4550', accent: '#D87891' }),
+  },
+];
+
+/** 聊天主题模板：聊天背景 + 我的气泡 + 对方气泡（文字/语音/小尾巴一起换） */
+interface ChatPalette {
+  name: string;
+  bg: string;
+  bgN: string;
+  mine: string;
+  mineN: string;
+  peer: string;
+  peerN: string;
 }
 
-/* 例3：古早气泡圆角更小（装扮为古早样式时可见） */
-.bub-retro-qq, .bub-retro {
-  border-radius: 6px;
+function chatThemeCss(app: 'wx' | 'qq', p: ChatPalette): string {
+  const hook = app === 'qq' ? 'qq-bub' : 'wx-bub';
+  const appName = app === 'qq' ? 'QQ' : '微信';
+  // QQ 我方默认蓝泡是内联颜色（style backgroundColor），类规则要 !important 才能盖住
+  const imp = app === 'qq' ? ' !important' : '';
+  const tailPart =
+    app === 'wx'
+      ? `
+/* ④ 小尾巴跟气泡同色（微信默认样式的小三角；装扮气泡自带尾巴，不受这条影响） */
+.${hook}-tail-mine { background: var(--mine); }
+.dark & .${hook}-tail-mine { background: var(--mine-n); }
+.${hook}-tail-theirs { background: var(--peer); }
+.dark & .${hook}-tail-theirs { background: var(--peer-n); }
+`
+      : '';
+  return `/* ═════════════════════════════════════════════════
+   聊天主题 · ${p.name}（${appName}示例 —— 照着做一套自己的）
+   ────────────────────────────────
+   ① 改下面的颜色  ② 点「应用」  ③ 「保存」起名
+   ═════════════════════════════════════════════════ */
+
+/* 色板 */
+:root {
+  --bg:     ${p.bg};    /* 聊天背景（浅色） */
+  --bg-n:   ${p.bgN};   /* 聊天背景（深色） */
+  --mine:   ${p.mine};  /* 我的气泡 */
+  --mine-n: ${p.mineN}; /* 我的气泡（深色） */
+  --peer:   ${p.peer};  /* 对方的气泡 */
+  --peer-n: ${p.peerN}; /* 对方的气泡（深色） */
 }
 
-/* 例4：时间胶囊（古早主题时间行）文字加粗 */
-.rt-time {
-  font-weight: 600;
-}
-`;
+/* ① 聊天背景 */
+& { background: var(--bg); }
+.dark & { background: var(--bg-n); }
+
+/* ② 我的气泡（文字 + 语音一起换） */
+.${hook}-mine { background: var(--mine)${imp}; }
+.dark & .${hook}-mine { background: var(--mine-n)${imp}; }
+
+/* ③ 对方的气泡（文字 + 语音一起换） */
+.${hook}-theirs { background: var(--peer)${imp}; }
+.dark & .${hook}-theirs { background: var(--peer-n)${imp}; }${tailPart}
+/* 想改圆角？加一条就行，比如：
+.${hook}-mine, .${hook}-theirs { border-radius: 12px; }
+*/`;
 }
 
-/** 线下作用域示例（线下模式 › 现场设置 › 自定义CSS）：只作用于线下模式所有界面 */
-export const OFFLINE_CSS_EXAMPLE = `/* ===== 线下模式自定义 CSS 示例（可修改后点「应用」）=====
- * 只作用于线下模式的所有界面（开始页、见面页、存档、现场设置、历史记录）。
- */
+/** 聊天示例主题 ×2/App（联系人 › 聊天设置 › 自定义CSS 的示例 chips） */
+export function chatCssPresets(app: 'wx' | 'qq'): CssThemePreset[] {
+  if (app === 'qq') {
+    return [
+      {
+        name: '落日橙',
+        swatch: ['#F6EFE7', '#E89A5B', '#FFFFFF'],
+        css: chatThemeCss('qq', { name: '落日橙', bg: '#F6EFE7', bgN: '#1B1611', mine: '#E89A5B', mineN: '#8A5527', peer: '#FFFFFF', peerN: '#262019' }),
+      },
+      {
+        name: '青瓷',
+        swatch: ['#ECF2EF', '#7FBFA8', '#FFFFFF'],
+        css: chatThemeCss('qq', { name: '青瓷', bg: '#ECF2EF', bgN: '#121A17', mine: '#7FBFA8', mineN: '#2F6353', peer: '#FFFFFF', peerN: '#1D2622' }),
+      },
+    ];
+  }
+  return [
+    {
+      name: '素笺',
+      swatch: ['#F4EFE3', '#A9C98C', '#FFFFFF'],
+      css: chatThemeCss('wx', { name: '素笺', bg: '#F4EFE3', bgN: '#191813', mine: '#A9C98C', mineN: '#3F5C33', peer: '#FFFFFF', peerN: '#24231D' }),
+    },
+    {
+      name: '海雾',
+      swatch: ['#E8EEF2', '#9CCBD8', '#FFFFFF'],
+      css: chatThemeCss('wx', { name: '海雾', bg: '#E8EEF2', bgN: '#131A20', mine: '#9CCBD8', mineN: '#2F5563', peer: '#FFFFFF', peerN: '#1E262C' }),
+    },
+  ];
+}
 
-/* 例1：叙事卡片圆角变小 */
+/** 线下主题模板：页面底 + 卡片 + 胶囊按钮 + 开始见面 + 输入框 */
+interface OfflinePalette {
+  name: string;
+  bg: string;
+  card: string;
+  chip: string;
+  start: string;
+  ink: string;
+}
+
+function offlineThemeCss(p: OfflinePalette): string {
+  return `/* ═════════════════════════════════════════════════
+   线下主题 · ${p.name}（示例 —— 照着做一套自己的）
+   ────────────────────────────────
+   ① 改下面的颜色  ② 点「应用」  ③ 「保存」起名
+   ═════════════════════════════════════════════════ */
+
+/* 色板 */
+:root {
+  --bg:    ${p.bg};    /* 页面底色 */
+  --card:  ${p.card};  /* 卡片 / 输入框 */
+  --chip:  ${p.chip};  /* 顶部小按钮 / 幽灵按钮 */
+  --start: ${p.start}; /* 开始见面 / 主按钮 / 我的气泡 */
+  --ink:   ${p.ink};   /* 主要文字 */
+}
+
+/* ① 页面底色 */
+& { background: var(--bg); }
+
+/* ② 卡片（叙事卡 / 存档卡 / 设置卡） */
 .off-card {
-  border-radius: 10px;
+  background: var(--card);
+  border-color: color-mix(in srgb, var(--ink) 20%, transparent);
 }
 
-/* 例2：顶部按钮胶囊放大一号 */
-.off-chip {
-  height: 40px;
-  width: 40px;
+/* ③ 顶部小按钮 + 幽灵按钮 */
+.off-chip, .off-btn-ghost {
+  background: var(--chip);
+  color: var(--ink);
 }
 
-/* 例3：开始见面按钮换成绿色 */
-.off-start {
-  background: linear-gradient(180deg, #97CC58 0%, #71A83B 100%);
+/* ④ 开始见面 + 主按钮 + 发送 */
+.off-start, .off-btn-primary, .off-send {
+  background: var(--start);
+  color: #fff;
 }
 
-/* 例4：输入框文字放大 */
+/* ⑤ 输入框 */
 .off-input {
-  font-size: 16px;
+  background: var(--card);
+  color: var(--ink);
 }
-`;
+
+/* ⑥ 我的对话气泡 */
+.off-bubble-user {
+  background: var(--start);
+  color: #fff;
+}
+
+/* 深色模式：同一批元素换成低亮度版本 */
+.dark & { background: color-mix(in srgb, var(--bg) 22%, #141414); }
+.dark & .off-card, .dark & .off-input {
+  background: color-mix(in srgb, var(--card) 12%, #1B1B1B);
+  color: #F0EEE8;
+}
+.dark & .off-chip, .dark & .off-btn-ghost {
+  background: color-mix(in srgb, var(--chip) 16%, #1B1B1B);
+  color: #E8E5DE;
+}`;
+}
+
+/** 线下示例主题 ×2（线下模式 › 现场设置 › 自定义CSS 的示例 chips） */
+export const OFFLINE_CSS_PRESETS: CssThemePreset[] = [
+  {
+    name: '暖阳',
+    swatch: ['#F8F1E3', '#FFFCF2', '#E8A23D'],
+    css: offlineThemeCss({ name: '暖阳', bg: '#F8F1E3', card: '#FFFCF2', chip: '#F2E7CF', start: '#E8A23D', ink: '#6B5B3E' }),
+  },
+  {
+    name: '墨石',
+    swatch: ['#EBEFF1', '#FAFCFD', '#5B7C8A'],
+    css: offlineThemeCss({ name: '墨石', bg: '#EBEFF1', card: '#FAFCFD', chip: '#DFE7EA', start: '#5B7C8A', ink: '#43555E' }),
+  },
+];
