@@ -7597,9 +7597,9 @@ function ChatPage({
                       {/* 气泡小尾巴（第五十一轮，用户指定：QQ 换色/七彩气泡变成信息 App 同款）：
                           装扮 solid/七彩 = 信息 App 同款底部弯钩剪影尾巴（14×18px，随 tailColor 上色，
                           我方右侧/对方左侧，与头像底端对齐）；毛玻璃/液态胶囊无尾巴。
-                          第六十轮（用户指定「QQ古早气泡再美化，尤其是小尾巴」）：古早 beak 参考
-                          图逐像素测量重制为喙状悬出式——顶边从顶角圆弧下 8px 处水平向头像侧
-                          伸出 15px，尖端圆润，下缘 ~31° 斜切回泡身（几何见 RETRO_BEAK_CLIP_* 头注释）；
+                          第六十一轮（用户复验「小尾巴还是有点问题」）：参考图逐像素复测后缩至真实比例——
+                          凸出 6px/高 11px/距顶 4px、外缘凹弧（尖端陡回、近泡身平顺并入），
+                          即参考图同款「小逗号/小耳朵」（第六十轮 15px/29px 版放大 2.6 倍，帆翼感）。
                           渐变随 .rt-beak-* CSS 类对齐泡身色带（深色自适应；自定义色时 tailColor 平色）。
                           QQ 泡已去描边（.bub-retro-qq border-width:0），绝对定位基准=边框盒无需补偿 */}
                       {bvis.tail === 'im' && (
@@ -7612,7 +7612,7 @@ function ChatPage({
                       {bvis.tail === 'retro' && (
                         <span
                           aria-hidden="true"
-                          className={`absolute top-[8px] ${mine ? '-right-[15px]' : '-left-[15px]'} h-[29px] w-[19px] ${
+                          className={`absolute top-[4px] ${mine ? '-right-[6px]' : '-left-[6px]'} h-[11px] w-[9px] ${
                             bvis.tailColor ? '' : mine ? 'rt-beak-mine' : 'rt-beak-theirs'
                           }`}
                           style={{
@@ -7785,12 +7785,12 @@ function ChatPage({
                   />
                 )}
                 {tvis.tail === 'retro' && (
-                  /* 古早 beak（第六十轮喙状同款）：正在输入指示是对方气泡——左侧迷你版
-                     （指示泡较矮，全尺寸 29px 会溢出泡底，按同款几何缩至 15×22）；
+                  /* 古早 beak（第六十一轮真实比例）：正在输入指示是对方气泡——左侧迷你版
+                     （指示泡较矮，按同款几何等比缩至 8×9、凸出 5px、距顶 3px）；
                      QQ 泡无描边，定位无补偿 */
                   <span
                     aria-hidden="true"
-                    className={`absolute top-[7px] -left-[12px] h-[22px] w-[15px] ${tvis.tailColor ? '' : 'rt-beak-theirs'}`}
+                    className={`absolute top-[3px] -left-[5px] h-[9px] w-[8px] ${tvis.tailColor ? '' : 'rt-beak-theirs'}`}
                     style={{ clipPath: RETRO_BEAK_CLIP_TYPING_LEFT, ...(tvis.tailColor ? { background: tvis.tailColor } : {}) }}
                   />
                 )}

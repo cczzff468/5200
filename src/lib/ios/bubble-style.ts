@@ -24,19 +24,22 @@ export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'liquid' | 're
 export const TAIL_CLIP_LEFT = 'path("M12 0 L12 6 C11 12 7 16 0 18 C4 13 6 8 6 2 L6 0 Z")';
 export const TAIL_CLIP_RIGHT = 'path("M2 0 L2 6 C3 12 7 16 14 18 C10 13 8 8 8 2 L8 0 Z")';
 
-/** 古早 QQ 顶部喙状 beak 尾巴剪影（第六十轮美化，参考图逐像素测量定稿；宿主用 19×29px span 渲染）：
- *  参考图实测几何——尾巴从顶角圆弧下方「悬出」：顶边水平向头像侧伸出 15px（span 定位 top:8px），
- *  尖端圆润（水滴小圆头），下缘自尖端 ~31° 斜切回气泡侧边（约 20px 落差）后圆滑并入气泡身；
- *  尾巴与气泡本体同色渐变（.rt-beak-* 取气泡顶部色带，视觉无缝）。
- *  坐标系：span 19 宽 = 15 凸出 + 4 根部内嵌（内嵌部分被气泡本体覆盖，保证衔接无缝）；
+/** 古早 QQ 顶部喙状 beak 尾巴剪影（第六十一轮重制，参考图逐像素复测后缩至真实比例；
+ *  宿主用 9×11px span 渲染，定位 top:4px、凸出 6px）：
+ *  第六十一轮复测结论——参考图尾巴远比第六十轮版本小：换算到本项目 42px 单行泡，
+ *  凸出仅 ~6px、高 ~11px、顶端距泡顶 ~4px（第六十轮做成了 15px 凸出/29px 高，放大 2.6 倍，
+ *  下缘斜面盖掉 60% 泡高，观感成了「大帆翼」，用户复验不合格）。
+ *  定稿几何：顶边自泡身边缘水平向头像侧伸出，尖端圆润（小圆头在顶缘下方 ~2px）；
+ *  外缘为凹弧——尖端处陡峭（~80°）快速收拢，近泡身处放缓（~15°）平顺并入泡身边，
+ *  即参考图同款「小逗号/小耳朵」；色带覆盖泡身 y4-15（.rt-beak-* 渐变同步收窄）。
+ *  坐标系：span 9 宽 = 6 凸出 + 3 根部内嵌（内嵌部分被泡身覆盖，衔接无缝）；
  *  path() 直接用 px，我方（RIGHT）尖端朝右指自己头像 / 对方（LEFT）尖端朝左指 TA 头像 */
-export const RETRO_BEAK_CLIP_RIGHT = 'path("M0 0 L15.8 0 Q18.8 0.5 18 4.8 L6.2 24.4 Q4.4 28.3 1.4 27.8 L0 27.8 Z")';
-export const RETRO_BEAK_CLIP_LEFT = 'path("M19 0 L3.2 0 Q0.2 0.5 1 4.8 L12.8 24.4 Q14.6 28.3 17.6 27.8 L19 27.8 Z")';
+export const RETRO_BEAK_CLIP_RIGHT = 'path("M0 0 H6.2 Q8.8 0.4 9 2.2 C8.4 7.4 5.9 10.2 3 11 L0 11 Z")';
+export const RETRO_BEAK_CLIP_LEFT = 'path("M9 0 H2.8 Q0.2 0.4 0 2.2 C0.6 7.4 3.1 10.2 6 11 L9 11 Z")';
 
-/** 「正在输入」指示泡的迷你 beak（对方侧专用，15×22px span，凸出 12px）：
- *  输入指示泡比正文气泡矮（约 33px），全尺寸 29px 高的 beak 会溢出泡底——
- *  按同款几何等比缩小（顶边平伸 12px + 圆润尖端 + 斜切下缘） */
-export const RETRO_BEAK_CLIP_TYPING_LEFT = 'path("M15 0 L2.6 0 Q0 0.4 0.8 3.9 L10.2 18.6 Q11.6 21.6 14 21.2 L15 21.2 Z")';
+/** 「正在输入」指示泡的迷你 beak（对方侧专用，8×9px span，凸出 5px，定位 top:3px）：
+ *  输入指示泡比正文泡矮（约 33px），按同款几何等比缩小（凸出 5px + 圆润尖端 + 凹弧下缘） */
+export const RETRO_BEAK_CLIP_TYPING_LEFT = 'path("M8 0 H3 Q0.2 0.4 0 1.9 C0.6 6 3.2 8.4 5 9 L8 9 Z")';
 
 /** App 级界面主题（第四十二轮）：default = 现状原生；liquid = 液态玻璃主题（参考图）。
  *  主题与气泡样式相互独立：主题只接管页面铭件（导航/TabBar/列表卡/输入栏），
@@ -47,9 +50,9 @@ export const RETRO_BEAK_CLIP_TYPING_LEFT = 'path("M15 0 L2.6 0 Q0 0.4 0.8 3.9 L1
  *  ——微信 = 默认小三角（颜色走 .rt-tail-* 类深浅自适应），QQ = 默认无尾巴、四角统一 8px。
  *  第五十九轮（用户指定「QQ 气泡添加上小尾巴，跟我发给你的一样」）：QQ 恢复参考图1 同款
  *  顶部尖角 beak 尾巴（渐变/深色由 .rt-beak-* CSS 类携带）；微信保持默认小三角。
- *  第六十轮（用户指定「QQ古早气泡再美化，尤其是小尾巴」）：参考图逐像素测量重制——
- *  beak 改喙状（顶边水平伸出 15px + 圆润尖端 + 斜切下缘，从顶角圆弧下 8px 处悬出）、
- *  QQ 泡去描边、四角统一 12px 圆角 */
+ *  第六十轮（用户指定「QQ古早气泡再美化，尤其是小尾巴」）：QQ 泡去描边、四角统一 12px 圆角，
+ *  beak 改喙状。第六十一轮（用户复验「小尾巴还是有点问题」）：参考图逐像素复测后缩至真实
+ *  比例——凸出 6px/高 11px/距顶 4px、外缘凹弧，几何详见 RETRO_BEAK_CLIP_* 头注释 */
 export type BubbleTheme = 'default' | 'liquid' | 'retro';
 
 /** 装扮宿主 App 标识（微信 / QQ / 信息） */
@@ -154,7 +157,7 @@ export const RETRO_BUBBLE: Record<
 };
 
 /** 古早 QQ 圆角（第六十轮美化，参考图实测）：四角统一 12px（参考图泡高 112px 圆角 ~28px ≈ 25%，
- *  折算到本项目 42px 单行泡 ≈ 12px）——尾巴侧顶角不再方角：beak 从圆弧下方 8px 处「悬出」，
+ *  折算到本项目 42px 单行泡 ≈ 12px）——beak 顶边自圆弧中段「悬出」（第六十一轮：top 4px，
  *  圆弧成为剪影的一部分（参考图同款：顶边 → 圆弧下沉 → 尾巴顶边水平伸出） */
 export const retroQqRadius = (mine: boolean) => (mine ? '12px' : '12px');
 
@@ -505,7 +508,7 @@ export interface BubbleVisual {
    *             14×18px 剪影随 tailColor 上色，我方右侧/对方左侧，由宿主用 TAIL_CLIP_LEFT/RIGHT 渲染）
    *  - 'hook'   参考图同款弯钩尾巴（历史值：第五十一轮起 QQ 不再返回，仅类型完备性保留）
    *  - 'none'   不渲染尾巴（毛玻璃/液态胶囊）
-   *  - 'retro'  古早 QQ 顶部尖角 beak 尾巴（第五十九轮回归，参考图1 同款）：11×15px 剪影
+   *  - 'retro'  古早 QQ 顶部小逗号 beak 尾巴（第六十一轮真实比例）：9×11px 剪影
    *             由宿主用 RETRO_BEAK_CLIP_LEFT/RIGHT 渲染；非自定义色时颜色走 .rt-beak-* CSS 类
    *             （渐变+深色自适应），自定义色时 tailColor 携带平色。微信古早不返回此值（用 native）。
    *  第五十八轮（用户指定「古早小尾巴变成默认气泡样式的」）：微信古早 = 'native' 默认小三角
@@ -625,8 +628,8 @@ export function bubbleVisual(
     //  tailClass 深浅自适应）；QQ = 默认无尾巴（'none'）。
     //  第五十九轮（用户指定「QQ 气泡添加上小尾巴，跟我发给你的一样」）：QQ 恢复参考图1 同款
     //  顶部尖角 beak（'retro'，非自定义色时颜色走 .rt-beak-* CSS 类深浅自适应）；微信保持默认小三角。
-    //  第六十轮（用户指定「QQ古早气泡再美化，尤其是小尾巴」）：beak 重制为喙状悬出式
-    //  （几何详见 RETRO_BEAK_CLIP_* 头注释），QQ 泡去描边、圆角统一 12px（retroQqRadius）。
+    //  第六十轮：QQ 泡去描边、圆角统一 12px（retroQqRadius）；第六十一轮：beak 缩至参考图
+    //  真实比例（几何详见 RETRO_BEAK_CLIP_* 头注释）。
     const rb = RETRO_BUBBLE[app];
     const mine = side === 'mine';
     const sideCls = color
