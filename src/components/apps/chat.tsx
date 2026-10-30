@@ -709,7 +709,8 @@ function AssistantRow({
       aria-label="和小助手聊天"
       {...press}
       // 微信样式：置顶 = 整行灰底；按下高亮 = 同款灰色（按下瞬间像临时置顶）
-      className={`relative flex w-full select-none items-center gap-3 px-4 py-2.5 text-left transition-colors ${
+      // sms-session-row：会话行锚点（自定义 CSS 示例模板可改行底/分割线）
+      className={`sms-session-row relative flex w-full select-none items-center gap-3 px-4 py-2.5 text-left transition-colors ${
         pinned ? 'bg-black/[0.06] dark:bg-white/[0.08]' : ''
       } active:bg-black/[0.06] dark:active:bg-white/[0.08]`}
     >
@@ -3114,7 +3115,8 @@ function ChatView({
   return (
     <div ref={pageRef} className="relative flex h-full min-h-0 flex-col">
       {/* 默认顶栏：返回箭头 + 居中头像/手机号（不显示名字）+ 摄像机图标（聊天设置入口） */}
-      <div className="z-20 shrink-0 border-b border-white/60 bg-white/60 pt-[54px] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]">
+      {/* sms-topbar：顶部栏锚点（自定义 CSS 示例模板可改底色/横线） */}
+      <div className="sms-topbar z-20 shrink-0 border-b border-white/60 bg-white/60 pt-[54px] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]">
         <div className="relative flex h-[64px] items-center px-3">
           <IOSBackButton label="" onClick={onBack} />
           <div
@@ -3156,7 +3158,7 @@ function ChatView({
         role="log"
         aria-label="聊天消息"
         aria-live="polite"
-        className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-3 pb-2 pt-1"
+        className="sms-chat-list no-scrollbar min-h-0 flex-1 overflow-y-auto px-3 pb-2 pt-1"
       >
         {!msgs.some((m) => !m.error) && (
           <div className="flex h-full flex-col items-center justify-center gap-2.5 pb-10">
@@ -3482,8 +3484,8 @@ function ChatView({
                               lastOfGroup ? (mine ? 'rounded-br-[5px]' : 'rounded-bl-[5px]') : ''
                             }`
                           : mine
-                            ? `bg-[#007AFF] text-white ${lastOfGroup ? 'rounded-br-[5px]' : ''}`
-                            : `bg-muted text-foreground ${lastOfGroup ? 'rounded-bl-[5px]' : ''}`
+                            ? `sms-bub-mine bg-[#007AFF] text-white ${lastOfGroup ? 'rounded-br-[5px]' : ''}`
+                            : `sms-bub-theirs bg-muted text-foreground ${lastOfGroup ? 'rounded-bl-[5px]' : ''}`
                       }`}
                       style={bvis.override ? bvis.style : undefined}
                     >
@@ -3492,7 +3494,7 @@ function ChatView({
                       {!mine && lastOfGroup && bvis.tail !== 'none' && (
                         <span
                           aria-hidden="true"
-                          className={`absolute -left-[6px] bottom-0 h-[18px] w-[14px] ${
+                          className={`sms-bub-tail-theirs absolute -left-[6px] bottom-0 h-[18px] w-[14px] ${
                             bvis.override && bvis.tailColor ? '' : 'bg-muted'
                           }`}
                           style={{ clipPath: TAIL_CLIP_LEFT, ...(bvis.override && bvis.tailColor ? { backgroundColor: bvis.tailColor } : {}) }}
@@ -3501,7 +3503,7 @@ function ChatView({
                       {mine && lastOfGroup && bvis.tail !== 'none' && (
                         <span
                           aria-hidden="true"
-                          className={`absolute -right-[6px] bottom-0 h-[18px] w-[14px] ${
+                          className={`sms-bub-tail-mine absolute -right-[6px] bottom-0 h-[18px] w-[14px] ${
                             bvis.override && bvis.tailColor ? '' : 'bg-[#007AFF]'
                           }`}
                           style={{ clipPath: TAIL_CLIP_RIGHT, ...(bvis.override && bvis.tailColor ? { backgroundColor: bvis.tailColor } : {}) }}
@@ -3704,7 +3706,7 @@ function ChatView({
           else if (pendingImgs.length > 0) sendPendingImages();
           else dispatchBatch();
         }}
-        className="z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-2.5 pb-[30px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
+        className="sms-inputbar z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-2.5 pb-[30px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]"
       >
         {/* 加号（更多功能）：相机/图片/文字图片面板；iOS 同款灰色圆圈内加号，展开时旋转 45°（对齐微信加号交互） */}
         <button
@@ -4621,7 +4623,7 @@ function ContactSessionRow({
       type="button"
       onClick={onOpen}
       aria-label={`和${contact.name}聊天`}
-      className="relative flex w-full select-none items-center gap-3 px-4 py-2.5 text-left transition-colors active:bg-black/[0.06] dark:active:bg-white/[0.08]"
+      className="sms-session-row relative flex w-full select-none items-center gap-3 px-4 py-2.5 text-left transition-colors active:bg-black/[0.06] dark:active:bg-white/[0.08]"
     >
       {contact.avatar ? (
         <img src={contact.avatar} alt="" className="h-[52px] w-[52px] shrink-0 rounded-full object-cover" />
@@ -4651,7 +4653,7 @@ function BottomTabBar({ tab, onChange }: { tab: TabKey; onChange: (t: TabKey) =>
     { key: 'contacts', label: '联系人' },
   ] as const;
   return (
-    <nav className="z-20 shrink-0 bg-white/60 pb-[30px] pt-2.5 backdrop-blur-2xl dark:bg-white/[0.06]">
+    <nav className="sms-tabbar z-20 shrink-0 bg-white/60 pb-[30px] pt-2.5 backdrop-blur-2xl dark:bg-white/[0.06]">
       <div role="tablist" aria-label="信息分组" className="mx-auto flex w-[220px] rounded-full bg-white/60 p-[2px] shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
         {items.map(({ key, label }) => (
           <button
@@ -5235,7 +5237,7 @@ export default function ChatApp() {
 
       {/* Tab 内容 */}
       {tab === 'chats' ? (
-        <div role="tabpanel" aria-label="信息" className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
+        <div role="tabpanel" aria-label="信息" className="sms-session-list no-scrollbar min-h-0 flex-1 overflow-y-auto">
           {!hidden && (
             <AssistantRow
               preview={preview}

@@ -1831,7 +1831,8 @@ function QqHeader({
   retro?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-3 px-4 pb-2 pt-1 ${retro ? 'rt-bar' : ''}`}>
+    /* qq-head：QQ 页面头部（头像+大标题+右上按钮）锚点 */
+    <div className={`qq-head flex items-center gap-3 px-4 pb-2 pt-1 ${retro ? 'rt-bar' : ''}`}>
       <button type="button" aria-label="个人资料" onClick={onAvatar} className="rounded-full active:opacity-70">
         <QqAvatar src={user.avatar} alt={user.name} size={44} />
       </button>
@@ -1932,13 +1933,14 @@ function QqSearch({
   retro?: boolean;
 }) {
   return (
+    /* qq-search：QQ 搜索框锚点（自定义 CSS 示例模板可改胶囊底色/圆角） */
     <div
       className={
         liquid
-          ? 'flex h-[36px] items-center gap-1.5 rounded-full lg-search px-3'
+          ? 'qq-search flex h-[36px] items-center gap-1.5 rounded-full lg-search px-3'
           : retro
-          ? 'flex h-[36px] items-center gap-1.5 rt-search px-3'
-          : 'flex h-[36px] items-center gap-1.5 rounded-full bg-black/[0.05] px-3 dark:bg-white/[0.08]'
+          ? 'qq-search flex h-[36px] items-center gap-1.5 rt-search px-3'
+          : 'qq-search flex h-[36px] items-center gap-1.5 rounded-full bg-black/[0.05] px-3 dark:bg-white/[0.08]'
       }
     >
       <Search className="h-4 w-4 shrink-0 text-black/35 dark:text-white/35" strokeWidth={2.2} aria-hidden="true" />
@@ -12026,7 +12028,8 @@ function MessagesPage({
               onPointerUp={clearPress}
               onPointerCancel={clearPress}
               onPointerLeave={clearPress}
-              className={`flex w-full select-none items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.05] ${
+              /* qq-session-row：会话行锚点（自定义 CSS 示例模板可改行底/置顶色） */
+              className={`qq-session-row flex w-full select-none items-center gap-3 px-4 py-2.5 text-left active:bg-black/[0.04] dark:active:bg-white/[0.05] ${
                 pinned ? 'bg-[#F0F1F5] dark:bg-white/[0.06]' : ''
               }`}
             >
@@ -12293,7 +12296,7 @@ function ContactsPage({
                   key={c.id}
                   type="button"
                   onClick={() => onOpenProfile(c)}
-                  className="flex w-full items-center gap-3 py-2 pl-9 pr-4 text-left active:bg-black/[0.04]"
+                  className="qq-contact-row flex w-full items-center gap-3 py-2 pl-9 pr-4 text-left active:bg-black/[0.04]"
                 >
                   <QqAvatar src={c.avatar} alt={c.name} size={42} />
                   <span className="truncate text-[15px]">{c.name}</span>
@@ -12323,7 +12326,7 @@ function ContactsPage({
                   type="button"
                   data-testid="qq-contacts-me"
                   onClick={onOpenMeProfile}
-                  className="flex w-full items-center gap-3 py-2 pl-9 pr-4 text-left active:bg-black/[0.04]"
+                  className="qq-contact-row flex w-full items-center gap-3 py-2 pl-9 pr-4 text-left active:bg-black/[0.04]"
                 >
                   <QqAvatar src={me.avatar} alt={me.name} size={42} />
                   <span className="flex min-w-0 items-center gap-1.5">
@@ -12336,7 +12339,7 @@ function ContactsPage({
                     key={c.id}
                     type="button"
                     onClick={() => onOpenProfile(c)}
-                    className="flex w-full items-center gap-3 py-2 pl-9 pr-4 text-left active:bg-black/[0.04]"
+                    className="qq-contact-row flex w-full items-center gap-3 py-2 pl-9 pr-4 text-left active:bg-black/[0.04]"
                   >
                     <QqAvatar src={c.avatar} alt={c.name} size={42} />
                     <span className="truncate text-[15px]">{c.name}</span>
@@ -17786,8 +17789,9 @@ function MainScreen({
   ];
 
   return (
+    /* qq-root：QQ 主界面根锚点（自定义 CSS 示例模板可改页面底色） */
     <div
-      className={`relative flex h-full w-full flex-col ${retro ? 'rt-root' : 'bg-[#FAFAFC] dark:bg-[#16171A]'} text-[#1F2329] dark:text-white`}
+      className={`qq-root relative flex h-full w-full flex-col ${retro ? 'rt-root' : 'bg-[#FAFAFC] dark:bg-[#16171A]'} text-[#1F2329] dark:text-white`}
       data-liquid-theme={liquid ? 'true' : 'false'}
       data-rt-theme={retro ? 'true' : 'false'}
     >
@@ -18191,14 +18195,15 @@ function MainScreen({
           </div>
 
           {/* 底部 tab：默认主题 = 白底细线同现状（pb 预留底部横杠安全区，同微信 TabBar；用户第九轮：上下收紧变小一档）；
-              液态玻璃主题 = 悬浮胶囊（脱流 absolute，内容从玻璃胶囊底下穿过，滚动容器 pb-[88px] 让位） */}
+              液态玻璃主题 = 悬浮胶囊（脱流 absolute，内容从玻璃胶囊底下穿过，滚动容器 pb-[88px] 让位）
+              qq-tabbar：底部标签栏锚点（自定义 CSS 示例模板可改底色/顶线） */}
           <div
             className={
               liquid
-                ? 'lg-tabbar absolute inset-x-3 bottom-[12px] z-30'
+                ? 'qq-tabbar lg-tabbar absolute inset-x-3 bottom-[12px] z-30'
                 : retro
-                ? 'rt-tabbar shrink-0 pb-[12px]'
-                : 'shrink-0 border-t border-black/[0.05] bg-white pb-[12px] dark:border-white/[0.06] dark:bg-[#1B1C1F]'
+                ? 'qq-tabbar rt-tabbar shrink-0 pb-[12px]'
+                : 'qq-tabbar shrink-0 border-t border-black/[0.05] bg-white pb-[12px] dark:border-white/[0.06] dark:bg-[#1B1C1F]'
             }
           >
           <nav className={liquid ? 'flex h-[50px] items-stretch px-1' : retro ? 'flex h-[46px] items-stretch' : 'flex h-[44px] items-stretch'} aria-label="QQ 标签">

@@ -2145,7 +2145,8 @@ function WxMenuRow({
       type="button"
       data-testid={testId}
       onClick={onClick}
-      className="relative flex w-full items-center gap-3 px-4 py-[11px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+      /* wx-menu-row：发现/我/通讯录的菜单行锚点（自定义 CSS 示例模板可改行底/分割线/文字） */
+      className="wx-menu-row relative flex w-full items-center gap-3 px-4 py-[11px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
     >
       {!first && <span className="absolute left-[66px] right-0 top-0 h-px bg-black/[0.05] dark:bg-white/[0.08]" aria-hidden="true" />}
       {icon}
@@ -11083,10 +11084,11 @@ function MomentRow({
   };
 
   return (
-    <div className="flex gap-3 border-b border-black/[0.06] px-4 py-3 last:border-b-0 dark:border-white/[0.08]">
+    /* wx-moments-post：朋友圈动态卡锚点（自定义 CSS 示例模板可改卡底/分割线/内距） */
+    <div className="wx-moments-post flex gap-3 border-b border-black/[0.06] px-4 py-3 last:border-b-0 dark:border-white/[0.08]">
       <WxAvatar src={post.avatar} alt={post.authorName} size={44} />
       <div className="min-w-0 flex-1">
-        <p className="text-[15px] font-medium text-[#576B95] dark:text-[#8FA5C9]">{post.authorName}</p>
+        <p className="wx-moments-name text-[15px] font-medium text-[#576B95] dark:text-[#8FA5C9]">{post.authorName}</p>
         {post.text && (
           <p className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-[1.5]">{post.text}</p>
         )}
@@ -11171,7 +11173,7 @@ function MomentRow({
             aria-label="赞与评论"
             data-testid={`wx-moment-menu-${post.id}`}
             onClick={onToggleMenu}
-            className="flex items-center gap-[3px] rounded-[4px] bg-[#F2F2F2] px-2.5 py-1 active:bg-black/10 dark:bg-[#2A2A2A] dark:active:bg-white/10"
+            className="wx-moments-act flex items-center gap-[3px] rounded-[4px] bg-[#F2F2F2] px-2.5 py-1 active:bg-black/10 dark:bg-[#2A2A2A] dark:active:bg-white/10"
           >
             <span className="h-[4px] w-[4px] rounded-full bg-[#576B95] dark:bg-[#8FA5C9]" />
             <span className="h-[4px] w-[4px] rounded-full bg-[#576B95] dark:bg-[#8FA5C9]" />
@@ -11645,9 +11647,10 @@ function MomentsPage({
         )}
       </div>
 
-      {/* 顶部导航（悬浮在封面上）：滚过封面后切换为白底黑字并显示「朋友圈」标题 */}
+      {/* 顶部导航（悬浮在封面上）：滚过封面后切换为白底黑字并显示「朋友圈」标题
+          wx-moments-nav：朋友圈顶部导航锚点（自定义 CSS 示例模板可改导航底色） */}
       <div
-        className={`absolute inset-x-0 top-0 z-10 pt-[54px] transition-colors duration-200 ${
+        className={`wx-moments-nav absolute inset-x-0 top-0 z-10 pt-[54px] transition-colors duration-200 ${
           scrolled
             ? 'bg-white/95 shadow-[0_0.5px_0_rgba(0,0,0,0.1)] backdrop-blur dark:bg-[#111111]/95 dark:shadow-[0_0.5px_0_rgba(255,255,255,0.12)]'
             : ''
@@ -15977,10 +15980,10 @@ function MainScreen({
           }}
           className={
             liquid
-              ? `flex w-full select-none items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
+              ? `wx-session-row flex w-full select-none items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
                   divider ? 'border-b border-black/[0.06] dark:border-white/[0.08]' : ''
                 } ${pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''}`
-              : `flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
+              : `wx-session-row flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
                   pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
                 }`
           }
@@ -16038,10 +16041,10 @@ function MainScreen({
         onPointerLeave={clearPress}
         className={
           liquid
-            ? `flex w-full select-none items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
+            ? `wx-session-row flex w-full select-none items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
                 divider ? 'border-b border-black/[0.06] dark:border-white/[0.08]' : ''
               } ${pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''}`
-            : `flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
+            : `wx-session-row flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
                 pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
               }`
         }
@@ -16096,8 +16099,9 @@ function MainScreen({
       className={`relative flex h-full w-full flex-col ${retro ? 'rt-root' : 'bg-[#EDEDED] dark:bg-[#111111]'} text-black dark:text-white`}
     >
       {/* 顶栏：默认 =（微信：返回+搜索+＋；通讯录：＋；发现/我：无图标；左侧返回键退出微信回主屏）
-          液态（第四十四轮，用户指定）：左上头像+名字无椭圆包裹、只在「微信」tab 显示；标题纯文字居中；右＝圆形玻璃＋钮 */}
-      <div className={`shrink-0 pt-[54px] ${retro ? 'rt-bar' : ''}`}>
+          液态（第四十四轮，用户指定）：左上头像+名字无椭圆包裹、只在「微信」tab 显示；标题纯文字居中；右＝圆形玻璃＋钮
+          wx-nav：主界面顶部导航锚点（自定义 CSS 示例模板可改导航底色） */}
+      <div className={`wx-nav shrink-0 pt-[54px] ${retro ? 'rt-bar' : ''}`}>
         {liquid ? (
         <div className="relative flex h-12 items-center gap-2 px-2.5">
           {tab === 'chats' && (
@@ -16385,7 +16389,7 @@ function MainScreen({
         {tab === 'contacts' && (
           <div className="relative min-h-full pb-4">
             {/* 功能入口（古早：全幅白列表首段，旧微信通讯录无分组卡片） */}
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'rt-plain' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'rt-plain' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="新的朋友"
@@ -16459,11 +16463,11 @@ function MainScreen({
               <div className="relative">
                 {groups.map((g) => (
                   <div key={g.letter} id={`wx-letter-${g.letter}`}>
-                    <p className="sticky top-0 bg-[#EDEDED] px-4 py-1 text-[13px] text-black/50 dark:bg-[#111111] dark:text-white/50">
+                    <p className="wx-letter-bar sticky top-0 bg-[#EDEDED] px-4 py-1 text-[13px] text-black/50 dark:bg-[#111111] dark:text-white/50">
                       {g.letter}
                     </p>
                     {/* 古早：字母分组也是全幅白列表段（与上方连续，仅字母条隔开） */}
-                    <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'rt-plain' : 'bg-white dark:bg-[#1A1A1A]'}>
+                    <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'rt-plain' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
                       {g.list.map((c) => (
                         <button
                           key={c.id}
@@ -16505,7 +16509,7 @@ function MainScreen({
 
         {tab === 'discover' && (
           <div className={liquid ? 'space-y-2.5 pb-6' : 'space-y-2 pb-6'}>
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="朋友圈"
@@ -16519,7 +16523,7 @@ function MainScreen({
                 icon={retro ? <RetroIc tone={RETRO_ICON_TONES.moments}><RtWMoments /></RetroIc> : <WxIcMoments small />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="视频号"
@@ -16527,7 +16531,7 @@ function MainScreen({
                 icon={retro ? <RetroIc tone={RETRO_ICON_TONES.channels}><RtWChannels /></RetroIc> : <WxIcChannels />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="扫一扫"
@@ -16540,7 +16544,7 @@ function MainScreen({
                 icon={retro ? <RetroIc tone={RETRO_ICON_TONES.listen}><RtWListen /></RetroIc> : <WxIcListen />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="看一看"
@@ -16553,7 +16557,7 @@ function MainScreen({
                 icon={retro ? <RetroIc tone={RETRO_ICON_TONES.search}><RtWSearch /></RetroIc> : <WxIcSearch />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="游戏"
@@ -16561,7 +16565,7 @@ function MainScreen({
                 icon={retro ? <RetroIc tone={RETRO_ICON_TONES.games}><RtWGames /></RetroIc> : <WxIcGames />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               {/* 主题（发现页入口；界面内毛玻璃胶囊提供主题/气泡两个选择） */}
               <WxMenuRow
                 first
@@ -16578,7 +16582,7 @@ function MainScreen({
           <div className={liquid ? 'space-y-2.5 pb-6' : 'space-y-2 pb-6'}>
             {/* 名片：默认 = 头像+名字+微信号左对齐（微信原生白底样式，点击进个人信息页）；
                 液态 = 参考图居中名片（大头像居中 + 名字下方 + 「+ 状态 / N 个朋友」胶囊标签） */}
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               {liquid ? (
                 <button
                   type="button"
@@ -16631,7 +16635,7 @@ function MainScreen({
               )}
             </div>
 
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="服务"
@@ -16641,7 +16645,7 @@ function MainScreen({
               />
             </div>
 
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="收藏"
@@ -16679,7 +16683,7 @@ function MainScreen({
               />
             </div>
 
-            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : retro ? 'mx-2 rt-panel' : 'wx-panel bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="设置"
@@ -16693,14 +16697,15 @@ function MainScreen({
       </div>
 
       {/* 底部 TabBar（上移预留底部横杠安全区）；第三十四轮：上下变小 h-52→46、图标 26→23
-          液态玻璃主题（参考图）：悬浮胶囊 Dock——纯图标（无文字标签），选中图标包裹微信绿液态玻璃圆泡 */}
+          液态玻璃主题（参考图）：悬浮胶囊 Dock——纯图标（无文字标签），选中图标包裹微信绿液态玻璃圆泡
+          wx-tabbar：底部标签栏锚点（自定义 CSS 示例模板可改底色/顶线） */}
       <div
         className={
           liquid
-            ? 'lg-tabbar absolute inset-x-3 bottom-[12px] z-30'
+            ? 'wx-tabbar lg-tabbar absolute inset-x-3 bottom-[12px] z-30'
             : retro
-            ? /* 古早（第五十四轮）：银灰拟物 TabBar */ 'rt-tabbar shrink-0 pb-[16px]'
-            : 'shrink-0 border-t border-black/10 bg-[#F7F7F7] pb-[16px] dark:border-white/10 dark:bg-[#1A1A1A]'
+            ? /* 古早（第五十四轮）：银灰拟物 TabBar */ 'wx-tabbar rt-tabbar shrink-0 pb-[16px]'
+            : 'wx-tabbar shrink-0 border-t border-black/10 bg-[#F7F7F7] pb-[16px] dark:border-white/10 dark:bg-[#1A1A1A]'
         }
       >
         <div className={liquid ? 'flex h-[54px] items-stretch px-1' : retro ? 'flex h-[48px] items-stretch' : 'flex h-[46px] items-stretch'}>

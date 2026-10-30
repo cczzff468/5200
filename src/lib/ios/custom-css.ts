@@ -22,9 +22,15 @@
  * 第七十一轮：示例从「主题」升级为「完整模板」——逐段列出界面上所有能改的元素
  * （背景/顶栏/底栏/气泡/尾巴/时间/输入栏/状态栏/面板/按钮/滚动条…），微信/QQ 各一份，
  * 按各自 App 的真实样式书写；每段默认值 = 当前样式，不改直接应用 ≈ 界面没变化。
- * 第七十五轮（用户指定：全局模板不要「一键换肤」）：全局模板同样全量清单化——
- * 手机壳/页面/导航/面板卡片/聊天卡片/微信·QQ·线下气泡/时间胶囊/输入栏/
- * 输入框·选择框·复选框/按钮/文字选中/滚动条，20 段逐项列出（弃用色板变量版）。
+ * 第七十五轮（用户指定：全局模板不要「一键换肤」）：全局模板全量清单化，逐项列出。
+ * 第七十六轮（用户指定：模板按 App 分开、面板各自不同、更详细）：
+ * 全局编辑器模板拆为四份——微信模板（聊天页/消息列表/通讯录/发现/我/朋友圈/
+ * 聊天设置/状态卡片/红包转账亲属卡礼物代付外卖卡片逐张列出）、QQ模板（聊天/消息/
+ * 联系人/动态/设置/卡片）、信息模板（会话列表/聊天页）、手机公共模板（手机壳/页面底/
+ * 面板/表单/滚动条）；配套补齐语义锚点：wx-tabbar/wx-nav/wx-panel/wx-session-row/
+ * wx-menu-row/wx-letter-bar/wx-moments-post·name·nav·act、qq-root/tabbar/head/search/
+ * session-row/contact-row、sms-topbar/chat-list/bub-mine 与 bub-theirs 与 tail 系列/inputbar/
+ * session-row/session-list/tabbar、chat-set-page/card/row（三 App 聊天设置共用组件）。
  *
  * 方案收藏：CustomCssScheme（自定义名字 + CSS 本体 + 归属作用域），三处编辑器共用一份清单，
  * 各编辑器只列出自己作用域保存的方案（聊天方案跟着联系人走）。
@@ -345,27 +351,503 @@ export interface CssTemplate {
   css: string;
 }
 
-// ================= 全局（个性装扮 › 自定义CSS Tab） =================
+// ================= 全局（个性装扮 › 自定义CSS Tab · 第七十六轮按 App 拆分） =================
+// 用户指定：示例模板按 QQ / 微信 / 信息 App 的样式分开（各自的面板风格互不相同），
+// 且更详细——微信模板覆盖聊天页 / 消息列表 / 通讯录 / 发现 / 我 / 朋友圈 / 聊天设置 /
+// 状态卡片 / 聊天卡片（红包·转账·亲属卡·礼物·代付·外卖…一张一段）；QQ 与信息同理。
+// 外加一份「手机公共模板」管所有 App 共用的部分（手机壳 / 页面底 / 面板 / 表单 / 滚动条）。
 
-/** 全局模板：整台手机所有界面的完整元素清单（第七十五轮 · 用户指定：不要一键换肤）——
- *  手机壳 / 页面 / 导航 / 面板卡片 / 聊天气泡（微信·QQ·线下）/ 时间胶囊 / 输入栏 /
- *  输入框·选择框·复选框 / 按钮手感 / 文字选中 / 滚动条…逐段列出，
- *  每段 = 真实选择器 + 系统当前默认值——不改直接应用 ≈ 界面没变化；
- *  与微信 / QQ / 线下三份完整模板同一写法，用户改哪段哪段生效。 */
-export const GLOBAL_CSS_TEMPLATE: CssTemplate = {
-  name: '全局完整模板',
-  desc: '气泡 / 面板 / 输入框 / 选择框 / 卡片…手机上所有能改的地方',
+/** 微信 · 完整模板：微信所有界面的元素清单（聊天页 / 消息列表 / 通讯录 / 发现 / 我 /
+ *  朋友圈 / 聊天设置 / 状态卡片 / 聊天卡片），每段 = 真实锚点 + 当前默认值。 */
+export const WX_APP_TEMPLATE: CssTemplate = {
+  name: '微信模板（全部界面）',
+  desc: '聊天 / 消息列表 / 通讯录 / 发现 / 我 / 朋友圈 / 设置 / 卡片',
   css: `/* ═══════════════════════════════════════════════
-   全局 · 完整模板（整台手机）
+   微信 · 完整模板（全部界面）
    ═══════════════════════════════════════════════
-   作用范围：手机里所有界面——各 App 页面、聊天、
-   线下模式、面板、气泡、输入框、按钮……全听这里的。
+   作用范围：整台手机里的「微信」——聊天页、消息列表、
+   通讯录、发现、我、朋友圈、聊天设置、状态卡片、
+   红包/转账/亲属卡/礼物/代付/外卖卡片……逐段列出。
    每一段 = 一处；把值改成你想要的，不想要的整段删掉。
-   下面填的都是系统现在的默认样式——不改直接应用 ≈ 没变化。
+   下面填的都是微信现在的默认样式——不改直接应用 ≈ 没变化。
    成对的两行里，第二行是深色模式的值（想让深浅不一样才留它）。
-   两个提醒：① 联系人若单独设了聊天 CSS、或线下模式设了
-   自己的 CSS，同名规则会盖过这里；② 液态玻璃主题的聊天页
-   是透明的，下面第 15 段会盖掉它的透明输入栏。 */
+   两个提醒：① 页面灰白底（#EDEDED）与其他 App 共用，
+   在「手机公共模板 › 页面背景」统一改；② 只想改某一个
+   联系人的聊天页，用该联系人 › 聊天设置 › 自定义CSS
+   （优先级更高，只作用于 TA）。 */
+
+/* ══ 一、聊天界面（所有微信联系人通用） ══ */
+
+/* ── 1. 顶部栏（返回 · 名字 · 菜单那一行） ── */
+.wx-topbar { background: #EDEDED; }
+.dark & .wx-topbar { background: #111111; }
+
+/* ── 2. 我的气泡（右侧绿泡；文字和语音一起换） ── */
+.wx-bub-mine { background: #95EC69 !important; color: #000000; }
+.dark & .wx-bub-mine { background: #3EB575 !important; color: #000000; }
+
+/* ── 3. 对方的气泡（左侧白泡） ── */
+.wx-bub-theirs { background: #FFFFFF !important; color: #000000; }
+.dark & .wx-bub-theirs { background: #1E1E1E !important; color: #FFFFFF; }
+
+/* ── 4. 气泡小尾巴（跟气泡同色的小三角） ── */
+.wx-bub-tail-mine { background: #95EC69 !important; }
+.dark & .wx-bub-tail-mine { background: #3EB575 !important; }
+.wx-bub-tail-theirs { background: #FFFFFF !important; }
+.dark & .wx-bub-tail-theirs { background: #1E1E1E !important; }
+
+/* ── 5. 时间胶囊（居中的时间小条） ── */
+.wx-time-chip {
+  background: rgba(255, 255, 255, 0.75);
+  border-color: rgba(0, 0, 0, 0.15);
+  color: rgba(0, 0, 0, 0.5);
+}
+.dark & .wx-time-chip {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* ── 6. 底部输入栏（打字那一栏） ── */
+.wx-inputbar { background: #EDEDED; border-color: rgba(0, 0, 0, 0.07); }
+.dark & .wx-inputbar { background: #111111; border-color: rgba(255, 255, 255, 0.06); }
+
+/* ── 7. 状态卡片（聊天页点对方头像弹出的那张卡） ── */
+[data-testid='peer-status-card'] > div {
+  background: color-mix(in srgb, var(--background) 95%, transparent);
+  border-color: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+/* ══ 二、消息列表（微信 Tab） ══ */
+
+/* ── 8. 顶部导航（返回 / 搜索 / ＋ 那一行；默认透明贴着页面底色） ── */
+/* .wx-nav { background: #EDEDED; } */
+
+/* ── 9. 会话列表白色面板（微信特有的一整幅白底） ── */
+.wx-panel { background: #FFFFFF; }
+.dark & .wx-panel { background: #1A1A1A; }
+
+/* ── 10. 会话行（头像 + 名字 + 预览；默认透明，置顶行浅灰） ── */
+.wx-session-row { background: transparent; }
+/* 想连置顶行一起换色？解开下面两行 */
+/* .wx-session-row { background: #ECECEC !important; } */
+/* .dark & .wx-session-row { background: rgba(255, 255, 255, 0.06) !important; } */
+
+/* ── 11. 未读角标（头像右上角红色数字） ── */
+[data-testid^='wx-unread-badge-'],
+[data-testid='wx-tab-badge-chats'],
+[data-testid='wx-tab-badge-discover'] { background: #FA5151; }
+
+/* ── 12. 底部标签栏（微信 / 通讯录 / 发现 / 我） ── */
+.wx-tabbar {
+  background: #F7F7F7;
+  border-color: rgba(0, 0, 0, 0.10);
+}
+.dark & .wx-tabbar {
+  background: #1A1A1A;
+  border-color: rgba(255, 255, 255, 0.10);
+}
+
+/* ── 13. 标签按钮（未选中的字色；选中色是程序控制的微信绿 #07C160） ── */
+[data-testid^='wx-tab-'] { color: rgba(0, 0, 0, 0.55); }
+.dark & [data-testid^='wx-tab-'] { color: rgba(255, 255, 255, 0.55); }
+
+/* ══ 三、通讯录 ══ */
+
+/* ── 14. 功能入口行（新的朋友 / 群聊 / 标签 / 公众号…；默认透明） ──
+   这个锚点同时管「发现」页（朋友圈/视频号/扫一扫…）和「我」页
+   （服务/收藏/相册/表情…）的行——三页的行样式一起换 */
+.wx-menu-row { background: transparent; }
+
+/* ── 15. 字母分组条（A B C…吸顶那一行） ── */
+.wx-letter-bar { background: #EDEDED; color: rgba(0, 0, 0, 0.5); }
+.dark & .wx-letter-bar { background: #111111; color: rgba(255, 255, 255, 0.5); }
+
+/* ── 16. 好友行（默认透明） ── */
+[data-testid^='wx-contact-'] { background: transparent; }
+
+/* ══ 四、我 ══ */
+
+/* ── 17. 名片区（头像 + 名字 + 微信号那一块；默认透明） ── */
+[data-testid='wx-me-profile'] { background: transparent; }
+
+/* ══ 五、朋友圈 ══ */
+
+/* ── 18. 朋友圈页面底色 ── */
+[data-testid='wx-moments-list'] { background: #FFFFFF; }
+.dark & [data-testid='wx-moments-list'] { background: #111111; }
+
+/* ── 19. 顶部导航（悬浮在封面上；滚过封面自动变白底，默认透明） ── */
+/* .wx-moments-nav { background: rgba(255, 255, 255, 0.95); } */
+
+/* ── 20. 动态卡（头像 + 名字 + 正文 + 配图一整行） ── */
+.wx-moments-post {
+  background: transparent;
+  border-color: rgba(0, 0, 0, 0.06);
+}
+.dark & .wx-moments-post { border-color: rgba(255, 255, 255, 0.08); }
+
+/* ── 21. 作者名字（微信经典蓝） ── */
+.wx-moments-name { color: #576B95; }
+.dark & .wx-moments-name { color: #8FA5C9; }
+
+/* ── 22. 赞 / 评论小胶囊（时间右边那颗灰按钮） ── */
+.wx-moments-act { background: #F2F2F2; }
+.dark & .wx-moments-act { background: #2A2A2A; }
+
+/* ── 23. 「N条新消息」胶囊（封面下方那条深色气泡） ── */
+[data-testid='wx-moments-pill'] { background: rgba(0, 0, 0, 0.7); }
+.dark & [data-testid='wx-moments-pill'] { background: rgba(255, 255, 255, 0.2); }
+
+/* ══ 六、聊天设置界面（联系人的聊天设置页） ══ */
+
+/* ── 24. 设置页底 + 设置卡（圆角 10px 方角卡 = 微信的；QQ/信息不受影响） ── */
+.chat-set-page[class*='bg-[#EDEDED]'] { background: #EDEDED; }
+.dark & .chat-set-page[class*='bg-[#EDEDED]'] { background: #111111; }
+.chat-set-card[class*='rounded-[10px]'] { background: #FFFFFF; }
+.dark & .chat-set-card[class*='rounded-[10px]'] { background: #1A1A1A; }
+
+/* ── 25. 设置行（备注 / 主题 / 翻译…；默认透明） ── */
+.chat-set-row { background: transparent; }
+
+/* ══ 七、聊天卡片（一段一张，全在聊天页里） ══ */
+
+/* ── 26. 红包卡（红橙渐变 + 小尾巴） ── */
+.chat-card-rp .chat-card-body {
+  background: linear-gradient(135deg, #F2694C, #E94E38) !important;
+}
+.chat-card-rp .chat-card-tail { background: #EC5A42 !important; }
+
+/* ── 27. 转账卡（橙色渐变 + 小尾巴） ── */
+.chat-card-tr .chat-card-body {
+  background: linear-gradient(135deg, #F6AC3D, #EF9A2E) !important;
+}
+.chat-card-tr .chat-card-tail { background: #F2A233 !important; }
+
+/* ── 28. 亲属卡（米白卡身 + 小尾巴） ── */
+.chat-card-fam .chat-card-body { background: #FFFFFF; }
+.dark & .chat-card-fam .chat-card-body { background: #1E1E1E; }
+.chat-card-fam .chat-card-tail { background: #FFFFFF; }
+.dark & .chat-card-fam .chat-card-tail { background: #1E1E1E; }
+
+/* ── 29. 礼物卡（深蓝星空 + 小尾巴） ── */
+.chat-card-gift .chat-card-body {
+  background: linear-gradient(160deg, #4467B4 0%, #2C4E92 46%, #20396E 100%) !important;
+}
+.chat-card-gift .chat-card-tail { background: #2C4E92 !important; }
+
+/* ── 30. 美团系卡片（找人代付 / 代点外卖 / 订单分享：白卡 + 黄横幅） ── */
+.chat-card-mtpay, .chat-card-mtdraft, .chat-card-mtshare { background: #FFFFFF; }
+.chat-card-mtpay .chat-card-banner {
+  background: linear-gradient(to right, #FFDB3D, #FFC933) !important;
+}
+.chat-card-mtpay .chat-card-btn, .chat-card-mtdraft .chat-card-btn {
+  background: linear-gradient(to right, #FFD900, #FFC300) !important;
+}
+
+/* ── 31. 淘宝系卡片（找人代付 / AI 帮买 / 订单分享：白卡 + 橙横幅） ── */
+.chat-card-tbpay, .chat-card-tbdraft, .chat-card-tbshare { background: #FFFFFF; }
+.chat-card-tbpay .chat-card-banner {
+  background: linear-gradient(to right, #FF7A21, #FF4400) !important;
+}
+.chat-card-tbpay .chat-card-btn {
+  background: linear-gradient(to right, #FF7A21, #FF4400) !important;
+}
+
+/* ── 32. 文字卡片（象牙白纸面） ── */
+.chat-card-text {
+  background: #FBF9F3;
+  border-color: rgba(0, 0, 0, 0.05);
+}
+.dark & .chat-card-text {
+  background: #2A282B;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ── 33. 卡片底部标签条（红包/转账/亲属卡/礼物那行小字） ── */
+.chat-card-label { color: rgba(255, 255, 255, 0.9); font-size: 12px; }
+
+/* ── 34. 卡片小标签（代点外卖 / AI帮你买 / 已买单…） ── */
+.chat-card-tag { border-radius: 99px; }
+
+/* ── 35. 想再动手？解开这些注释 ── */
+/* 气泡圆角改小一点 */
+/* .wx-bub-mine, .wx-bub-theirs { border-radius: 8px; } */
+
+/* 聊天文字放大一档 */
+/* .wx-chat-list { font-size: 17px; } */
+
+/* 换个字体（把链接换成你要的字体） */
+/* @import url("https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap"); */
+/* .wx-chat-list { font-family: "ZCOOL KuaiLe", sans-serif; } */`,
+};
+
+/** QQ · 完整模板：QQ 所有界面的元素清单（聊天页 / 消息列表 / 联系人 / 动态 /
+ *  聊天设置 / 聊天卡片），面板风格与微信模板各自独立。 */
+export const QQ_APP_TEMPLATE: CssTemplate = {
+  name: 'QQ模板（全部界面）',
+  desc: '聊天 / 消息列表 / 联系人 / 动态 / 设置 / 卡片',
+  css: `/* ═══════════════════════════════════════════════
+   QQ · 完整模板（全部界面）
+   ═══════════════════════════════════════════════
+   作用范围：整台手机里的「QQ」——聊天页、消息列表、
+   联系人、动态、聊天设置、红包/转账/亲属卡/代付/外卖卡片。
+   用法同微信模板：每段 = 一处，改值生效，不想要整段删。
+   成对的两行里，第二行是深色模式的值。
+   两个提醒：① 聊天页灰白底（#F5F6F7）与其他 App 共用，
+   在「手机公共模板 › 页面背景」统一改；② 我的气泡颜色是
+   程序内联写死的，规则带 !important 才能盖住——保留，别删。 */
+
+/* ══ 一、聊天界面（所有 QQ 联系人通用） ══ */
+
+/* ── 1. 顶部栏（返回 · 名字 · 菜单那一行） ── */
+.qq-topbar { background: #F5F6F7; }
+.dark & .qq-topbar { background: #111214; }
+
+/* ── 2. 我的气泡（右侧蓝泡；文字和语音一起换） ── */
+.qq-bub-mine { background: #0099FF !important; color: #FFFFFF; }
+/* 想让深色模式换个颜色？解开下面这行 */
+/* .dark & .qq-bub-mine { background: #0077E0 !important; color: #FFFFFF; } */
+
+/* ── 3. 对方的气泡（左侧白泡） ── */
+.qq-bub-theirs { background: #FFFFFF !important; color: #1F2329; }
+.dark & .qq-bub-theirs { background: #2A2C31 !important; color: #FFFFFF; }
+
+/* ── 4. 时间胶囊（居中的时间小条） ── */
+.qq-time-chip {
+  background: rgba(255, 255, 255, 0.75);
+  border-color: rgba(0, 0, 0, 0.15);
+  color: rgba(0, 0, 0, 0.5);
+}
+.dark & .qq-time-chip {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* ── 5. 底部输入栏（打字那一栏） ── */
+.qq-inputbar { background: #FFFFFF; }
+.dark & .qq-inputbar { background: #1B1C1F; }
+
+/* ══ 二、消息列表（消息 Tab） ══ */
+
+/* ── 6. QQ 主界面底色（QQ 特有的冷灰白，与微信的 #EDEDED 各改各的） ── */
+.qq-root { background: #FAFAFC; }
+.dark & .qq-root { background: #16171A; }
+
+/* ── 7. 页面头部（头像 + 大标题那一行；默认透明贴着页面底色） ── */
+/* .qq-head { background: #FAFAFC; } */
+
+/* ── 8. 搜索框胶囊 ── */
+.qq-search { background: rgba(0, 0, 0, 0.05); }
+.dark & .qq-search { background: rgba(255, 255, 255, 0.08); }
+
+/* ── 9. 会话行（默认透明，置顶行浅灰） ── */
+.qq-session-row { background: transparent; }
+/* 想连置顶行一起换色？解开下面两行 */
+/* .qq-session-row { background: #F0F1F5 !important; } */
+/* .dark & .qq-session-row { background: rgba(255, 255, 255, 0.06) !important; } */
+
+/* ── 10. 未读角标（红色数字） ── */
+[data-testid^='qq-unread-badge-'],
+[data-testid='qq-tab-badge-消息'],
+[data-testid='qq-tab-badge-动态'],
+[data-testid='qq-discover-zone-badge'] { background: #F5455C; }
+
+/* ── 11. 底部标签栏（消息 / 联系人 / 动态） ── */
+.qq-tabbar {
+  background: #FFFFFF;
+  border-color: rgba(0, 0, 0, 0.05);
+}
+.dark & .qq-tabbar {
+  background: #1B1C1F;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* ── 12. 标签按钮（未选中字色；选中色是程序控制的 QQ 蓝 #1E6FFF） ── */
+[data-testid^='qq-tab-'] { color: rgba(0, 0, 0, 0.55); }
+.dark & [data-testid^='qq-tab-'] { color: rgba(255, 255, 255, 0.55); }
+
+/* ══ 三、联系人 ══ */
+
+/* ── 13. 好友行（我的好友列表里的行；默认透明） ── */
+.qq-contact-row { background: transparent; }
+
+/* ── 14. 分组标签（分组 / 好友 / 群聊那排；选中色是程序控制的 QQ 蓝） ── */
+[data-testid^='qq-ct-tab-'] { color: rgba(0, 0, 0, 0.55); }
+.dark & [data-testid^='qq-ct-tab-'] { color: rgba(255, 255, 255, 0.55); }
+
+/* ══ 四、动态 ══ */
+
+/* ── 15. 动态入口行（好友动态 / 相册 / 日历…；默认透明） ── */
+[data-testid^='qq-discover-'] { background: transparent; }
+
+/* ══ 五、聊天设置界面（联系人的聊天设置页） ══ */
+
+/* ── 16. 设置页底 + 设置卡（圆角 14px 大圆角卡 = QQ 的；微信/信息不受影响） ── */
+.chat-set-page[class*='bg-[#F5F6F8]'] { background: #F5F6F8; }
+.dark & .chat-set-page[class*='bg-[#F5F6F8]'] { background: #16171A; }
+.chat-set-card[class*='rounded-[14px]'] { background: #FFFFFF; }
+.dark & .chat-set-card[class*='rounded-[14px]'] { background: #232529; }
+
+/* ══ 六、聊天卡片（QQ 无小尾巴、无礼物卡） ══ */
+
+/* ── 17. QQ红包卡（红粉渐变封面） ── */
+.chat-card-rp {
+  background: linear-gradient(168deg, #FC8163 0%, #F5455C 55%, #F2394E 100%) !important;
+}
+
+/* ── 18. 转账卡（QQ蓝渐变） ── */
+.chat-card-tr {
+  background: linear-gradient(135deg, #29ABF2 0%, #0099FF 100%) !important;
+}
+
+/* ── 19. 亲属卡（金色渐变） ── */
+.chat-card-fam {
+  background: linear-gradient(135deg, #F7D488 0%, #EDB95E 100%) !important;
+}
+
+/* ── 20. 美团系卡片（找人代付 / 代点外卖 / 订单分享：白卡 + 黄横幅） ── */
+.chat-card-mtpay, .chat-card-mtdraft, .chat-card-mtshare { background: #FFFFFF; }
+.chat-card-mtpay .chat-card-banner {
+  background: linear-gradient(to right, #FFDB3D, #FFC933) !important;
+}
+.chat-card-mtpay .chat-card-btn, .chat-card-mtdraft .chat-card-btn {
+  background: linear-gradient(to right, #FFD900, #FFC300) !important;
+}
+
+/* ── 21. 淘宝系卡片（找人代付 / AI 帮买 / 订单分享：白卡 + 橙横幅） ── */
+.chat-card-tbpay, .chat-card-tbdraft, .chat-card-tbshare { background: #FFFFFF; }
+.chat-card-tbpay .chat-card-banner {
+  background: linear-gradient(to right, #FF7A21, #FF4400) !important;
+}
+.chat-card-tbpay .chat-card-btn {
+  background: linear-gradient(to right, #FF7A21, #FF4400) !important;
+}
+
+/* ── 22. 文字卡片（象牙白纸面） ── */
+.chat-card-text {
+  background: #FBF9F3;
+  border-color: rgba(0, 0, 0, 0.05);
+}
+.dark & .chat-card-text {
+  background: #2A282B;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ── 23. 底部标签条（QQ红包/转账/亲属卡那行小字） ── */
+.chat-card-label {
+  color: rgba(255, 255, 255, 0.95);
+  border-color: rgba(255, 255, 255, 0.25);
+  font-size: 12.5px;
+}
+
+/* ── 24. 小标签（代点外卖 / AI帮你买 / 已买单…） ── */
+.chat-card-tag { border-radius: 99px; }
+
+/* ── 25. 想再动手？解开这些注释 ── */
+/* 气泡圆角改小一点 */
+/* .qq-bub-mine, .qq-bub-theirs { border-radius: 8px; } */
+
+/* 聊天文字放大一档 */
+/* .qq-chat-list { font-size: 17px; } */
+
+/* 换个字体（把链接换成你要的字体） */
+/* @import url("https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap"); */
+/* .qq-chat-list { font-family: "ZCOOL KuaiLe", sans-serif; } */`,
+};
+
+/** 信息 · 完整模板：信息 App（iMessage 风）的元素清单（会话列表 + 聊天界面）。 */
+export const SMS_APP_TEMPLATE: CssTemplate = {
+  name: '信息模板（全部界面）',
+  desc: '会话列表 / 聊天页：顶栏 / 气泡 / 尾巴 / 输入栏',
+  css: `/* ═══════════════════════════════════════════════
+   信息 · 完整模板（全部界面）
+   ═══════════════════════════════════════════════
+   作用范围：整台手机里的「信息」App（iMessage 风）——
+   会话列表、聊天页（顶栏 / 气泡 / 小尾巴 / 输入栏）。
+   用法同微信模板：每段 = 一处，改值生效，不想要整段删。
+   成对的两行里，第二行是深色模式的值。
+   两个提醒：① 信息 App 的页面底色跟系统走，在「手机公共
+   模板 › 页面背景」统一改；② 气泡若装扮过（纯色/七彩），
+   颜色是程序写死的，规则里的 !important 用来盖住——保留。 */
+
+/* ══ 一、会话列表（信息 Tab） ══ */
+
+/* ── 1. 会话行（小助手 / 好友；默认透明，置顶行浅灰） ── */
+.sms-session-row { background: transparent; }
+/* 想连置顶行一起换色？解开下面两行 */
+/* .sms-session-row { background: rgba(0, 0, 0, 0.06) !important; } */
+/* .dark & .sms-session-row { background: rgba(255, 255, 255, 0.08) !important; } */
+
+/* ── 2. 未读角标（红色数字） ── */
+[data-testid='sms-unread-badge'] { background: #FF3B30; }
+
+/* ── 3. 底部分段栏（信息 / 联系人 胶囊那一栏；毛玻璃半透） ── */
+.sms-tabbar { background: rgba(255, 255, 255, 0.6); }
+.dark & .sms-tabbar { background: rgba(255, 255, 255, 0.06); }
+/* 分段的选中胶囊是 iOS 蓝（#007AFF），由程序控制 */
+
+/* ══ 二、聊天界面 ══ */
+
+/* ── 4. 顶部栏（返回 + 头像/手机号 + 摄像机；毛玻璃半透） ── */
+.sms-topbar {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+.dark & .sms-topbar {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+/* ── 5. 我的气泡（右侧 iOS 蓝泡；文字和语音一起换） ── */
+.sms-bub-mine { background: #007AFF !important; color: #FFFFFF; }
+
+/* ── 6. 对方的气泡（左侧灰泡） ── */
+.sms-bub-theirs { background: hsl(var(--muted)) !important; color: hsl(var(--foreground)); }
+
+/* ── 7. 气泡小尾巴（跟气泡同色的弯钩） ── */
+.sms-bub-tail-mine { background: #007AFF !important; }
+.sms-bub-tail-theirs { background: hsl(var(--muted)) !important; }
+
+/* ── 8. 底部输入栏（加号 + 输入胶囊 + 麦克风；毛玻璃半透） ── */
+.sms-inputbar {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+.dark & .sms-inputbar {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+/* ── 9. 想再动手？解开这些注释 ── */
+/* 聊天文字放大一档 */
+/* .sms-chat-list { font-size: 17px; } */
+
+/* 气泡圆角改小一点 */
+/* .sms-bub-mine, .sms-bub-theirs { border-radius: 12px; } */
+
+/* 换个字体（把链接换成你要的字体） */
+/* @import url("https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap"); */
+/* .sms-chat-list { font-family: "ZCOOL KuaiLe", sans-serif; } */`,
+};
+
+/** 手机公共模板：所有 App 共用的部分（手机壳 / 页面底 / 导航 / 面板 /
+ *  表单控件 / 按钮手感 / 滚动条）。微信 / QQ / 信息各自的界面在它们自己的模板里；
+ *  线下模式在 现场设置 › 自定义CSS。 */
+export const GLOBAL_CSS_TEMPLATE: CssTemplate = {
+  name: '手机公共模板',
+  desc: '状态栏 / 灵动岛 / 页面底 / 面板 / 输入框 / 按钮所有 App 共用部分',
+  css: `/* ═══════════════════════════════════════════════
+   手机 · 公共模板（跨 App 的公共部分）
+   ═══════════════════════════════════════════════
+   作用范围：所有 App 共用的部分——手机壳（状态栏/
+   灵动岛/Home 条）、页面灰白底、顶部导航、面板卡片、
+   输入框/选择框/复选框、按钮手感、文字选中、滚动条。
+   微信/QQ/信息各自的界面在它们自己的模板里改；
+   线下模式在 现场设置 › 自定义CSS。
+   每一段 = 一处；下面都是当前默认值——不改直接应用 ≈ 没变化。
+   成对的两行里，第二行是深色模式的值。 */
 
 /* ══ 一、手机壳 ══ */
 
@@ -407,9 +889,9 @@ export const GLOBAL_CSS_TEMPLATE: CssTemplate = {
 /* ↑ 这行 = 系统默认（半透明，自动跟随深浅模式）；
    换成你要的颜色即可，如 rgba(255, 250, 240, 0.85) */
 
-/* ══ 三、面板 / 卡片 ══ */
+/* ══ 三、面板 ══ */
 
-/* ── 6. 面板与卡片（设置页 · 弹窗 · 线下模式里的卡片） ── */
+/* ── 6. 面板与卡片（设置页 · 弹窗 · 主题面板；线下模式的卡在现场设置里改） ── */
 .rt-panel { background: #FFFFFF; }                    /* 古早主题白卡 */
 .dark & .rt-panel { background: #35353D; }
 .lg-card  { background: rgba(255, 255, 255, 0.62); }  /* 液态玻璃内容卡 */
@@ -418,78 +900,10 @@ export const GLOBAL_CSS_TEMPLATE: CssTemplate = {
 .dark & .lg-sheet { background: rgba(30, 30, 36, 0.86); }
 .lg-panel { background: rgba(255, 255, 255, 0.96); }  /* 液态玻璃白色分组卡 */
 .dark & .lg-panel { background: rgba(28, 28, 32, 0.96); }
-.off-card {                                           /* 线下模式卡片 */
-  background: rgba(255, 255, 255, 0.55);
-  border-color: rgba(255, 255, 255, 0.6);
-}
-.dark & .off-card {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.1);
-}
 
-/* ── 7. 聊天卡片（红包 / 转账 / 亲属卡 / 礼物 / 外卖单…） ── */
-.chat-card-tag { border-radius: 99px; }  /* 卡上的小标签（代点外卖 / 已买单…） */
-/* 所有卡片的圆角一起改（微信默认 4px · QQ 默认 12px，这里会统一覆盖） */
-/* .chat-card-body { border-radius: 10px; } */
-/* 每张卡（红包/转账/亲属卡/礼物/美团/淘宝）逐段的完整清单在
-   「聊天设置 › 自定义CSS › 卡片模板」；这里改的是所有联系人通用 */
+/* ══ 四、输入与手感 ══ */
 
-/* ══ 四、聊天气泡（所有联系人通用） ══ */
-
-/* ── 8. 微信 · 我的气泡（右侧绿泡；文字和语音一起换） ── */
-.wx-bub-mine { background: #95EC69 !important; color: #000000; }
-.dark & .wx-bub-mine { background: #3EB575 !important; color: #000000; }
-
-/* ── 9. 微信 · 对方的气泡（左侧白泡） ── */
-.wx-bub-theirs { background: #FFFFFF !important; color: #000000; }
-.dark & .wx-bub-theirs { background: #1E1E1E !important; color: #FFFFFF; }
-
-/* ── 10. 微信 · 气泡小尾巴（跟气泡同色的小三角） ── */
-.wx-bub-tail-mine { background: #95EC69 !important; }
-.dark & .wx-bub-tail-mine { background: #3EB575 !important; }
-.wx-bub-tail-theirs { background: #FFFFFF !important; }
-.dark & .wx-bub-tail-theirs { background: #1E1E1E !important; }
-
-/* ── 11. QQ · 我的气泡（右侧蓝泡；颜色是程序写死的，!important 才能盖住） ── */
-.qq-bub-mine { background: #0099FF !important; color: #FFFFFF; }
-/* 想让深色模式换个颜色？解开下面这行 */
-/* .dark & .qq-bub-mine { background: #0077E0 !important; color: #FFFFFF; } */
-
-/* ── 12. QQ · 对方的气泡（左侧白泡） ── */
-.qq-bub-theirs { background: #FFFFFF !important; color: #1F2329; }
-.dark & .qq-bub-theirs { background: #2A2C31 !important; color: #FFFFFF; }
-
-/* ── 13. 线下模式 · 我的对话气泡（见面页里你说的话） ── */
-.off-bubble-user {
-  background: rgba(236, 234, 231, 0.85);
-  border-color: rgba(0, 0, 0, 0.06);
-}
-.dark & .off-bubble-user {
-  background: rgba(44, 44, 46, 0.85);
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-/* ══ 五、时间 / 输入 ══ */
-
-/* ── 14. 时间胶囊（聊天里居中的时间小条） ── */
-.wx-time-chip, .qq-time-chip {
-  background: rgba(255, 255, 255, 0.75);
-  border-color: rgba(0, 0, 0, 0.15);
-  color: rgba(0, 0, 0, 0.5);
-}
-.dark & .wx-time-chip, .dark & .qq-time-chip {
-  background: rgba(255, 255, 255, 0.13);
-  border-color: rgba(255, 255, 255, 0.15);
-  color: rgba(255, 255, 255, 0.6);
-}
-
-/* ── 15. 聊天底部输入栏（打字那一栏） ── */
-.wx-inputbar { background: #EDEDED; border-color: rgba(0, 0, 0, 0.07); }
-.dark & .wx-inputbar { background: #111111; border-color: rgba(255, 255, 255, 0.06); }
-.qq-inputbar { background: #FFFFFF; }
-.dark & .qq-inputbar { background: #1B1C1F; }
-
-/* ── 16. 输入框 / 选择框 / 复选框（表单里那些） ── */
+/* ── 7. 输入框 / 选择框 / 复选框（表单里那些） ── */
 /* 输入框打字时的光标颜色 */
 /* input, textarea { caret-color: #FF7A59; } */
 /* 选择框（下拉框）统一圆角 */
@@ -497,25 +911,25 @@ export const GLOBAL_CSS_TEMPLATE: CssTemplate = {
 /* 复选框勾选颜色（各 App 默认不一样：微信绿 / 删除红…这里统一改） */
 /* input[type='checkbox'] { accent-color: #07C160; } */
 
-/* ══ 六、按钮与细节 ══ */
-
-/* ── 17. 按钮手感（按下轻轻缩，松手弹回来） ── */
+/* ── 8. 按钮手感（按下轻轻缩，松手弹回来） ── */
 button {
   transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1.4),
     background-color 0.18s, color 0.18s, opacity 0.18s;
 }
 button:active { transform: scale(0.955); }
 
-/* ── 18. 文字选中（长按 / 拖选文字的高亮色） ── */
+/* ══ 五、细节 ══ */
+
+/* ── 9. 文字选中（长按 / 拖选文字的高亮色） ── */
 /* 解开注释填你想要的颜色 */
 /* ::selection { background: #FF7A59; color: #FFFFFF; } */
 
-/* ── 19. 滚动条（所有列表的滚动条） ── */
+/* ── 10. 滚动条（所有列表的滚动条） ── */
 ::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.25); border-radius: 99px; }
 .dark & ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.25); }
 
-/* ── 20. 想再动手？解开这些注释 ── */
+/* ── 11. 想再动手？解开这些注释 ── */
 /* 所有按钮统一圆角（注意：胶囊按钮会变方角） */
 /* button, input, textarea, select { border-radius: 12px; } */
 
@@ -966,8 +1380,13 @@ export const OFFLINE_CSS_TEMPLATE: CssTemplate = {
 /* & { font-family: "ZCOOL KuaiLe", sans-serif; } */`,
 };
 
-/** 全局模板组（个性装扮 › 自定义CSS Tab；放文件末尾，避开 const 提升顺序问题） */
-export const GLOBAL_CSS_TEMPLATES: CssTemplate[] = [GLOBAL_CSS_TEMPLATE];
+/** 全局模板组（个性装扮 › 自定义CSS Tab）：微信 / QQ / 信息按 App 分开 + 手机公共部分 */
+export const GLOBAL_CSS_TEMPLATES: CssTemplate[] = [
+  WX_APP_TEMPLATE,
+  QQ_APP_TEMPLATE,
+  SMS_APP_TEMPLATE,
+  GLOBAL_CSS_TEMPLATE,
+];
 
 /** 线下模板组（线下模式 › 现场设置） */
 export const OFFLINE_CSS_TEMPLATES: CssTemplate[] = [OFFLINE_CSS_TEMPLATE];

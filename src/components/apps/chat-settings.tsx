@@ -268,13 +268,15 @@ export function ChatSettingsPage({
 
   // 主题 token（微信灰白 / QQ 冷灰白）
   const skin = useChatSkin();
-  const pageCls = skin.retro ? 'rt-root text-black dark:text-white' : skin.liquid ? 'lg-root text-black dark:text-white' : wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
-  const cardCls = skin.retro ? 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const pageCls = skin.retro ? 'chat-set-page rt-root text-black dark:text-white' : skin.liquid ? 'chat-set-page lg-root text-black dark:text-white' : wx ? 'chat-set-page bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'chat-set-page bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  /* chat-set-card：聊天设置页卡片锚点（自定义 CSS 示例模板可改卡底） */
+  const cardCls = skin.retro ? 'chat-set-card rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'chat-set-card rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'chat-set-card rounded-[14px] bg-white dark:bg-[#232529]';
   const barCls = skin.retro ? 'rt-bar' : '';
   const dividerCls = wx ? 'border-black/5 dark:border-white/10' : 'border-black/[0.04] dark:border-white/[0.06]';
+  /* chat-set-row：设置行锚点 */
   const rowCls = wx
-    ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
-    : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
+    ? 'chat-set-row flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+    : 'chat-set-row flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
   // 开关选中色：微信绿 / QQ 蓝
   const accent = wx ? '#07C160' : '#0099FF';
   const defaultBg = wx ? WX_CHAT_BG_DEFAULT : QQ_CHAT_BG_DEFAULT;
@@ -740,7 +742,7 @@ export function FriendDeleteConfirmDialog({
   onConfirm: () => void;
 }) {
   const wx = variant === 'wx';
-  const cardCls = wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const cardCls = wx ? 'chat-set-card rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'chat-set-card rounded-[14px] bg-white dark:bg-[#232529]';
   const appLabel = wx ? '微信' : 'QQ';
   return (
     <div className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-8" data-testid={`${variant}-delete-contact-dialog`} onClick={onCancel}>
@@ -804,13 +806,15 @@ export function ChatReplyCountPage({
 
   // 主题 token（与 ChatSettingsPage 一致）
   const skin = useChatSkin();
-  const pageCls = skin.retro ? 'rt-root text-black dark:text-white' : skin.liquid ? 'lg-root text-black dark:text-white' : wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
-  const cardCls = skin.retro ? 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const pageCls = skin.retro ? 'chat-set-page rt-root text-black dark:text-white' : skin.liquid ? 'chat-set-page lg-root text-black dark:text-white' : wx ? 'chat-set-page bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'chat-set-page bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  /* chat-set-card：聊天设置页卡片锚点（自定义 CSS 示例模板可改卡底） */
+  const cardCls = skin.retro ? 'chat-set-card rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'chat-set-card rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'chat-set-card rounded-[14px] bg-white dark:bg-[#232529]';
   const barCls = skin.retro ? 'rt-bar' : '';
   const dividerCls = wx ? 'border-black/5 dark:border-white/10' : 'border-black/[0.04] dark:border-white/[0.06]';
+  /* chat-set-row：设置行锚点 */
   const rowCls = wx
-    ? 'flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
-    : 'flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
+    ? 'chat-set-row flex w-full items-center justify-between px-4 py-3 text-left text-[16px] active:bg-black/[0.04] dark:active:bg-white/[0.06]'
+    : 'chat-set-row flex w-full items-center justify-between px-4 min-h-[54px] text-left text-[15.5px] active:bg-black/[0.03] dark:active:bg-white/[0.05]';
   // 选中勾色：微信绿 / 信息 iOS 绿 / QQ 蓝
   const accent = wx ? '#07C160' : variant === 'sms' ? '#34C759' : '#0099FF';
   const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
@@ -900,8 +904,9 @@ export function ChatBgPage({
 
   // 主题 token（与 ChatSettingsPage 一致）
   const skin = useChatSkin();
-  const pageCls = skin.retro ? 'rt-root text-black dark:text-white' : skin.liquid ? 'lg-root text-black dark:text-white' : wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
-  const cardCls = skin.retro ? 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const pageCls = skin.retro ? 'chat-set-page rt-root text-black dark:text-white' : skin.liquid ? 'chat-set-page lg-root text-black dark:text-white' : wx ? 'chat-set-page bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'chat-set-page bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  /* chat-set-card：聊天设置页卡片锚点（自定义 CSS 示例模板可改卡底） */
+  const cardCls = skin.retro ? 'chat-set-card rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'chat-set-card rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'chat-set-card rounded-[14px] bg-white dark:bg-[#232529]';
   const barCls = skin.retro ? 'rt-bar' : '';
   // 选中/勾色：微信绿 / QQ 蓝
   const accent = wx ? '#07C160' : '#0099FF';
@@ -1116,8 +1121,9 @@ export function ChatSearchPage({
   const wx = variant === 'wx';
 
   const skin = useChatSkin();
-  const pageCls = skin.retro ? 'rt-root text-black dark:text-white' : skin.liquid ? 'lg-root text-black dark:text-white' : wx ? 'bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
-  const cardCls = skin.retro ? 'rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'rounded-[14px] bg-white dark:bg-[#232529]';
+  const pageCls = skin.retro ? 'chat-set-page rt-root text-black dark:text-white' : skin.liquid ? 'chat-set-page lg-root text-black dark:text-white' : wx ? 'chat-set-page bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white' : 'chat-set-page bg-[#F5F6F8] text-[#1F2329] dark:bg-[#16171A] dark:text-white';
+  /* chat-set-card：聊天设置页卡片锚点（自定义 CSS 示例模板可改卡底） */
+  const cardCls = skin.retro ? 'chat-set-card rounded-[6px] bg-white dark:bg-[#1A1A1A]' : wx ? 'chat-set-card rounded-[10px] bg-white dark:bg-[#1A1A1A]' : 'chat-set-card rounded-[14px] bg-white dark:bg-[#232529]';
   const barCls = skin.retro ? 'rt-bar' : '';
   const titleCls = wx ? 'text-[17px] font-medium' : 'text-[17px] font-semibold';
   const headerH = wx ? 'h-11' : 'h-12';
