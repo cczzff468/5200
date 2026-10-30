@@ -1643,3 +1643,23 @@ Work Log:
 Stage Summary:
 - 拾光小屋 AI 点播闭环达成：「弹一首 X」→ 曲库秒弹 / 缓存秒弹 / LLM 现记谱照弹（吉他钢琴双乐器、任意歌、不依赖模型格式遵循度），音箱放歌真歌直链优先+重试+八音盒兜底，弹奏时曲名字幕+琴键弦位高亮联动；附带修复 play/cook 寻路不可达与卡死兜底两个底层 Bug
 - 关键文件：ai-song.ts（曲库+三层取谱+播放引擎+事件总线）、api/ai-song/route.ts（LLM 记谱）、companion-brain.ts（意图兜底/增强+ACT inst 参数）、companion-rt.ts（外围点+传送兜底）、CoupleHome.tsx（预取/意图接线/C3 重试）、InstrumentOverlay.tsx（C2 字幕+高亮）、three-quiet.ts（C4）；验证截图 tmp-analysis/song-verify/
+
+---
+Task ID: 8
+Agent: 主控 Agent（Z.ai Code）
+Task: 用户实测反馈 A 类 Bug 修复（A1-A3）+ B 类增强（B1-B2）+ C 类清理
+
+Work Log:
+- A1 双动作块泄漏（TA「念代码」）：根因 ACT_RE 无 g 标志——exec 只取第一个块、replace 只删第一个块，第二个块的 JSON 原文泄漏成聊天气泡；修复：正则加 g，matchAll 遍历全部块合并 actions + replace 全部剔除，另过滤孤立成行的 {"actions":...} 残留行（未闭合块兜底）；注释同步修正（「抽出最后一个」→「提取全部」）
+- A2 特别日子误记（三案例全修）：①否定句过滤（不过/从来/从不/没有/没什么/别提/不记得/忘了）②已完成时过滤（考完/过完/办完/完事/结束了/已经…完）③无明确日期不再默认 +7 天——新增 parseRelativeDay 相对日期解析（今天/明天/后天/大后天/下周X=未来最近含跨周/本周X已过不记），「下周三是她的生日」记到真实日期；label 统一「关键词（M月D日）」格式（SPECIAL_KW_RE 独立提取关键词，日期分支也能带上「生日」）；loadMind 存量清洗：label 括号内非「N月N日」的旧脏数据（实测两例「生日（来首生日快乐）」「生日（弹个生日快乐）」=点歌指令被记成生日）读到即丢，旧格式「N月N日的约定」保留
+- A3 429 零退避瘫痪（聊天 3 连败全在 0 秒内 + 决策循环每 95~155s 烧 2 次必败调用加剧限流）：①cabinChatTurn 仅限流类错误（/429|频率|限流|rate limit|too many/i）先退避 1.5s 再换 forceSdk 通道，其它错误立即换通道（不同链路立即重试有意义）②决策循环 decideFailRef 连续失败指数拉长间隔 2→5→10 分钟（Math.max 保证不被正常 95~155s 覆盖），result 有效即清零回正常节奏，decideLocally 照常兜底行为不中断 ③/api/ai-song 同样仅限流退避 1.5s 重试一次
+- B1 TA 自主弹琴会点歌+记得你夸过哪首：reinforce 新增歌维度（key=`song:曲名`，零 schema 改动天然持久化兼容）；lastSongTitleRef 记录最近弹/放的歌名（play arrive 的 playRequestedSong 回调 + music 分支真歌/八音盒两条路径，即兴不记）；夸奖/嫌弃结算双维度（song:曲名 + 活动名）且移出「AI 带动作块」分支——夸奖往往不带指令，AI 纯文字回应轮也能归因（实测第一轮夸奖因 TA 还在走路 arrive 未触发而丢归因，移出后第二轮成功落盘 song:小星星 praise:1）；buildDecisionPrompt 注入曲库名单（AI_SONG_NAMES 参数传入，保持 cabin-mind 纯逻辑）+「你记得这几首被夸过：X——想弹琴时优先弹这几首」；decideLocally 午后练琴 slot 与需求池 play 均带 praisedSongs[0]；reinforceLines 过滤 song: 前缀避免重复展示
+- B2 服务端记谱缓存：/api/ai-song 模块级 Map LRU（200 首，get 时 touch 移队尾，超限丢队首），曲名归一键（去空白/书名号/引号+小写，与前端 normKey 同策略）；curl 实测：首调 via=sdk 记谱成功，再调（含「月亮 代表我的心」带空格变体）via=cache 秒回零 LLM 调用
+- C2 decideLocally 死键：extra 映射删 goto:[]、come:[]（ACT_W 无此二 type，空数组本身无意义）；C1 THREE.Clock 警告静默上一轮已实现（three-quiet.ts + HomeScene 挂载），本次确认无回归
+- 修复一处编辑笔误：SYSTEM_PROMPT 音名序列 C3 D3 E3 F4→F3（还原原文）
+- 验证：22/22 纯逻辑断言（bun + mock window.localStorage 直跑模块）：A1 双块合并/无泄漏/孤儿行/损坏容错/单块回归，A2 十一句正反例（含「别忘记明天考试」提醒语义仍记），B1 praisedSongs 排序 + decideLocally 稳定性；真机 E2E（agent-browser 390×844）：锁屏→主屏翻页（pointer 手势序列）→拾光小屋→聊天「我不过生日的」无「悄悄记下」toast→「弹一首小星星」AI 纯文字回应但 intent 兜底触发弹琴→「真好听」song:小星星+play 双归因落盘→存量脏日子 loadMind 清洗生效（specialDays 由两条假生日变空）→决策循环活着（TA 自主去弹吉他）→页面零报错；lint 改动文件零新增错误（CoupleHome.tsx 52=基线存量 react-hooks/refs）；dev.log 无 error（[cabin] forceSdk 重试 warn 为上游不可达的正常路径）
+- 提交 d4c8fba 已推送 GitHub（5473155..d4c8fba）
+
+Stage Summary:
+- A 类三个实测 Bug 全修复：TA 不再念 JSON 代码、不再记假日子（含存量清洗）、限流期不再雪上加霜（三处退避+指数拉长）；B 类两个增强落地：TA 自主练琴会优先弹「上次你说好听的那首」（夸奖归因双维度+决策注入+本地兜底三层保证）、服务端记谱 LRU 让同歌跨角色跨设备零重复调用；C2 死键清理
+- 关键文件：companion-brain.ts（A1+A3a）、cabin-mind.ts（A2+B1 决策+C2+存量清洗）、CoupleHome.tsx（A3b+B1 归因接线）、api/ai-song/route.ts（A3c+B2）；验证产物 tmp-analysis/fix-verify/
