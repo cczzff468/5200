@@ -22,6 +22,9 @@
  * 第七十一轮：示例从「主题」升级为「完整模板」——逐段列出界面上所有能改的元素
  * （背景/顶栏/底栏/气泡/尾巴/时间/输入栏/状态栏/面板/按钮/滚动条…），微信/QQ 各一份，
  * 按各自 App 的真实样式书写；每段默认值 = 当前样式，不改直接应用 ≈ 界面没变化。
+ * 第七十五轮（用户指定：全局模板不要「一键换肤」）：全局模板同样全量清单化——
+ * 手机壳/页面/导航/面板卡片/聊天卡片/微信·QQ·线下气泡/时间胶囊/输入栏/
+ * 输入框·选择框·复选框/按钮/文字选中/滚动条，20 段逐项列出（弃用色板变量版）。
  *
  * 方案收藏：CustomCssScheme（自定义名字 + CSS 本体 + 归属作用域），三处编辑器共用一份清单，
  * 各编辑器只列出自己作用域保存的方案（聊天方案跟着联系人走）。
@@ -342,86 +345,179 @@ export interface CssTemplate {
   css: string;
 }
 
-// ================= 全局（个性装扮 › 主题 Tab › 自定义CSS） =================
+// ================= 全局（个性装扮 › 自定义CSS Tab） =================
 
-/** 全局模板：变量驱动一键换肤（第七十四轮精细化）——
- *  色板区 4 个颜色变量控整机，下面各段全部吃变量；
- *  示范配色（奶茶金）与系统默认明显不同：填入即应用 → 立刻可见变化，
- *  解决「照模板填了默认值 → 应用后看起来没变」的困惑。 */
+/** 全局模板：整台手机所有界面的完整元素清单（第七十五轮 · 用户指定：不要一键换肤）——
+ *  手机壳 / 页面 / 导航 / 面板卡片 / 聊天气泡（微信·QQ·线下）/ 时间胶囊 / 输入栏 /
+ *  输入框·选择框·复选框 / 按钮手感 / 文字选中 / 滚动条…逐段列出，
+ *  每段 = 真实选择器 + 系统当前默认值——不改直接应用 ≈ 界面没变化；
+ *  与微信 / QQ / 线下三份完整模板同一写法，用户改哪段哪段生效。 */
 export const GLOBAL_CSS_TEMPLATE: CssTemplate = {
-  name: '全局主题模板',
-  desc: '改色板 4 个颜色 = 一键换肤（自带示范配色，应用即可见）',
+  name: '全局完整模板',
+  desc: '气泡 / 面板 / 输入框 / 选择框 / 卡片…手机上所有能改的地方',
   css: `/* ═══════════════════════════════════════════════
-   全局 · 主题模板（一键换肤版）
+   全局 · 完整模板（整台手机）
    ═══════════════════════════════════════════════
-   用法：只改下面【色板】里的颜色，点「应用」，
-   整台手机立刻换肤；想精调某一处，再改下面对应段。
-   深色模式的颜色在第二组（.dark &）里，不想要
-   深浅双色就把它删了。自带示范配色（奶茶金），
-   应用后立即能看到变化。 */
+   作用范围：手机里所有界面——各 App 页面、聊天、
+   线下模式、面板、气泡、输入框、按钮……全听这里的。
+   每一段 = 一处；把值改成你想要的，不想要的整段删掉。
+   下面填的都是系统现在的默认样式——不改直接应用 ≈ 没变化。
+   成对的两行里，第二行是深色模式的值（想让深浅不一样才留它）。
+   两个提醒：① 联系人若单独设了聊天 CSS、或线下模式设了
+   自己的 CSS，同名规则会盖过这里；② 液态玻璃主题的聊天页
+   是透明的，下面第 15 段会盖掉它的透明输入栏。 */
 
-/* ── 色板（改这 4 个值就够了） ── */
-& {
-  --my-page: #FAF2DF;    /* ① 页面底色（所有 App 的灰白底） */
-  --my-card: #FFFDF4;    /* ② 卡片/面板底色（液态/古早面板） */
-  --my-bar: #F3E8CC;     /* ③ 顶栏底色（各页导航条） */
-  --my-accent: #B07818;  /* ④ 强调色（输入光标/选中文字） */
-}
-.dark & {
-  --my-page: #17130B;
-  --my-card: #221C11;
-  --my-bar: #1D180F;
-  --my-accent: #E0B45C;
-}
+/* ══ 一、手机壳 ══ */
 
-/* ── 1. 页面底色：所有 App 的灰白底 → 色板① ── */
+/* ── 1. 状态栏（顶部时间 · 信号 · 电池） ── */
+/* 默认自动选黑/白字；想固定颜色就解开注释填 */
+/* .ph-statusbar { color: #1F1F1F; } */
+
+/* ── 2. 灵动岛（顶部黑色胶囊） ── */
+.ph-island { background: #000000; }
+
+/* ── 3. Home 指示条（屏幕最底部的小横杠） ── */
+/* 同样默认自动黑/白；想固定颜色就解开注释填 */
+/* .ph-homebar { background: #1F1F1F; opacity: 0.9; } */
+
+/* ══ 二、页面与导航 ══ */
+
+/* ── 4. 页面背景（微信 / QQ / 淘宝…所有 App 的灰白底一起换色） ── */
 [class*='bg-[#F5F6F7]'], [class*='bg-[#EDEDED]'], [class*='bg-[#F4F5F7]'],
 [class*='bg-[#F7F8FA]'], [class*='bg-[#F5F6F8]'], [class*='bg-[#F7F7F7]'],
 [class*='bg-[#F2F3F5]'], [class*='bg-[#F6F7F8]'], [class*='bg-[#F8F8F8]'],
 [class*='bg-[#F6F7F9]'], [class*='bg-[#F4F5F9]'], [class*='bg-[#FAFAFC]'],
 [class*='bg-[#FAFAFA]'], [class*='bg-[#EFEFF4]'] {
-  background: var(--my-page);
+  background: #F5F6F7;   /* ← 所有 App 底色统一换成这个值 */
+}
+.dark & [class*='bg-[#F5F6F7]'], .dark & [class*='bg-[#EDEDED]'],
+.dark & [class*='bg-[#F4F5F7]'], .dark & [class*='bg-[#F7F8FA]'],
+.dark & [class*='bg-[#F5F6F8]'], .dark & [class*='bg-[#F7F7F7]'],
+.dark & [class*='bg-[#F2F3F5]'], .dark & [class*='bg-[#F6F7F8]'],
+.dark & [class*='bg-[#F8F8F8]'], .dark & [class*='bg-[#F6F7F9]'],
+.dark & [class*='bg-[#F4F5F9]'], .dark & [class*='bg-[#FAFAFC]'],
+.dark & [class*='bg-[#FAFAFA]'], .dark & [class*='bg-[#EFEFF4]'] {
+  background: #111214;   /* 深色模式下这些页面的底色 */
 }
 
-/* ── 2. 顶栏：各页导航条 → 色板③（毛玻璃保留） ── */
+/* ── 5. App 顶部导航栏（大标题那一整条） ── */
 [class*='bg-background/80'] {
-  background: color-mix(in srgb, var(--my-bar) 86%, transparent);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  background: color-mix(in oklab, var(--background) 80%, transparent);
+}
+/* ↑ 这行 = 系统默认（半透明，自动跟随深浅模式）；
+   换成你要的颜色即可，如 rgba(255, 250, 240, 0.85) */
+
+/* ══ 三、面板 / 卡片 ══ */
+
+/* ── 6. 面板与卡片（设置页 · 弹窗 · 线下模式里的卡片） ── */
+.rt-panel { background: #FFFFFF; }                    /* 古早主题白卡 */
+.dark & .rt-panel { background: #35353D; }
+.lg-card  { background: rgba(255, 255, 255, 0.62); }  /* 液态玻璃内容卡 */
+.dark & .lg-card { background: rgba(28, 28, 34, 0.62); }
+.lg-sheet { background: rgba(255, 255, 255, 0.78); }  /* 液态玻璃弹层 */
+.dark & .lg-sheet { background: rgba(30, 30, 36, 0.86); }
+.lg-panel { background: rgba(255, 255, 255, 0.96); }  /* 液态玻璃白色分组卡 */
+.dark & .lg-panel { background: rgba(28, 28, 32, 0.96); }
+.off-card {                                           /* 线下模式卡片 */
+  background: rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+.dark & .off-card {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
-/* ── 3. 面板/卡片：液态玻璃 / 古早主题的面板 → 色板②（保留透底） ── */
-.rt-panel { background: var(--my-card); }
-.lg-card, .lg-sheet, .lg-panel {
-  background: color-mix(in srgb, var(--my-card) 72%, transparent);
+/* ── 7. 聊天卡片（红包 / 转账 / 亲属卡 / 礼物 / 外卖单…） ── */
+.chat-card-tag { border-radius: 99px; }  /* 卡上的小标签（代点外卖 / 已买单…） */
+/* 所有卡片的圆角一起改（微信默认 4px · QQ 默认 12px，这里会统一覆盖） */
+/* .chat-card-body { border-radius: 10px; } */
+/* 每张卡（红包/转账/亲属卡/礼物/美团/淘宝）逐段的完整清单在
+   「聊天设置 › 自定义CSS › 卡片模板」；这里改的是所有联系人通用 */
+
+/* ══ 四、聊天气泡（所有联系人通用） ══ */
+
+/* ── 8. 微信 · 我的气泡（右侧绿泡；文字和语音一起换） ── */
+.wx-bub-mine { background: #95EC69 !important; color: #000000; }
+.dark & .wx-bub-mine { background: #3EB575 !important; color: #000000; }
+
+/* ── 9. 微信 · 对方的气泡（左侧白泡） ── */
+.wx-bub-theirs { background: #FFFFFF !important; color: #000000; }
+.dark & .wx-bub-theirs { background: #1E1E1E !important; color: #FFFFFF; }
+
+/* ── 10. 微信 · 气泡小尾巴（跟气泡同色的小三角） ── */
+.wx-bub-tail-mine { background: #95EC69 !important; }
+.dark & .wx-bub-tail-mine { background: #3EB575 !important; }
+.wx-bub-tail-theirs { background: #FFFFFF !important; }
+.dark & .wx-bub-tail-theirs { background: #1E1E1E !important; }
+
+/* ── 11. QQ · 我的气泡（右侧蓝泡；颜色是程序写死的，!important 才能盖住） ── */
+.qq-bub-mine { background: #0099FF !important; color: #FFFFFF; }
+/* 想让深色模式换个颜色？解开下面这行 */
+/* .dark & .qq-bub-mine { background: #0077E0 !important; color: #FFFFFF; } */
+
+/* ── 12. QQ · 对方的气泡（左侧白泡） ── */
+.qq-bub-theirs { background: #FFFFFF !important; color: #1F2329; }
+.dark & .qq-bub-theirs { background: #2A2C31 !important; color: #FFFFFF; }
+
+/* ── 13. 线下模式 · 我的对话气泡（见面页里你说的话） ── */
+.off-bubble-user {
+  background: rgba(236, 234, 231, 0.85);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+.dark & .off-bubble-user {
+  background: rgba(44, 44, 46, 0.85);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
-/* ── 4. 强调色：输入光标 + 选中文字高亮 → 色板④ ── */
-input, textarea { caret-color: var(--my-accent); }
-::selection { background: var(--my-accent); color: #FFFFFF; }
+/* ══ 五、时间 / 输入 ══ */
 
-/* ── 5. 按钮按下手感（轻轻缩一下弹回来） ── */
+/* ── 14. 时间胶囊（聊天里居中的时间小条） ── */
+.wx-time-chip, .qq-time-chip {
+  background: rgba(255, 255, 255, 0.75);
+  border-color: rgba(0, 0, 0, 0.15);
+  color: rgba(0, 0, 0, 0.5);
+}
+.dark & .wx-time-chip, .dark & .qq-time-chip {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* ── 15. 聊天底部输入栏（打字那一栏） ── */
+.wx-inputbar { background: #EDEDED; border-color: rgba(0, 0, 0, 0.07); }
+.dark & .wx-inputbar { background: #111111; border-color: rgba(255, 255, 255, 0.06); }
+.qq-inputbar { background: #FFFFFF; }
+.dark & .qq-inputbar { background: #1B1C1F; }
+
+/* ── 16. 输入框 / 选择框 / 复选框（表单里那些） ── */
+/* 输入框打字时的光标颜色 */
+/* input, textarea { caret-color: #FF7A59; } */
+/* 选择框（下拉框）统一圆角 */
+/* select { border-radius: 10px; } */
+/* 复选框勾选颜色（各 App 默认不一样：微信绿 / 删除红…这里统一改） */
+/* input[type='checkbox'] { accent-color: #07C160; } */
+
+/* ══ 六、按钮与细节 ══ */
+
+/* ── 17. 按钮手感（按下轻轻缩，松手弹回来） ── */
 button {
   transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1.4),
     background-color 0.18s, color 0.18s, opacity 0.18s;
 }
 button:active { transform: scale(0.955); }
 
-/* ── 6. 滚动条（极细 iOS 风） ── */
+/* ── 18. 文字选中（长按 / 拖选文字的高亮色） ── */
+/* 解开注释填你想要的颜色 */
+/* ::selection { background: #FF7A59; color: #FFFFFF; } */
+
+/* ── 19. 滚动条（所有列表的滚动条） ── */
 ::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.25); border-radius: 99px; }
 .dark & ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.25); }
 
-/* ── 7. 灵动岛 / 状态栏 / Home 条 ── */
-.ph-island { background: #000000; }
-/* 状态栏文字（默认自动黑白；想固定就解开注释） */
-/* .ph-statusbar { color: #1F1F1F; } */
-/* Home 指示条（同样默认自动黑白） */
-/* .ph-homebar { background: #1F1F1F; opacity: 0.9; } */
-
-/* ── 8. 想再动手？解开这些注释 ── */
+/* ── 20. 想再动手？解开这些注释 ── */
 /* 所有按钮统一圆角（注意：胶囊按钮会变方角） */
-/* button, input, textarea { border-radius: 12px; } */
+/* button, input, textarea, select { border-radius: 12px; } */
 
 /* 全手机文字放大一档 */
 /* & { font-size: 105%; } */
@@ -870,7 +966,7 @@ export const OFFLINE_CSS_TEMPLATE: CssTemplate = {
 /* & { font-family: "ZCOOL KuaiLe", sans-serif; } */`,
 };
 
-/** 全局模板组（个性装扮 › 主题 Tab；放文件末尾，避开 const 提升顺序问题） */
+/** 全局模板组（个性装扮 › 自定义CSS Tab；放文件末尾，避开 const 提升顺序问题） */
 export const GLOBAL_CSS_TEMPLATES: CssTemplate[] = [GLOBAL_CSS_TEMPLATE];
 
 /** 线下模板组（线下模式 › 现场设置） */
