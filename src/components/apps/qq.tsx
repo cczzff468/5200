@@ -1712,13 +1712,15 @@ const qqMetaOk = (m: QQMsg) => !m.recalled && m.kind !== 'sys' && m.kind !== 'no
 const qqMarkPeerRead = (list: QQMsg[]): QQMsg[] =>
   list.map((x) => (x.role === 'peer' && x.unread ? { ...x, unread: false } : x));
 
-/** 元信息小字统一样式（已读未读 / 时间）；已读浅灰 / 未读深灰（用户指定：未读弃品牌色）。
+/** 元信息小字统一样式（已读未读 / 时间）；已读浅灰 / 未读深灰（用户指定：未读弃品牌色），
+ *  时间同样灰色（用户指定：弃继承正文黑）——与已读同浅灰，深色模式自适应。
  *  气泡下：nowrap 单行永不内部折行；头像下用 avatar 版（无 nowrap——StackFitText 兜底换行需要），
  *  超宽先缩字、放不下按空格/自然断点堆叠（日期一行、时间一行），绝不裁字 */
 const qqMetaText = 'whitespace-nowrap text-[10px] leading-[1.35]';
 const qqMetaAvatarText = 'text-[10px] leading-[1.35]';
 const qqMetaReadCls = 'text-black/35 dark:text-white/40';
 const qqMetaUnreadCls = 'text-black/60 dark:text-white/75';
+const qqMetaTimeCls = 'text-black/35 dark:text-white/40';
 
 /** 显示设置 › 已读未读 + 时间：头像下方上下两行（已读未读在上、时间在下）。
  *  用户指定：文字超宽时字号自动变小、不向屏幕内侧延伸；对齐沿袭原锚定边（我的右对齐、TA 的左对齐）。
@@ -1742,7 +1744,10 @@ function QqMetaUnderAvatar({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
         </StackFitText>
       )}
       {showTime && (
-        <StackFitText testId={`qq-time-${m.id}`} className={`block w-full ${qqMetaAvatarText}`}>
+        <StackFitText
+          testId={`qq-time-${m.id}`}
+          className={`block w-full ${qqMetaAvatarText} ${qqMetaTimeCls}`}
+        >
           {fmtMsgTime(m.time, cfg.timeFormat)}
         </StackFitText>
       )}
@@ -1773,7 +1778,7 @@ function QqMetaUnderBubble({ m, cfg }: { m: QQMsg; cfg: ChatDisplayConfig }) {
         </span>
       )}
       {showTime && (
-        <span data-testid={`qq-time-${m.id}`} className={qqMetaText}>
+        <span data-testid={`qq-time-${m.id}`} className={`${qqMetaText} ${qqMetaTimeCls}`}>
           {fmtMsgTime(m.time, cfg.timeFormat)}
         </span>
       )}
