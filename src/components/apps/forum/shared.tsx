@@ -18,12 +18,15 @@ import {
   ArrowLeft,
   BarChart3,
   Bell,
+  Bookmark,
+  Compass,
   Heart,
   House,
   Mail,
   MessageCircle,
   MoreHorizontal,
   PenLine,
+  Plus,
   Repeat2,
   Search,
   Settings,
@@ -89,6 +92,15 @@ export const XIcons = {
   communities: (filled: boolean, size = 25) => (
     <Users width={size} height={size} strokeWidth={SW} fill={filled ? 'currentColor' : 'none'} />
   ),
+  /** X 空间（Spaces，官方底栏第 3 位：圆环 + 闪电；选中实心圆） */
+  spaces: (filled: boolean, size = 25) => (
+    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+      <circle cx="12" cy="12" r="10" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={SW} />
+      {!filled && (
+        <path d="M13.2 6.4 8.9 12.9h2.9l-1 4.7 4.4-6.9h-2.9l.9-4.3z" fill="currentColor" stroke="none" />
+      )}
+    </svg>
+  ),
   bell: (filled: boolean, size = 25) => (
     <Bell width={size} height={size} strokeWidth={SW} fill={filled ? 'currentColor' : 'none'} />
   ),
@@ -105,9 +117,14 @@ export const XIcons = {
   more: (size = 19) => <MoreHorizontal width={size} height={size} strokeWidth={SW} />,
   back: (size = 20) => <ArrowLeft width={size} height={size} strokeWidth={SW} />,
   settings: (size = 22) => <Settings width={size} height={size} strokeWidth={SW} />,
+  plus: (size = 20) => <Plus width={size} height={size} strokeWidth={2.2} />,
+  compass: (size = 22) => <Compass width={size} height={size} strokeWidth={SW} />,
   compose: (size = 26) => <PenLine width={size} height={size} strokeWidth={2.1} />,
   follow: (size = 15) => <UserPlus width={size} height={size} strokeWidth={SW} />,
   following: (size = 15) => <UserCheck width={size} height={size} strokeWidth={SW} />,
+  bookmark: (filled: boolean, size = 19) => (
+    <Bookmark width={size} height={size} strokeWidth={SW} fill={filled ? 'currentColor' : 'none'} />
+  ),
 };
 
 /** X 官方 wordmark 𝕏（app 内展示用；主屏图标在 public/icons/forum.svg 同款） */
@@ -135,7 +152,8 @@ export function VerifiedBadge({ size = 15 }: { size?: number }) {
 
 // ---------------- 头像 ----------------
 
-/** X 风格头像：图片直出 / NPC 彩底首字 / 灰底剪影（无头像时） */
+/** X 风格头像：图片直出 / NPC 彩底首字 / 灰底剪影（无头像时）。
+ *  可点击时渲染 <button>；纯展示时渲染 <span>（避免嵌入父级 button 造成非法嵌套）。 */
 export function XAvatar({
   authorKey,
   size = 40,
@@ -175,16 +193,19 @@ export function XAvatar({
       </svg>
     );
   }
+  const cls = 'shrink-0 select-none overflow-hidden rounded-full bg-black/[0.03] dark:bg-white/[0.06]';
+  const style: React.CSSProperties = { width: size, height: size, padding: 0, border: 0 };
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} aria-label={`查看${a.name}的主页`} className={cls} style={{ ...style, cursor: 'pointer' }}>
+        {inner}
+      </button>
+    );
+  }
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={`查看${a.name}的主页`}
-      className="shrink-0 select-none overflow-hidden rounded-full bg-black/[0.03] dark:bg-white/[0.06]"
-      style={{ width: size, height: size, padding: 0, border: 0, cursor: onClick ? 'pointer' : 'default' }}
-    >
+    <span aria-hidden="true" className={cls} style={style}>
       {inner}
-    </button>
+    </span>
   );
 }
 

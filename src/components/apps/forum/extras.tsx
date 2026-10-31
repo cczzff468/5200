@@ -21,7 +21,7 @@ import {
   trendingTopics,
   type ForumPost,
 } from '@/lib/forum/core';
-import { XIcons, useXTheme } from './shared';
+import { XAvatar, XIcons, useXTheme } from './shared';
 import { useForum } from './ctx';
 import { PostCard, EmptyState, CommunityIcon } from './feed';
 
@@ -49,12 +49,23 @@ function PageHead({ title, right }: { title: string; right?: React.ReactNode }) 
 
 // ---------------- 搜索 ----------------
 
+/** 搜索页二级 tab：为你推荐(最新流) / 热门(趋势榜) / 新闻·体育·娱乐(映射版块帖子流) */
+type STab = 'foryou' | 'trending' | 'news' | 'sports' | 'fun';
+const STAB_DEFS: { key: STab; label: string; community: string | null }[] = [
+  { key: 'foryou', label: '为你推荐', community: '' }, // '' = 全部社区最新主帖
+  { key: 'trending', label: '热门', community: null }, // null = 趋势榜
+  { key: 'news', label: '新闻', community: 'hot' },
+  { key: 'sports', label: '体育', community: 'fit' },
+  { key: 'fun', label: '娱乐', community: 'game' },
+];
+
 export function SearchView() {
   const f = useForum();
   const t = f.t;
   useSyncExternalStore(subscribeForum, forumSnapshot, forumSnapshot);
   const d = forumData();
   const [q, setQ] = useState('');
+  const [sTab, setSTab] = useState<STab>('foryou');
   const trends = useMemo(() => trendingTopics(d), [d]);
 
   const results = useMemo(() => {
@@ -71,27 +82,37 @@ export function SearchView() {
       .slice(0, 30);
   }, [d, q]);
 
+  // 当前 tab 对应的主帖流（热门 tab=趋势榜不用；''=全部社区最新）
+  const stabCommunity = STAB_DEFS.find((x) => x.key === sTab)?.community ?? null;
+  const tabPosts = useMemo(() => {
+    if (stabCommunity === null) return [];
+    return d.posts
+      .filter((p) => p.replyTo === null)
+      .filter((p) => stabCommunity === '' || (p.community ?? 'hot') === stabCommunity)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 8);
+  }, [d, stabCommunity]);
+
   return (
     <div className="flex h-full flex-col" style={{ background: t.bg, color: t.text }}>
-      <PageHead
-        title="搜索"
-        right={
-          <button
-            type="button"
-            aria-label="搜索设置"
-            onClick={() => f.toast('搜索范围：全部帖子与作者')}
-            className="flex h-9 w-9 items-center justify-center rounded-full active:bg-black/10 dark:active:bg-white/10"
-            style={{ color: t.text }}
+      {/* 顶栏（X：头像 | 搜索胶囊内嵌输入 | 齿轮）+ 横滑 tab 行 */}
+      <div
+        className="sticky top-0 z-20 shrink-0"
+        style={{
+          background: t.dark ? 'rgba(0,0,0,0.78)' : 'rgba(255,255,255,0.78)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+        }}
+      >
+        <div className="flex items-center gap-3 px-4 pt-[54px]" style={{ height: 100 }}>
+          <XAvatar authorKey="user" size={32} onClick={() => f.openProfile('user')} />
+          <label
+            className="flex h-[40px] min-w-0 flex-1 items-center gap-2 rounded-full px-3"
+            style={{ background: t.dark ? '#202327' : '#eff3f4' }}
           >
-            {XIcons.settings(22)}
-          </button>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* 搜索框 */}
-        <div className="px-4 py-3">
-          <label className="flex h-[44px] items-center gap-2 rounded-full px-4" style={{ background: t.dark ? '#202327' : '#eff3f4' }}>
-            <span style={{ color: t.secondary }}>{XIcons.search(20)}</span>
+            <span className="shrink-0" style={{ color: t.secondary }}>
+              {XIcons.search(18)}
+            </span>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -101,12 +122,46 @@ export function SearchView() {
               aria-label="搜索X论坛"
             />
           </label>
+          <button
+            type="button"
+            aria-label="搜索设置"
+            onClick={() => f.toast('搜索范围：全部帖子与作者')}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full active:bg-black/10 dark:active:bg-white/10"
+            style={{ color: t.text }}
+          >
+            {XIcons.settings(21)}
+          </button>
         </div>
+        {/* 横滑 tab 行（X：选中黑粗 + 蓝下划线） */}
+        <div className="flex items-center border-b px-4" style={{ borderColor: t.border, height: 44 }}>
+          {STAB_DEFS.map(({ key: k, label }) => {
+            const active = sTab === k && !q.trim();
+            return (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setSTab(k)}
+                className="relative mr-6 flex h-full shrink-0 items-center text-[15px]"
+                style={{ color: active ? t.text : t.secondary, fontWeight: active ? 700 : 500 }}
+              >
+                {label}
+                {active && (
+                  <span
+                    className="absolute bottom-0 left-1/2 h-[4px] w-12 -translate-x-1/2 rounded-full"
+                    style={{ background: t.blue }}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {q.trim() ? (
           results.length ? (
             <>
-              <p className="px-4 pb-1 text-[13px]" style={{ color: t.secondary }}>
+              <p className="px-4 pb-1 pt-2 text-[13px]" style={{ color: t.secondary }}>
                 帖子与作者 · {results.length} 条
               </p>
               {results.map((p) => (
@@ -116,9 +171,9 @@ export function SearchView() {
           ) : (
             <EmptyState text={`没有找到「${q.trim()}」相关的帖子，换个关键词试试`} />
           )
-        ) : (
+        ) : stabCommunity === null ? (
           <>
-            <p className="px-4 pb-2 pt-1 text-[17px] font-extrabold">X论坛 · 趋势</p>
+            <p className="px-4 pb-2 pt-3 text-[20px] font-extrabold">趋势</p>
             {trends.map((tr, i) => (
               <button
                 key={tr.tag}
@@ -141,6 +196,17 @@ export function SearchView() {
                 </span>
               </button>
             ))}
+          </>
+        ) : (
+          <>
+            <p className="px-4 pb-1 pt-3 text-[13px]" style={{ color: t.secondary }}>
+              {sTab === 'foryou' ? '为你推荐 · 你可能感兴趣的新帖' : `${STAB_DEFS.find((x) => x.key === sTab)?.label} · 来自版块的热门帖子`}
+            </p>
+            {tabPosts.length ? (
+              tabPosts.map((p) => <PostCard key={p.id} post={p} onOpen={() => f.openThread(p.id)} />)
+            ) : (
+              <EmptyState text="还没有帖子，去发一条开个张吧" />
+            )}
           </>
         )}
       </div>

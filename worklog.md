@@ -1721,3 +1721,25 @@ Work Log:
 Stage Summary:
 - X论坛 App 落地：界面按 X 官方规格 1:1 复刻（黑白极简+品牌蓝+认证徽章+ Communities 版块），功能全链路可用——浏览（为你推荐/关注）、发帖（版块+话题）、互动（点赞/转推/回复/通知）、搜索（趋势榜+实时）、社区（加入/版块流）、私信（AI 人设回复）、个人页（关注/粉丝/帖子）；内容生态 = 10 位内置 NPC 网友（池保底）+ 用户 AI 好友（LLM 人设发帖/回复/私信）+ 用户自己，LLM 失败任何环节都有兜底，论坛永远不空
 - 关键文件：lib/forum/core.ts+engine.ts、api/forum/generate/route.ts、components/apps/forum/{forum,feed,compose-sheet,thread-view,profile-view,extras,dms,shared,ctx}.tsx、registry.tsx（REAL_CUSTOM 体系）、store.ts、HomeScreen.tsx
+
+---
+Task ID: 11
+Agent: 主控 Agent（Z.ai Code）
+Task: X论坛界面精修——按用户 5 张官方 App 截图逐页对齐（第二轮迭代）
+
+Work Log:
+- 需求：用户上传 5 张 X 官方 App 截图（110856 主页 timeline / 100913 搜索·趋势页 / 101907 帖子详情 / 110736 他人主页 / 101104 自己主页），要求「再精修一下，按照我发给你的来」
+- 方法论：VLM 逐图提取官方 UI 规格（5 张全量分析）→ 改码 → Agent Browser 390×844 逐页截图 → VLM 双图对比（我方 vs 官方）甄别误报（整页对比误报 4 处，裁剪放大复验全部实际达标）→ 二轮微调 → 全链路 E2E
+- 主页 forum.tsx：顶栏改 X 新版三段式「36px 头像（开抽屉）| 居中 𝕏 Logo | 订阅描边胶囊」+ 独立 tab 行「为你推荐|关注」左对齐 + 右侧＋号（打开发帖），蓝条 4px w-12 与文字近等宽
+- feed.tsx：帖子卡 40→48px 头像、正文 15→17px 行高 1.42（官方 body 规格）、互动行去 330px 限宽铺满、计数 13→14px；卡片 py-3 上下对称
+- 详情页 thread-view.tsx：名行右移「关注」黑胶囊（已关注=描边）+ …；元数据行改官方格式「H:mm · 年月日 · N 次浏览」（日期/浏览加粗）；删「N 转推 N 点赞」统计行（官方并入互动栏数字）；互动栏扩 5 钮（回复/转推/点赞/书签/分享，书签本地态+toast）；新增社区来源引用卡（圆角容器+版块图标，复刻官方引用块观感，点击进版块）；删点赞头像排与社区文字行；正文 17px；XAvatar 48px
+- 个人页 profile-view.tsx 全重写：顶栏 返回+名字17bold+蓝V+「N 帖子」副标题+右侧探索(指南针)/搜索双图标；banner 100→150px；头像 72→80px 半嵌 40px 白描边 4px；他人按钮组 …圆描边+信封圆描边+「关注」黑胶囊（纯文字去图标）；自己=「编辑资料」描边胶囊；未认证显示「获得认证」浅蓝胶囊（官方 Get verified 同款盾牌样式）；统计行「N 正在关注 N 关注者」（数字 bold + toLocaleString 千分位）；新增四 tab 帖子(▾)/回复/转推/媒体（选中 800 字重+蓝条，内容真切换：帖子=主帖流、回复=回复流带「回复@」标记、转推/媒体=空态文案）
+- 搜索页 extras.tsx：顶栏改官方搜索页形态「32px 头像 | 搜索胶囊内嵌输入(flex-1 灰底圆角) | 齿轮」；tab 行扩 5 个「为你推荐/热门/新闻/体育/娱乐」（foryou 默认选中=最新主帖流，热门=趋势榜大标题 20px，新闻/体育/娱乐映射版块 hot/fit/game 帖子流）；蓝条 w-12
+- 底栏：第 3 位 Communities(人群)→Spaces(圆环+闪电，官方截图裁剪底栏 VLM 确认形状；选中实心圆)；FAB 从仅主页改为所有主 tab 页显示（官方全页行为）
+- shared.tsx：新增 plus/compass/bookmark 图标与 spaces 自绘 SVG；**XAvatar 重构：有 onClick 渲染 button / 纯展示渲染 span**——根治 dms 列表行与 DmThread 顶栏 button>button 非法嵌套（dev.log「This will cause a hydration error」之源，历史遗留本轮排雷）
+- E2E 全链路（agent-browser+VLM）：主页三段式顶栏/蓝条等宽/圆环闪电底栏/FAB ✓；搜索 5 tab 默认为你推荐 ✓；详情 5 钮 DOM 实锤（VLM 数漏以 snapshot 为准）+引用卡（数码圈灰卡）+元数据「2:56 · 2026年10月31日 · 1551 次浏览」✓；书签点击态切换 ✓；引用卡→版块页 ✓；个人页四 tab 遍历+空态 ✓；自己主页「编辑资料/获得认证」✓；裁剪放大复验：头像半嵌 banner/…/信封/关注黑实心胶囊/白描边全部达标（整页对比的 4 处「差异」均为 VLM 误报）✓；私信发送→AI 12s 人设回复 ✓；console/errors 零嵌套零 hydration ✓；generate 全 200（历史 500 为上轮已修）
+- tsc --noEmit 全过；改动文件 eslint 零输出；dev.log 无新增错误
+
+Stage Summary:
+- 五页全部对齐官方截图规格：主页（𝕏 居中+订阅+tab 行）、搜索（头像+搜索胶囊+5 tab）、详情（关注胶囊+官方元数据+5 钮互动栏+社区引用卡）、他人主页（150 banner+80 半嵌头像+三按钮组）、自己主页（编辑资料+获得认证胶囊）；底栏 Spaces 化 + FAB 全页化；顺带排雷 XAvatar 嵌套 button（hydration 错误根除）
+- 关键文件：forum.tsx / feed.tsx / thread-view.tsx / profile-view.tsx / extras.tsx / shared.tsx（XAvatar 重构+3 新图标+spaces）

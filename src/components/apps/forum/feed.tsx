@@ -2,8 +2,8 @@
 
 /**
  * X论坛 · 时间线（帖子卡 / 列表 / 加载骨架）。
- * PostCard 严格按 X 卡片规格：40px 圆头像 + 名行（名字/认证/·时间/更多）+
- * 社区来源行 + 正文 15px + 操作行（回复/转推/点赞/浏览/分享）。
+ * PostCard 严格按 X 官方规格：48px 圆头像 + 名行（名字/认证/·时间/更多）+
+ * 社区来源行 + 正文 17px 行高 1.42 + 操作行（回复/转推/点赞/浏览/分享，铺满内容宽）。
  */
 
 import { memo } from 'react';
@@ -23,7 +23,7 @@ function PostText({ text }: { text: string }) {
   const t = useXTheme();
   const parts = text.split(/(#[^#\s]{1,12}#)/g);
   return (
-    <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.38]" style={{ color: t.text }}>
+    <p className="whitespace-pre-wrap break-words text-[17px] leading-[1.42]" style={{ color: t.text }}>
       {parts.map((p, i) =>
         /^#[^#\s]{1,12}#$/.test(p) ? (
           <span key={i} style={{ color: t.blue }}>
@@ -58,14 +58,14 @@ function ActionBtn({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="group flex items-center gap-1 transition-colors active:opacity-60"
+      className="group flex items-center gap-1.5 transition-colors active:opacity-60"
       style={{ color }}
       onMouseEnter={(e) => (e.currentTarget.style.color = hoverColor)}
       onMouseLeave={(e) => (e.currentTarget.style.color = color)}
     >
       {icon}
       {typeof count === 'number' && count > 0 && (
-        <span className="text-[13px] leading-none">{count < 10000 ? count : countShort(count)}</span>
+        <span className="text-[14px] leading-none">{count < 10000 ? count : countShort(count)}</span>
       )}
     </button>
   );
@@ -83,7 +83,7 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
 
   return (
     <article
-      className="cursor-pointer border-b px-4 pt-3 transition-colors"
+      className="cursor-pointer border-b px-4 py-3 transition-colors"
       style={{ borderColor: t.border, background: 'transparent' }}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest('button')) return; // 按钮点击不触发开帖
@@ -93,14 +93,14 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
     >
       <div className="flex gap-3">
-        <XAvatar authorKey={post.authorKey} size={40} onClick={() => f.openProfile(post.authorKey)} />
+        <XAvatar authorKey={post.authorKey} size={48} onClick={() => f.openProfile(post.authorKey)} />
         <div className="min-w-0 flex-1">
           {/* 名行：名字 + 认证 + @handle · 时间 + 更多 */}
           <div className="flex items-center gap-1">
             <button
               type="button"
               onClick={() => f.openProfile(post.authorKey)}
-              className="max-w-[150px] shrink truncate text-[15px] font-bold"
+              className="max-w-[120px] shrink truncate text-[15px] font-bold"
               style={{ color: t.text }}
             >
               {a.name}
@@ -137,8 +137,8 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
             </div>
           )}
           <PostText text={post.content} />
-          {/* 操作行：X 顺序 回复/转推/点赞/浏览/分享 */}
-          <div className="mt-2 mb-1 flex max-w-[330px] items-center justify-between">
+          {/* 操作行：X 顺序 回复/转推/点赞/浏览/分享（铺满可用宽） */}
+          <div className="mt-2.5 mb-1 flex w-full items-center justify-between">
             <ActionBtn
               icon={XIcons.reply()}
               count={0}

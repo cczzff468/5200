@@ -2,8 +2,10 @@
 
 /**
  * X论坛 · 帖子详情页（X thread）。
- * 顶栏：返回 + 「帖子」；原帖放大（40 头像 / 17px 正文）；数据行 N 转推·N 点赞·N 浏览；
- * 粗分隔线下接回复流（PostCard）；底部回复输入条（头像 + input + 蓝色发送圆钮）。
+ * 顶栏：返回 + 「帖子」；主帖 48px 头像 / 名行右侧「关注」黑胶囊；
+ * 官方元数据行「H:mm · 年月日 · N 次浏览」（日期与浏览加粗）；统计行（N 转推·N 点赞·N 浏览）；
+ * 互动栏（回复/转推/点赞/分享带数字）+ 分隔线下接回复流（PostCard）；
+ * 底部回复输入条（头像 + input + 蓝色发送圆钮）。
  */
 
 import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -12,7 +14,6 @@ import {
   countShort,
   forumData,
   forumSnapshot,
-  relTime,
   repliesOf,
   resolveAuthor,
   saveForum,
@@ -24,7 +25,41 @@ import {
 import { queueAiReplyToUserReply } from '@/lib/forum/engine';
 import { XAvatar, XIcons, VerifiedBadge } from './shared';
 import { useForum } from './ctx';
-import { PostCard } from './feed';
+import { PostCard, CommunityIcon } from './feed';
+
+/** 详情页互动栏单个图标钮（带数字，hover 变色） */
+function ThreadAction({
+  icon,
+  count,
+  color,
+  hoverColor,
+  onClick,
+  label,
+}: {
+  icon: React.ReactNode;
+  count?: number;
+  color: string;
+  hoverColor: string;
+  onClick?: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className="flex items-center gap-1.5 transition-colors active:opacity-60"
+      style={{ color }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = hoverColor)}
+      onMouseLeave={(e) => (e.currentTarget.style.color = color)}
+    >
+      {icon}
+      {typeof count === 'number' && count > 0 && (
+        <span className="text-[14px] leading-none">{countShort(count)}</span>
+      )}
+    </button>
+  );
+}
 
 export function ThreadView({ postId }: { postId: string }) {
   const f = useForum();
@@ -34,6 +69,7 @@ export function ThreadView({ postId }: { postId: string }) {
   const post = d.posts.find((p) => p.id === postId);
   const replies = useMemo(() => (post ? repliesOf(d, postId) : []), [d, postId, post]);
   const [draft, setDraft] = useState('');
+  const [bookmarked, setBookmarked] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   if (!post) {
@@ -46,6 +82,9 @@ export function ThreadView({ postId }: { postId: string }) {
 
   const a = resolveAuthor(post.authorKey);
   const liked = post.likes.includes('user');
+  const followed = d.following.includes(post.authorKey);
+  const dt = new Date(post.createdAt);
+  const dateStr = `${dt.getFullYear()}年${dt.getMonth() + 1}月${dt.getDate()}日`;
   const communityLabel = post.community && post.community !== 'hot' ? communityName(post.community) : '';
 
   /** 发送回复：落为一条帖（replyTo=本帖）+ 原帖作者是 AI 时排再回复 */
@@ -84,7 +123,7 @@ export function ThreadView({ postId }: { postId: string }) {
           WebkitBackdropFilter: 'blur(12px)',
         }}
       >
-        <div className="flex items-center gap-4 px-4 pt-[54px]" style={{ height: 106 }}>
+        <div className="flex items-center gap-4 px-4 pt-[54px]" style={{ height: 100 }}>
           <button
             type="button"
             aria-label="返回"
@@ -100,79 +139,139 @@ export function ThreadView({ postId }: { postId: string }) {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {/* 原帖（X 放大规格） */}
-        <div className="px-4 pt-3 pb-2">
+        <div className="px-4 pt-3 pb-3">
           <div className="flex gap-3">
-            <XAvatar authorKey={post.authorKey} size={40} onClick={() => f.openProfile(post.authorKey)} />
+            <XAvatar authorKey={post.authorKey} size={48} onClick={() => f.openProfile(post.authorKey)} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => f.openProfile(post.authorKey)}
-                  className="max-w-[160px] truncate text-[16px] font-bold"
+                  className="max-w-[150px] truncate text-[16px] font-bold"
                   style={{ color: t.text }}
                 >
                   {a.name}
                 </button>
                 {a.verified && <VerifiedBadge size={15} />}
+                <span className="truncate text-[14px]" style={{ color: t.secondary }}>
+                  @{a.handle}
+                </span>
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  {post.authorKey !== 'user' && (
+                    <button
+                      type="button"
+                      aria-label={followed ? '取消关注' : '关注'}
+                      onClick={() => {
+                        const nd = forumData();
+                        if (followed) nd.following = nd.following.filter((k) => k !== post.authorKey);
+                        else nd.following = [...nd.following, post.authorKey];
+                        f.toast(followed ? `已取消关注 ${a.name}` : `已关注 ${a.name}，「关注」页将出现 TA 的帖子`);
+                        saveForum({ ...nd });
+                      }}
+                      className="flex h-[30px] items-center rounded-full px-4 text-[14px] font-bold transition-opacity active:opacity-60"
+                      style={
+                        followed
+                          ? { border: `1px solid ${t.dark ? '#536471' : '#cfd9de'}`, color: t.text, background: 'transparent' }
+                          : { background: t.text, color: t.bg, border: 'none' }
+                      }
+                    >
+                      {followed ? '已关注' : '关注'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    aria-label="更多"
+                    onClick={() => f.toast('已为你推荐同类帖子')}
+                    className="flex h-8 w-8 items-center justify-center rounded-full active:bg-black/10 dark:active:bg-white/10"
+                    style={{ color: t.secondary }}
+                  >
+                    {XIcons.more(18)}
+                  </button>
+                </div>
               </div>
-              <span className="block text-[14px]" style={{ color: t.secondary }}>
-                @{a.handle}
-              </span>
             </div>
-            <button
-              type="button"
-              aria-label="更多"
-              onClick={() => f.toast('已为你推荐同类帖子')}
-              className="ml-auto flex h-8 w-8 items-center justify-center rounded-full active:bg-black/10 dark:active:bg-white/10"
-              style={{ color: t.secondary }}
-            >
-              {XIcons.more(18)}
-            </button>
           </div>
-          <p className="mt-2 whitespace-pre-wrap break-words text-[17px] leading-[1.4]" style={{ color: t.text }}>
+          <p className="mt-2.5 whitespace-pre-wrap break-words text-[17px] leading-[1.42]" style={{ color: t.text }}>
             {post.content}
           </p>
-          {communityLabel && (
-            <p className="mt-2 text-[13px]" style={{ color: t.secondary }}>
-              发布于{' '}
-              <button type="button" className="font-bold" style={{ color: t.blue }} onClick={() => post.community && f.openCommunity(post.community)}>
-                {communityLabel}
-              </button>{' '}
-              · {relTime(post.createdAt)}
-            </p>
+          {/* 社区来源引用卡（X 引用块观感：圆角容器 + 版块入口） */}
+          {communityLabel && post.community && (
+            <button
+              type="button"
+              onClick={() => f.openCommunity(post.community!)}
+              className="mt-2.5 flex w-full items-center gap-3 rounded-2xl p-3 text-left transition-colors active:opacity-70"
+              style={{ background: t.dark ? '#202327' : '#f7f9f9' }}
+              aria-label={`进入${communityLabel}版块`}
+            >
+              <CommunityIcon id={post.community} size={38} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[15px] font-bold" style={{ color: t.text }}>
+                  {communityLabel}
+                </span>
+                <span className="block text-[13px]" style={{ color: t.secondary }}>
+                  来自版块 · 点击进入逛逛
+                </span>
+              </span>
+              <span style={{ color: t.secondary }}>{XIcons.back(14)}</span>
+            </button>
           )}
-          {!communityLabel && (
-            <p className="mt-2 text-[13px]" style={{ color: t.secondary }}>
-              {relTime(post.createdAt)}
-            </p>
-          )}
-          {/* 数据行（X：转推 · 点赞 · 浏览） */}
-          <div className="mt-3 flex flex-wrap items-center gap-x-2 border-y py-3 text-[14px]" style={{ borderColor: t.border, color: t.secondary }}>
-            <span>
-              <b style={{ color: t.text }}>{countShort(post.reposts)}</b> 转推
-            </span>
-            <span>
-              <b style={{ color: t.text }}>{countShort(post.likes.length)}</b> 点赞
-            </span>
-            <span>
-              <b style={{ color: t.text }}>{countShort(post.views)}</b> 浏览
-            </span>
+          {/* 官方元数据行：H:mm · 年月日 · N 次浏览（日期与浏览加粗） */}
+          <p className="mt-2.5 text-[14px]" style={{ color: t.secondary }}>
+            {dt.getHours()}:{String(dt.getMinutes()).padStart(2, '0')} ·{' '}
+            <b style={{ color: t.text, fontWeight: 700 }}>{dateStr}</b> ·{' '}
+            <b style={{ color: t.text, fontWeight: 700 }}>{countShort(post.views)} 次浏览</b>
+          </p>
+          {/* 互动栏（X 官方：回复/转推/点赞/书签/分享，带数字） */}
+          <div className="mt-1 flex items-center justify-between border-b py-3" style={{ borderColor: t.border }}>
+            <ThreadAction
+              icon={XIcons.reply(21)}
+              count={replies.length}
+              label="回复"
+              color={t.secondary}
+              hoverColor={t.blue}
+              onClick={() => inputRef.current?.focus()}
+            />
+            <ThreadAction
+              icon={XIcons.repost(21)}
+              count={post.reposts}
+              label={post.reposted ? '撤销转推' : '转推'}
+              color={post.reposted ? t.green : t.secondary}
+              hoverColor={t.green}
+              onClick={() => f.repostToggle(post.id)}
+            />
+            <ThreadAction
+              icon={XIcons.like(liked, 21)}
+              count={post.likes.length}
+              label={liked ? '取消点赞' : '点赞'}
+              color={liked ? t.pink : t.secondary}
+              hoverColor={t.pink}
+              onClick={() => f.likeToggle(post.id)}
+            />
+            <ThreadAction
+              icon={XIcons.bookmark(bookmarked, 21)}
+              label={bookmarked ? '移除书签' : '添加书签'}
+              color={bookmarked ? t.blue : t.secondary}
+              hoverColor={t.blue}
+              onClick={() => {
+                setBookmarked(!bookmarked);
+                f.toast(bookmarked ? '已移除书签' : '已添加到书签');
+              }}
+            />
+            <ThreadAction
+              icon={XIcons.share(21)}
+              label="分享"
+              color={t.secondary}
+              hoverColor={t.blue}
+              onClick={() => {
+                try {
+                  void navigator.clipboard?.writeText(`https://x.com/${a.handle}/status/${post.id}`);
+                } catch {
+                  /* 剪贴板不可用无妨 */
+                }
+                f.toast('链接已复制');
+              }}
+            />
           </div>
-          {/* 点赞头像排（有互动时展示，X 观感） */}
-          {post.likes.length > 0 && (
-            <div className="mt-2 flex items-center gap-[-6px] overflow-hidden">
-              {post.likes.slice(0, 8).map((k) => (
-                <span key={k} className="-ml-[6px] first:ml-0 rounded-full ring-2" style={{ boxShadow: `0 0 0 2px ${t.bg}` }}>
-                  <XAvatar authorKey={k} size={22} />
-                </span>
-              ))}
-              {post.likes.length > 8 && (
-                <span className="ml-2 text-[13px]" style={{ color: t.secondary }}>
-                  等 {post.likes.length} 人觉得不错
-                </span>
-              )}
-            </div>
-          )}
         </div>
 
         {/* 回复流 */}

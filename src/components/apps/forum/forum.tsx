@@ -3,8 +3,9 @@
 /**
  * X论坛 App · 主框架。
  *
- * - 顶栏（X 规格）：左 32px 头像（开侧边抽屉）/ 中「为你推荐|关注」双 tab（圆头下划线指示，
- *   下划线贴顶栏底边）/ 右设置图标；sticky backdrop-blur 半透明（X header 观感）。
+ * - 主页顶栏（X 官方规格）：左 32px 头像（开侧边抽屉）/ 中 𝕏 Logo / 右「订阅」描边胶囊；
+ *   下方独立 tab 行「为你推荐|关注」（左对齐 + 蓝色圆头下划线）+ 右侧 + 号（打开发帖）；
+ *   sticky backdrop-blur 半透明（X header 观感）。
  * - 底部 5 tab（X 图标底栏，无文字标签）：主页/搜索/社区/通知/私信，选中实心黑、未选灰。
  * - 右下蓝色发布 FAB（X 圆形 #1d9bf0 + 白色编辑笔）。
  * - 页面栈：thread / profile / community / dm 整页层从右滑入（X push 观感），返回即 pop；
@@ -193,53 +194,66 @@ export default function ForumApp() {
           <div className={views.length ? 'invisible absolute inset-0' : 'absolute inset-0'}>
             {tab === 'home' && (
               <div className="flex h-full flex-col">
-                {/* 顶栏（X：头像 + 双 tab + 设置，sticky blur） */}
+                {/* 顶栏（X：头像 | 𝕏 | 订阅）+ tab 行（为你推荐|关注 + +），sticky blur */}
                 <div
-                  className="sticky top-0 z-20 shrink-0 border-b"
+                  className="sticky top-0 z-20 shrink-0"
                   style={{
-                    borderColor: t.border,
                     background: t.dark ? 'rgba(0,0,0,0.78)' : 'rgba(255,255,255,0.78)',
                     backdropFilter: 'blur(12px)',
                     WebkitBackdropFilter: 'blur(12px)',
                   }}
                 >
-                  <div className="flex items-center justify-between px-4 pt-[54px]" style={{ height: 106 }}>
-                    <XAvatar authorKey="user" size={32} onClick={() => setDrawer(true)} />
-                    <div className="flex h-full items-stretch gap-5">
-                      {(
-                        [
-                          ['foryou', '为你推荐'],
-                          ['following', '关注'],
-                        ] as const
-                      ).map(([k, label]) => {
-                        const active = homeTab === k;
-                        return (
-                          <button
-                            key={k}
-                            type="button"
-                            onClick={() => setHomeTab(k)}
-                            className="relative flex items-center text-[15px]"
-                            style={{ color: active ? t.text : t.secondary, fontWeight: active ? 700 : 500 }}
-                          >
-                            {label}
-                            {active && (
-                              <span
-                                className="absolute bottom-0 left-1/2 h-1 w-8 -translate-x-1/2 rounded-full"
-                                style={{ background: t.blue }}
-                              />
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  {/* 主顶栏：头像 / 𝕏 / 订阅胶囊 */}
+                  <div className="flex items-center justify-between px-4 pt-[54px]" style={{ height: 100 }}>
+                    <XAvatar authorKey="user" size={36} onClick={() => setDrawer(true)} />
+                    <span aria-hidden="true" style={{ color: t.text }}>
+                      <XLogo size={26} />
+                    </span>
                     <button
                       type="button"
-                      aria-label="论坛菜单"
-                      onClick={() => setDrawer(true)}
-                      className="flex h-9 w-9 items-center justify-center rounded-full transition-colors active:bg-black/10 dark:active:bg-white/10"
-                      style={{ color: t.text }}
+                      aria-label="订阅"
+                      onClick={() => toast('X Premium 订阅暂未开放，敬请期待')}
+                      className="flex h-[32px] items-center rounded-full border px-4 text-[13px] font-semibold transition-opacity active:opacity-60"
+                      style={{ borderColor: t.dark ? '#536471' : '#cfd9de', color: t.text }}
                     >
-                      {XIcons.settings(22)}
+                      订阅
+                    </button>
+                  </div>
+                  {/* tab 行：为你推荐 | 关注 | ＋（X 新版布局） */}
+                  <div className="flex items-center border-b" style={{ borderColor: t.border, height: 46 }}>
+                    {(
+                      [
+                        ['foryou', '为你推荐'],
+                        ['following', '关注'],
+                      ] as const
+                    ).map(([k, label]) => {
+                      const active = homeTab === k;
+                      return (
+                        <button
+                          key={k}
+                          type="button"
+                          onClick={() => setHomeTab(k)}
+                          className="relative flex h-full items-center text-[15px]"
+                          style={{ color: active ? t.text : t.secondary, fontWeight: active ? 700 : 500 }}
+                        >
+                          {label}
+                          {active && (
+                            <span
+                              className="absolute bottom-0 left-1/2 h-[4px] w-12 -translate-x-1/2 rounded-full"
+                              style={{ background: t.blue }}
+                            />
+                          )}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      aria-label="发帖"
+                      onClick={() => setCompose(true)}
+                      className="ml-auto flex h-9 w-9 items-center justify-center rounded-full transition-colors active:bg-black/10 dark:active:bg-white/10"
+                      style={{ color: t.secondary }}
+                    >
+                      {XIcons.plus(22)}
                     </button>
                   </div>
                 </div>
@@ -268,8 +282,8 @@ export default function ForumApp() {
             </div>
           )}
 
-          {/* 发布 FAB（X：右下蓝圆 + 白编辑笔；仅主页无推入页时） */}
-          {views.length === 0 && tab === 'home' && (
+          {/* 发布 FAB（X：右下蓝圆 + 白编辑笔；所有主 tab 页都显示） */}
+          {views.length === 0 && (
             <button
               type="button"
               aria-label="发布帖子"
@@ -297,7 +311,7 @@ export default function ForumApp() {
               ) : k === 'search' ? (
                 XIcons.search()
               ) : k === 'communities' ? (
-                XIcons.communities(active)
+                XIcons.spaces(active)
               ) : k === 'notifications' ? (
                 XIcons.bell(active)
               ) : (
