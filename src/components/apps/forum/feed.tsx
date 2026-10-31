@@ -3,14 +3,17 @@
 /**
  * X论坛 · 时间线（帖子卡 / 列表 / 加载骨架）。
  * PostCard 严格按 X 官方规格：48px 圆头像 + 名行（名字/认证/·时间/更多）+
- * 社区来源行 + 正文 17px 行高 1.42 + 操作行（回复/转推/点赞/浏览/分享，铺满内容宽）。
+ * 社区来源行 + 正文 17px 行高 1.42 + 操作行（回复/转推/点赞/书签/分享，
+ * 均匀铺满内容宽；深灰线条图标，悬停浅色圆底 + 图标/数字同步变色）。
  */
 
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import {
   communityName,
   countShort,
+  forumData,
   relTime,
+  repliesOf,
   resolveAuthor,
   type ForumPost,
   COMMUNITY_DEFS,
@@ -37,12 +40,21 @@ function PostText({ text }: { text: string }) {
   );
 }
 
-/** 操作行单个图标按钮（hover 变色由调用方 style 控制；移动端 active 变色） */
+/** 操作行悬停浅色圆底（X 官方：蓝/绿/粉 12% 透明度） */
+const HOVER_BG = {
+  blue: 'rgba(29,155,240,0.12)',
+  green: 'rgba(0,186,124,0.12)',
+  pink: 'rgba(249,24,128,0.12)',
+};
+
+/** 操作行单个图标按钮（X 官方：深灰线条 + 数字同色；
+ *  悬停浮出浅色圆底、图标与数字同步变色；均分铺满整行） */
 function ActionBtn({
   icon,
   count,
   color,
   hoverColor,
+  hoverBg,
   onClick,
   label,
 }: {
@@ -50,6 +62,7 @@ function ActionBtn({
   count?: number;
   color: string;
   hoverColor: string;
+  hoverBg: string;
   onClick?: (e: React.MouseEvent) => void;
   label: string;
 }) {
@@ -58,14 +71,20 @@ function ActionBtn({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="group flex items-center gap-1.5 transition-colors active:opacity-60"
+      className="flex items-center gap-[3px] rounded-full p-[5px] transition-colors active:opacity-60"
       style={{ color }}
-      onMouseEnter={(e) => (e.currentTarget.style.color = hoverColor)}
-      onMouseLeave={(e) => (e.currentTarget.style.color = color)}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.color = hoverColor;
+        e.currentTarget.style.background = hoverBg;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = color;
+        e.currentTarget.style.background = 'transparent';
+      }}
     >
       {icon}
       {typeof count === 'number' && count > 0 && (
-        <span className="text-[14px] leading-none">{count < 10000 ? count : countShort(count)}</span>
+        <span className="pr-[3px] text-[13px] leading-none">{count < 10000 ? count : countShort(count)}</span>
       )}
     </button>
   );
@@ -78,8 +97,10 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
   const a = resolveAuthor(post.authorKey);
   const liked = post.likes.includes('user');
   const repostedByMe = post.reposted === true;
+  const [bookmarked, setBookmarked] = useState(false);
   const communityLabel = post.community && post.community !== 'hot' ? communityName(post.community) : '';
   const time = relTime(post.createdAt);
+  const replyCount = repliesOf(forumData(), post.id).length;
 
   return (
     <article
@@ -137,14 +158,15 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
             </div>
           )}
           <PostText text={post.content} />
-          {/* 操作行：X 顺序 回复/转推/点赞/浏览/分享（铺满可用宽） */}
-          <div className="mt-2.5 mb-1 flex w-full items-center justify-between">
+          {/* 操作行：X 官方顺序 回复/转推/点赞/书签/分享（均分铺满可用宽，悬停浅色圆底） */}
+          <div className="mt-2 mb-1 flex w-full items-center justify-between">
             <ActionBtn
               icon={XIcons.reply()}
-              count={0}
+              count={replyCount}
               label="回复"
               color={t.secondary}
               hoverColor={t.blue}
+              hoverBg={HOVER_BG.blue}
               onClick={() => f.openThread(post.id)}
             />
             <ActionBtn
@@ -153,6 +175,7 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
               label="转推"
               color={repostedByMe ? t.green : t.secondary}
               hoverColor={t.green}
+              hoverBg={HOVER_BG.green}
               onClick={() => f.repostToggle(post.id)}
             />
             <ActionBtn
@@ -161,21 +184,26 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
               label={liked ? '取消点赞' : '点赞'}
               color={liked ? t.pink : t.secondary}
               hoverColor={t.pink}
+              hoverBg={HOVER_BG.pink}
               onClick={() => f.likeToggle(post.id)}
             />
             <ActionBtn
-              icon={XIcons.views()}
-              count={post.views}
-              label="浏览"
-              color={t.secondary}
+              icon={XIcons.bookmark(bookmarked)}
+              label={bookmarked ? '移除书签' : '添加书签'}
+              color={bookmarked ? t.blue : t.secondary}
               hoverColor={t.blue}
-              onClick={() => f.toast(`该帖已有 ${post.views} 次浏览`)}
+              hoverBg={HOVER_BG.blue}
+              onClick={() => {
+                setBookmarked((b) => !b);
+                f.toast(bookmarked ? '已从书签移除' : '已添加到书签');
+              }}
             />
             <ActionBtn
               icon={XIcons.share()}
               label="分享"
               color={t.secondary}
               hoverColor={t.blue}
+              hoverBg={HOVER_BG.blue}
               onClick={() => {
                 try {
                   void navigator.clipboard?.writeText(`https://x.com/${a.handle}/status/${post.id}`);

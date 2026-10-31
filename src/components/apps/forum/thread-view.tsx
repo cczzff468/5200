@@ -27,12 +27,13 @@ import { XAvatar, XIcons, VerifiedBadge } from './shared';
 import { useForum } from './ctx';
 import { PostCard, CommunityIcon } from './feed';
 
-/** 详情页互动栏单个图标钮（带数字，hover 变色） */
+/** 详情页互动栏单个图标钮（X 官方：带数字，悬停浅色圆底 + 图标/数字同步变色） */
 function ThreadAction({
   icon,
   count,
   color,
   hoverColor,
+  hoverBg,
   onClick,
   label,
 }: {
@@ -40,6 +41,7 @@ function ThreadAction({
   count?: number;
   color: string;
   hoverColor: string;
+  hoverBg: string;
   onClick?: () => void;
   label: string;
 }) {
@@ -48,14 +50,20 @@ function ThreadAction({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="flex items-center gap-1.5 transition-colors active:opacity-60"
+      className="flex items-center gap-[3px] rounded-full p-[6px] transition-colors active:opacity-60"
       style={{ color }}
-      onMouseEnter={(e) => (e.currentTarget.style.color = hoverColor)}
-      onMouseLeave={(e) => (e.currentTarget.style.color = color)}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.color = hoverColor;
+        e.currentTarget.style.background = hoverBg;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = color;
+        e.currentTarget.style.background = 'transparent';
+      }}
     >
       {icon}
       {typeof count === 'number' && count > 0 && (
-        <span className="text-[14px] leading-none">{countShort(count)}</span>
+        <span className="pr-[3px] text-[14px] leading-none">{countShort(count)}</span>
       )}
     </button>
   );
@@ -229,6 +237,7 @@ export function ThreadView({ postId }: { postId: string }) {
               label="回复"
               color={t.secondary}
               hoverColor={t.blue}
+              hoverBg="rgba(29,155,240,0.12)"
               onClick={() => inputRef.current?.focus()}
             />
             <ThreadAction
@@ -237,6 +246,7 @@ export function ThreadView({ postId }: { postId: string }) {
               label={post.reposted ? '撤销转推' : '转推'}
               color={post.reposted ? t.green : t.secondary}
               hoverColor={t.green}
+              hoverBg="rgba(0,186,124,0.12)"
               onClick={() => f.repostToggle(post.id)}
             />
             <ThreadAction
@@ -245,6 +255,7 @@ export function ThreadView({ postId }: { postId: string }) {
               label={liked ? '取消点赞' : '点赞'}
               color={liked ? t.pink : t.secondary}
               hoverColor={t.pink}
+              hoverBg="rgba(249,24,128,0.12)"
               onClick={() => f.likeToggle(post.id)}
             />
             <ThreadAction
@@ -252,6 +263,7 @@ export function ThreadView({ postId }: { postId: string }) {
               label={bookmarked ? '移除书签' : '添加书签'}
               color={bookmarked ? t.blue : t.secondary}
               hoverColor={t.blue}
+              hoverBg="rgba(29,155,240,0.12)"
               onClick={() => {
                 setBookmarked(!bookmarked);
                 f.toast(bookmarked ? '已移除书签' : '已添加到书签');
@@ -262,6 +274,7 @@ export function ThreadView({ postId }: { postId: string }) {
               label="分享"
               color={t.secondary}
               hoverColor={t.blue}
+              hoverBg="rgba(29,155,240,0.12)"
               onClick={() => {
                 try {
                   void navigator.clipboard?.writeText(`https://x.com/${a.handle}/status/${post.id}`);

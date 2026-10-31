@@ -117,6 +117,8 @@ export interface ForumData {
 export interface ForumProfile {
   /** 自定义名字（空 = 跟随全局机主名） */
   name?: string;
+  /** 自定义账号 handle（不带 @；空 = 由名字自动生成） */
+  handle?: string;
   /** 自定义头像 dataURL（空 = 跟随全局头像；全局也没有 → XAvatar 默认头像图） */
   avatar?: string | null;
   /** 自定义简介（空 = 「X论坛用户」） */
@@ -510,16 +512,22 @@ export function forumContactsSnap(): ContactRecord[] {
   return contactsSnap;
 }
 
+/** 清洗账号输入：去 @ 前缀/空格，仅保留字母数字下划线中文等安全字符，限 20 字 */
+function sanitizeHandle(raw: string): string {
+  return raw.replace(/@+/g, '').replace(/\s+/g, '').slice(0, 20);
+}
+
 /** 按 key 解析作者（含 user/official/NPC/char）；未知 key 给占位。
- *  user：论坛内自定义资料（name/avatar/bio）优先，未自定义跟随全局机主资料。 */
+ *  user：论坛内自定义资料（name/handle/avatar/bio）优先，未自定义跟随全局机主资料。 */
 export function resolveAuthor(key: AuthorKey): ForumAuthor {
   if (key === 'user') {
     const fp = forumData().profile;
     const name = fp?.name?.trim() || ownerName || '我';
+    const handle = sanitizeHandle(fp?.handle ?? '') || name.replace(/\s+/g, '') || 'me';
     return {
       key,
       name,
-      handle: name.replace(/\s+/g, '') || 'me',
+      handle,
       avatar: fp?.avatar ?? ownerAvatar,
       bio: fp?.bio?.trim() || 'X论坛用户',
     };

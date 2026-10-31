@@ -1757,3 +1757,21 @@ Work Log:
 
 Stage Summary:
 - 发帖页对齐官方 compose 规格；底栏 Spaces 方向由官方特写截图二次确认
+
+---
+
+Task ID: 21
+Agent: 主控 Agent（Z.ai Code）
+Task: X论坛个人主页五项改造（账号自定义 / 删背景上传钮 / 删社区钮 / 页内搜索 / 操作行美化按参考图）
+
+Work Log:
+- [账号自定义] core.ts：ForumProfile 增 handle 字段；resolveAuthor('user') 优先取自定义 handle（sanitizeHandle 去 @/空格、限 20 字），空则回落名字自动生成
+- [账号自定义] profile-edit.tsx：名字下方新增「账号」Field，输入实时清洗（禁 @ 与空格），保存/一键恢复跟随全局，hasCustom 纳入 handle
+- [删按钮] profile-view.tsx：删除背景图右上角「上传背景」胶囊 + 隐藏 file input（背景图上传保留在编辑资料弹层内）；删除顶栏社区(指南针)按钮
+- [页内搜索] profile-view.tsx：搜索图标不再跳全局搜索 tab，改为页内搜索态——顶栏变搜索输入胶囊（placeholder 跟随当前 tab：搜索帖子/回复/转推/媒体），按关键词过滤当前 tab 列表，结果提示行 + 未命中空态，「取消」退出；顺带实现自己主页「转推」tab 展示真实转推内容（reposted===true）
+- [操作行美化] feed.tsx：ActionBtn 按参考图（IMG_20261031_123754）重做——回复/转推/点赞/书签/分享 五钮均分铺满整行（justify-between），深灰 #536471 线条 + 数字同色，悬停浮出对应色 12% 透明圆底且图标数字同步变色（蓝/绿/粉）；「浏览」柱状图按钮替换为「书签」（可切换 + toast），回复数改真实统计（repliesOf）
+- [操作行美化] shared.tsx：XIcons.share 由弯曲箭头(Share)改为 X 官方三节点网络样式(Share2)；thread-view.tsx：ThreadAction 同步加 hover 圆底变色
+- [验证] agent-browser 端到端：解锁→X论坛→个人主页，DOM 确认顶栏仅「返回+搜索我的帖子」、横幅无按钮；编辑资料含「自定义账号」框，输入 fanfan@520 test 自动清洗为 fanfan520test 并保存生效（主页显示 @fanfan520test）；发帖后页内搜索「搜索功能」命中 1 条+提示行、未命中空态文案、切 tab placeholder 跟随；转推一条后转推 tab 出现内容且 tab 内搜索生效；主页操作行 DOM 确认 5 钮=message-circle/repeat2/heart/bookmark/share2 均分铺满；无浏览器错误、dev.log 干净
+Stage Summary:
+- 个人主页：顶栏=返回+名字/帖子数+页内搜索；横幅纯净无按钮；@handle 全链路可自定义（含输入清洗）；搜索按钮语义=过滤下方四 tab 内容；转推 tab 展示真实转推
+- 全站帖子操作行 1:1 参考图：回复/转推/点赞/书签/分享均分铺满、灰色线条、hover 浅色圆底同步变色、分享=三节点网络图标；详情页互动栏同步

@@ -31,7 +31,7 @@ import {
   Repeat2,
   Search,
   Settings,
-  Share,
+  Share2,
   Users,
   UserPlus,
   UserCheck,
@@ -116,7 +116,8 @@ export const XIcons = {
     <Heart width={size} height={size} strokeWidth={SW} fill={filled ? 'currentColor' : 'none'} />
   ),
   views: (size = 19) => <BarChart3 width={size} height={size} strokeWidth={SW} />,
-  share: (size = 19) => <Share width={size} height={size} strokeWidth={SW} />,
+  /** 分享：X 官方三节点网络样式（三个圆点连线，非弯曲箭头） */
+  share: (size = 19) => <Share2 width={size} height={size} strokeWidth={SW} />,
   more: (size = 19) => <MoreHorizontal width={size} height={size} strokeWidth={SW} />,
   back: (size = 20) => <ArrowLeft width={size} height={size} strokeWidth={SW} />,
   settings: (size = 22) => <Settings width={size} height={size} strokeWidth={SW} />,

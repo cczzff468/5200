@@ -9,7 +9,7 @@
  * - 在这里编辑保存过 → X论坛内一直使用这里的值，不再随全局变化；
  * - 每项可单独「移除」恢复跟随全局，底部另有一键全部恢复。
  *
- * 可编辑：头像与背景图（均从手机上传；背景图居中裁剪 3:1）、名字、简介、
+ * 可编辑：头像与背景图（均从手机上传；背景图居中裁剪 3:1）、名字、账号（@handle）、简介、
  * 「正在关注 / 关注者」展示数（自定义数字）。
  */
 
@@ -105,6 +105,7 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
   const fp = d.profile ?? {};
 
   const [name, setName] = useState(fp.name ?? '');
+  const [handle, setHandle] = useState(fp.handle ?? '');
   const [bio, setBio] = useState(fp.bio ?? '');
   const [avatar, setAvatar] = useState<string | undefined>(fp.avatar ?? undefined);
   const [banner, setBanner] = useState<string | undefined>(fp.banner ?? undefined);
@@ -121,8 +122,10 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
   const previewAvatar = avatar ?? gp.avatar;
   const defaultFollowers = 320 + forumContactsSnap().length * 180;
   const hasCustom = Boolean(
-    fp.name || fp.bio || fp.avatar || fp.banner || fp.followingCount != null || fp.followersCount != null,
+    fp.name || fp.handle || fp.bio || fp.avatar || fp.banner || fp.followingCount != null || fp.followersCount != null,
   );
+  /** 账号预览（自动生成的跟随值）：名字去空格，@ 前缀仅展示 */
+  const handleFallback = (name.trim() || gp.name).replace(/\s+/g, '') || 'me';
 
   const onAvatarFile = (file: File | undefined) => {
     if (!file) return;
@@ -153,9 +156,15 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
     return Math.min(n, 999_999_999);
   };
 
+  /** 账号输入清洗：不允许 @ 与空白（保存时再清洗一次） */
+  const onHandleChange = (v: string) => {
+    setHandle(v.replace(/@+/g, '').replace(/\s+/g, '').slice(0, 20));
+  };
+
   const save = () => {
     saveForumProfile({
       name: name.trim() || undefined,
+      handle: handle.trim() || undefined,
       bio: bio.trim() || undefined,
       avatar,
       banner,
@@ -169,6 +178,7 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
   const resetAll = () => {
     saveForumProfile({
       name: undefined,
+      handle: undefined,
       bio: undefined,
       avatar: undefined,
       banner: undefined,
@@ -275,6 +285,17 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
             maxLength={24}
             ariaLabel="自定义名字"
           />
+          <Field
+            label="账号"
+            value={handle}
+            onChange={onHandleChange}
+            placeholder={`跟随名字自动生成（@${handleFallback}）`}
+            maxLength={20}
+            ariaLabel="自定义账号"
+          />
+          <p className="px-4 pt-1.5 text-[12px]" style={{ color: t.secondary }}>
+            账号是你在X论坛的唯一标识，仅限字母、数字、下划线或中文，不能包含 @ 或空格。
+          </p>
           <Field
             label="简介"
             value={bio}
