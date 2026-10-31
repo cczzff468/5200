@@ -3257,7 +3257,7 @@ function ChatView({
               }
             >
               {newDay && <DaySeparator time={m.time} />}
-              {/* 深度思考思维链卡片：消息行级别（日期分隔下方、气泡行上方）——对方任意消息类型
+              {/* 深度思考思维链卡片：消息行级别（日期分隔下方、气泡行上方，紧凑小卡片左贴边=信息端对方气泡起点）——对方任意消息类型
                   （文本/语音/卡片）都可携带思考过程；开关关闭时直接丢弃不渲染 */}
               {!mine && deepThinkOn && m.thinking && !m.recalled ? (
                 <div className="px-1 pb-[2px]">

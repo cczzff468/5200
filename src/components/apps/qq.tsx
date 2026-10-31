@@ -7268,10 +7268,10 @@ function ChatPage({
                   <span className="qq-time-chip inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
                 </div>
               )}
-              {/* 深度思考思维链卡片：消息行级别（时间分隔下方、气泡行上方，左侧对齐头像列右缘）——
+              {/* 深度思考思维链卡片：消息行级别（时间分隔下方、气泡行上方，紧凑小卡片与头像左缘对齐）——
                   对方任意消息类型（文本/语音/卡片）都可携带思考过程；开关关闭时直接丢弃不渲染 */}
               {!mine && deepThinkOn && m.thinking && !m.recalled ? (
-                <div className="px-1 pb-[2px] pl-[48px]">
+                <div className="pl-0 pr-1 pb-[2px]">
                   <ThinkCard text={m.thinking} testId={`qq-think-${m.id}`} />
                 </div>
               ) : null}
