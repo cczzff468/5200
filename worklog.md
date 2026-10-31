@@ -1743,3 +1743,17 @@ Work Log:
 Stage Summary:
 - 五页全部对齐官方截图规格：主页（𝕏 居中+订阅+tab 行）、搜索（头像+搜索胶囊+5 tab）、详情（关注胶囊+官方元数据+5 钮互动栏+社区引用卡）、他人主页（150 banner+80 半嵌头像+三按钮组）、自己主页（编辑资料+获得认证胶囊）；底栏 Spaces 化 + FAB 全页化；顺带排雷 XAvatar 嵌套 button（hydration 错误根除）
 - 关键文件：forum.tsx / feed.tsx / thread-view.tsx / profile-view.tsx / extras.tsx / shared.tsx（XAvatar 重构+3 新图标+spaces）
+
+---
+Task ID: 11（补充）
+Agent: 主控 Agent（Z.ai Code）
+Task: 发帖页对齐官方新截图（113007 底栏特写 + 113655 compose）
+
+Work Log:
+- 用户陆续新增 2 张官方截图：113007=底栏特写（VLM 确认第 3 位为圆环闪电，与我们已改的 Spaces 图标一致 ✓）、113655=发帖 compose 页（返回+草稿蓝字+Post 浅蓝胶囊+地球「所有人都可以回复」行）
+- compose-sheet.tsx 精修：顶行「取消」→ 官方三段式「返回箭头 | 草稿蓝字（点击 toast）| 发布胶囊（空文 disabled opacity-50 呈浅蓝置灰观感）」；正文区下新增「所有人都可以回复」地球行（lucide Globe 16px + 灰字 13px，点击 toast）；保留版块选择与字数圆环
+- E2E：发帖页顶行三元素 ✓、浅蓝置灰态与官方一致 ✓、地球行 ✓；完整发布链路 ✓（textarea 输入 #话题# → 发布 → 帖子落 feed 顶「阿泽 · 刚刚」）
+- tsc/eslint 全过；dev.log 无新错
+
+Stage Summary:
+- 发帖页对齐官方 compose 规格；底栏 Spaces 方向由官方特写截图二次确认

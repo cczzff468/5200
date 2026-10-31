@@ -1,12 +1,14 @@
 'use client';
 
 /**
- * X论坛 · 发布弹层（X compose 全屏 sheet）。
- * 顶行：取消（灰字）+ 发布（蓝胶囊，空文禁用）；中间头像 + 「有什么新鲜事？」；
+ * X论坛 · 发布弹层（X compose 全屏 sheet，按官方截图精修）。
+ * 顶行：返回箭头 + 「草稿」蓝字 + 发布浅蓝胶囊（空文置灰）；
+ * 正文区：头像 + 「有什么新鲜事？」；下方「所有人都可以回复」地球行；
  * 底行：发布到·版块（点选弹底部 sheet）+ X 字数圆环（超限变红）。
  */
 
 import { useMemo, useRef, useState } from 'react';
+import { Globe } from 'lucide-react';
 import { COMMUNITY_DEFS } from '@/lib/forum/core';
 import { XAvatar, XIcons, useXTheme } from './shared';
 import { useForum } from './ctx';
@@ -65,15 +67,24 @@ export function ComposeSheet({ onClose, onPublish }: { onClose: () => void; onPu
   return (
     <div className="absolute inset-0 z-50" role="dialog" aria-modal="true" aria-label="发布帖子">
       <div className="flex h-full flex-col animate-[forum-sheet_.26s_ease-out]" style={{ background: t.bg, color: t.text }}>
-        {/* 顶行 */}
-        <div className="flex shrink-0 items-center justify-between border-b px-4 pt-[54px]" style={{ borderColor: t.border, height: 104 }}>
+        {/* 顶行：返回 | 草稿 | 发布胶囊（官方 Post 规格） */}
+        <div className="flex shrink-0 items-center justify-between border-b px-4 pt-[54px]" style={{ borderColor: t.border, height: 100 }}>
           <button
             type="button"
+            aria-label="关闭并返回"
             onClick={onClose}
-            className="text-[16px]"
-            style={{ color: t.secondary }}
+            className="flex h-9 w-9 items-center justify-center rounded-full active:bg-black/10 dark:active:bg-white/10"
+            style={{ color: t.text }}
           >
-            取消
+            {XIcons.back(22)}
+          </button>
+          <button
+            type="button"
+            onClick={() => f.toast(text.trim() ? '已存草稿，下次继续写' : '草稿箱是空的')}
+            className="text-[15px] font-medium"
+            style={{ color: t.blue }}
+          >
+            草稿
           </button>
           <button
             type="button"
@@ -82,8 +93,8 @@ export function ComposeSheet({ onClose, onPublish }: { onClose: () => void; onPu
               onPublish(text.trim(), communityId);
               onClose();
             }}
-            className="rounded-full px-5 h-[34px] text-[15px] font-bold text-white transition-opacity disabled:opacity-40 active:opacity-70"
-            style={{ background: canPublish ? t.blue : t.blue }}
+            className="rounded-full px-5 h-[34px] text-[15px] font-bold text-white transition-opacity active:opacity-70 disabled:opacity-50"
+            style={{ background: t.blue }}
             aria-label="发布"
           >
             发布
@@ -103,6 +114,18 @@ export function ComposeSheet({ onClose, onPublish }: { onClose: () => void; onPu
             style={{ color: t.text, caretColor: t.blue }}
           />
         </div>
+
+        {/* 回复权限行（官方 Earth · Everyone can reply） */}
+        <button
+          type="button"
+          onClick={() => f.toast('回复权限：所有人都可以回复')}
+          className="flex shrink-0 items-center gap-2 px-4 py-2"
+          style={{ color: t.secondary }}
+          aria-label="回复权限设置"
+        >
+          <Globe width={16} height={16} strokeWidth={1.9} aria-hidden="true" />
+          <span className="text-[13px]">所有人都可以回复</span>
+        </button>
 
         {/* 底行：版块 + 字数环 */}
         <div className="flex shrink-0 items-center justify-between border-t px-4 py-3" style={{ borderColor: t.border }}>
