@@ -55,6 +55,23 @@ function cleanText(raw: string, max: number): string {
   return t.slice(0, max);
 }
 
+/** 剥离回复对象前缀（v7 修复：评论正文绝不携带「回复 @某某：」「@某某 」字样——
+ *  回复对象由前端根据真实 parentId 动态渲染；旧 prompt 让 LLM 自己写 @前缀，
+ *  批量生成时行序错位会把从没出现过的人写进评论里） */
+function stripReplyPrefix(raw: string): string {
+  let t = raw.trim();
+  // 循环处理多种写法：「回复 @xx：」「回复@xx:」「@xx 」「回复 xx：」
+  for (let i = 0; i < 3; i++) {
+    const next = t
+      .replace(/^[回复回覆]?\s*[@＠]\S{1,24}\s*[:：，,\s]\s*/, '')
+      .replace(/^回复\s*[^@\s：:，,]{1,24}\s*[:：]\s*/, '')
+      .trim();
+    if (next === t) break;
+    t = next;
+  }
+  return t;
+}
+
 /** 北京时间行（与 moments/generate 同口径） */
 function bjTimeLine(): string {
   const d = new Date(Date.now() + 8 * 3600_000);
@@ -251,6 +268,11 @@ export async function POST(req: Request) {
             content:
               '你在为一个国际化中文论坛（X/Twitter 风格广场）的帖子批量生成网友评论。' +
               '【最重要】每条评论必须回应帖子里讲的具体那件事——帖子说某顶流被拍到深夜同框，评论就聊这个同框；帖子说车油耗高想卖车，评论就聊这车。禁止答非所问的万金油。' +
+              '\n【看帖作答铁律】先读懂原帖在问什么/求什么，再开口：' +
+              '\n- 求推荐帖（求剧/求歌/求店/求攻略）：必须正面回答——要么真心推荐（说出具体名字+一句真实理由，如「去看XXX吧，三集一个案子不虐不烧脑」）、要么同求（「同求！也想要这种的」）、要么避雷（「别看XXX，开头甜后面刀」）。绝对禁止答非所问——人家求不烧脑不虐心的甜剧，你不能回「中间注水、结局烂尾」这种没头没尾的评价，更不能推荐相反的东西；' +
+              '\n- 求助/提问帖：必须给出具体建议或直接回答问题；' +
+              '\n- 分享/吐槽帖：共鸣、补充细节、抬杠都可以，但必须围绕帖子那件事。' +
+              '\n【格式铁律】这是直接评论帖子的一级评论，不是回复某个人：绝对禁止以「@任何人」开头，绝对禁止带「回复」「回复 @某某：」字样（回复对象由系统自动标注，你写了就是画蛇添足）。' +
               '\n评论区六种人（按人设自然落位，有好有坏、有捧有踩，必须各占一定比例）：' +
               '\n- 共鸣党（顺着楼主发泄情绪）：「太懂了，我今天也是」「真的，谁懂啊！」「家人们谁懂，我也是」' +
               '\n- 无脑杠精（为抬杠而抬杠）：「只有我一个人觉得这很无聊吗？」「自己没钱买在这酸什么？」「就这也好意思发出来？」' +
@@ -274,11 +296,13 @@ export async function POST(req: Request) {
           },
           {
             role: 'user',
-            content: `论坛里有这么一条帖子——\n${base}\n\n请以这 ${expect} 位网友的口吻各写一条评论（输出 ${expect} 行）：\n${spec}${avoidLine}\n${bjTimeLine()}`,
+            content: `论坛里有这么一条帖子——\n${base}\n\n请以这 ${expect} 位网友的口吻各写一条一级评论（都是直接评论帖子本身，不是回复别人；输出 ${expect} 行）：\n${spec}${avoidLine}\n${bjTimeLine()}`,
           },
         ];
         const raw = (await completeWithFallback(config, messages)).text;
-        const list = await batchWithRetry(config, messages, raw, expect, 1000);
+        const list = (await batchWithRetry(config, messages, raw, expect, 1000))
+          .map(stripReplyPrefix)
+          .filter((s) => s.length >= 2);
         return NextResponse.json({ items: list });
       }
 
@@ -301,9 +325,10 @@ export async function POST(req: Request) {
         {
           role: 'system',
           content:
-            '你在为一个国际化中文论坛（X/Twitter 风格广场）的帖子评论区生成楼中楼回复。' +
-            '【楼中楼铁律】每条回复必须以「@被回复人 」开头（例：「@纯路人 你是不是瞎，这明显是……」「@课代表 收下我的膝盖」），' +
-            '且内容必须针对那个人说的话反驳或赞同——他说得对就附和补充，说得不对比回去，禁止无视对方自说自话。' +
+            '你在为一个国际化中文论坛（X/Twitter 风格广场）的帖子评论区生成楼中楼回复（回复评论区里某条评论）。' +
+            '【格式铁律】直接写回复正文本身：绝对禁止以「@任何人」开头，绝对禁止带「回复」「回复 @某某：」字样——系统会根据真实回复关系自动在前面标注「回复 @被回复者：」，你自己写@会和系统标注重复甚至错位到别人头上。' +
+            '【楼中楼铁律】每条回复必须针对对应那条评论里说的话——他说得对就附和补充，说得不对比回去，他问了就回答他；禁止无视对方自说自话，禁止绕开对方硬聊主帖。' +
+            '\n【看帖作答】对方在求推荐/求助时，直接给出具体答案（名字+理由/具体做法），不能答非所问。' +
             '\n【禁用词库】「总的来说」「不可否认」「确实如此」「在这个事件中」「我们应该」「首先其次最后」「支持」「说得对」「有道理」绝对禁止；' +
             '一两句话为主，禁止长篇大论。' +
             '\n【网感】笑死、乐、破防了、你小子、一整个无语住、绝绝子（反讽）、卧槽、妈呀、离谱；可以没头没尾、可以不用标点、可以有错别字。' +
@@ -313,11 +338,13 @@ export async function POST(req: Request) {
         },
         {
           role: 'user',
-          content: `论坛帖子：${base}\n\n评论区里有下面 ${expect} 条评论，请逐条写出对应的楼中楼回复（每条以 @评论者 开头，输出 ${expect} 行）：\n${spec}\n${bjTimeLine()}`,
+          content: `论坛帖子：${base}\n\n评论区里有下面 ${expect} 条评论，请逐条写出对应的楼中楼回复（每条直接写正文，针对那条评论说的话回应，不要带任何@或「回复」前缀；输出 ${expect} 行）：\n${spec}\n${bjTimeLine()}`,
         },
       ];
       const raw = (await completeWithFallback(config, messages)).text;
-      const list = await batchWithRetry(config, messages, raw, expect, 600);
+      const list = (await batchWithRetry(config, messages, raw, expect, 600))
+        .map(stripReplyPrefix)
+        .filter((s) => s.length >= 2);
       return NextResponse.json({ items: list });
     }
 
@@ -351,13 +378,15 @@ export async function POST(req: Request) {
               `你是国际化中文论坛（X/Twitter 风格广场）的网友「${name}」。人设：${persona}。` +
               `你平时发帖惯用${langLabel(myLang)}，这次回复也用${langLabel(myLang)}写，要地道得像母语者。` +
               '回复必须贴合对方说的内容、帖子语境和你们之前的对话，可以带一点自己的态度，可以接梗、反问、分享经历、反驳。' +
+              '【看帖作答】对方问了什么就答什么：求推荐就给出具体推荐（说出名字和理由），求助就给具体建议，绝不能答非所问。' +
+              '【格式铁律】直接写回复正文：绝对禁止以「@任何人」开头，绝对禁止带「回复 @某某：」字样（系统会自动标注回复对象）。' +
               '【禁用】「总的来说」「不可否认」「确实如此」「在这个事件中」「我们应该」「首先其次最后」这类 AI 套话；「支持」「说得对」「有道理」这类客套话也禁止；一两句话为主。' +
               '口吻像真人聊天：口语化、带情绪、可以不用标点或全用感叹号、可以有错别字和缩写（xswl、u1s1、笑死、破防了）。' +
               '字数不限：一两句短回到上百字的长回复都可以。禁止 emoji，禁止任何格式标记，只输出回复正文。',
           },
-          { role: 'user', content: `${ctx ? ctx + '\n\n' : ''}${parentLine}\n请以「${name}」的口吻回复。${bjTimeLine()}` },
+          { role: 'user', content: `${ctx ? ctx + '\n\n' : ''}${parentLine}\n请以「${name}」的口吻回复（直接写正文，不要带@或「回复」前缀）。${bjTimeLine()}` },
         ])).text;
-        return NextResponse.json({ text: cleanText(raw, 1000) });
+        return NextResponse.json({ text: cleanText(stripReplyPrefix(raw), 1000) });
       }
       const history = Array.isArray(body.history)
         ? (body.history as Record<string, unknown>[])

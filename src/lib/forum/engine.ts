@@ -919,13 +919,72 @@ function topicSubjectOf(text: string, fallback: string): string {
   return tag ?? fallback;
 }
 
+/** 剥离回复对象前缀（与服务端 stripReplyPrefix 同口径的客户端兜底：
+ *  LLM 偶尔无视「禁止@开头」要求，落库前再洗一遍——正文绝不带「回复 @xx：」「@xx 」） */
+function stripReplyPrefixClient(raw: string): string {
+  let t = raw.trim();
+  for (let i = 0; i < 3; i++) {
+    const next = t
+      .replace(/^[回复回覆]?\s*[@＠]\S{1,24}\s*[:：，,\s]\s*/, '')
+      .replace(/^回复\s*[^@\s：:，,]{1,24}\s*[:：]\s*/, '')
+      .trim();
+    if (next === t) break;
+    t = next;
+  }
+  return t;
+}
+
+/** 求推荐/求助帖检测（v7 用户反馈：楼主求「不烧脑不虐心」的剧，NPC 却回「中间注水、
+ *  结局烂尾」——池子兜底也要看帖作答，求什么答什么） */
+const REQUEST_POST_RE = /求推荐|求推|推荐一下|推荐几|有没有.{0,8}(推荐|好看|好听的)|剧荒|书荒|歌荒|安利|求个|求助|跪求|在线等|姐妹们.{0,6}推|家人们.{0,6}推|求下饭|求剧|求歌|求攻略|怎么选|哪个好|求避雷/i;
+
+/** 求推荐/求助专用兜底池：只有「真心推荐（带具体作品）」「同求」「避雷（带名字）」
+ *  三类正面回答——求推荐帖绝不落剧情评价类万金油 */
+const REQUEST_COMMENT_POOL: string[] = [
+  '同求！我也想要这种的，蹲一个',
+  '同求，收藏了等评论区大佬',
+  '蹲蹲蹲，也想看这种的',
+  '去搜「爱慕虚颜的猫」，纯甜无刀，我上个月刚二刷',
+  '推荐「面包和汤和猫咪好天气」，节奏慢悠悠的特别下饭，一点不虐',
+  '「孤独的美食家」了解下，一集吃一顿饭，零脑零虐',
+  '「想做饭的女人和想吃饭的女人」甜到我打滚，每集二十分钟无脑嗑',
+  '「俗女养成记」！好笑又温暖，哭也是那种释怀的哭不算虐',
+  '「森林民宿」慢综艺化的剧，看着看着就困了，助眠神器',
+  '避雷「深空之眼」，前面甜后面全是刀，我被创死了',
+  '别看「漫长的季节」……不是说不好，是后劲太大，不算不虐心',
+  '「重启人生」！治愈系神作，看完只想好好生活',
+  '「我的解放日志」慢一点但很舒服，适合下班瘫着看',
+  '我片单跟你需求一模一样，已收藏这条帖子',
+  '马克！看完回来汇报',
+  '听我的，先看「请回答1988」，笑点泪点都刚刚好',
+  '「风骚律师」不行，太烧脑，快进到「摩登家庭」无脑笑就完事了',
+  '求同款！上次按评论区推荐看的「装腔启示录」还行，不虐',
+];
+
+/** 求推荐池优先：帖子在求东西时，兜底评论必须正面回答（推荐/同求/避雷） */
+function pickRequestComment(postContent: string, used: Set<string>): string | null {
+  if (!REQUEST_POST_RE.test(postContent)) return null;
+  for (let i = 0; i < 40; i++) {
+    const cand = REQUEST_COMMENT_POOL[Math.floor(Math.random() * REQUEST_COMMENT_POOL.length)];
+    if (!used.has(cand.slice(0, 16))) {
+      used.add(cand.slice(0, 16));
+      return cand;
+    }
+  }
+  return null;
+}
+
 /** 兜底评论：按帖子内容命中的主题池抽取（对得上帖子内容，不是万金油），
- *  主题池尽/未命中 → 通用池。外语评论者走外语通用池。 */
+ *  主题池尽/未命中 → 通用池。外语评论者走外语通用池。
+ *  v7：求推荐/求助帖 → 优先求推荐池（求什么答什么，绝不答非所问）。 */
 function pickTopicComment(postContent: string, lang: string, used: Set<string>, community?: string | null): string | null {
   if (lang !== 'zh-Hans') {
     const cand = pickGenericComment(lang, used);
     if (cand) return cand;
   }
+  // 求推荐/求助帖优先：正面回答（推荐/同求/避雷），再考虑主题池
+  const req = pickRequestComment(postContent, used);
+  if (req) return req;
   // 版块优先：帖子所在版块的领域池先抽（追星帖出追星评论，车帖出车友评论）
   const pools: { re: RegExp; subject: string; comments: string[] }[] = [];
   const commIdx = community ? COMMUNITY_POOLS[community] ?? [] : [];
@@ -1406,7 +1465,9 @@ async function genCommentBatch(postId: string): Promise<number> {
         avoid,
         userName: resolveAuthor('user').name,
       })) as { items?: string[] };
-      texts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length >= 2) : [];
+      texts = Array.isArray(r.items)
+        ? r.items.map((x) => (typeof x === 'string' ? stripReplyPrefixClient(x) : x)).filter((x) => typeof x === 'string' && x.trim().length >= 2)
+        : [];
     } catch {
       texts = [];
     }
@@ -1483,7 +1544,9 @@ async function genCommentBatch(postId: string): Promise<number> {
             }),
             userName: resolveAuthor('user').name,
           })) as { items?: string[] };
-          subTexts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length >= 2) : [];
+          subTexts = Array.isArray(r.items)
+            ? r.items.map((x) => (typeof x === 'string' ? stripReplyPrefixClient(x) : x)).filter((x) => typeof x === 'string' && x.trim().length >= 2)
+            : [];
         } catch {
           subTexts = [];
         }
@@ -1723,19 +1786,30 @@ async function execJob(job: PendingJob): Promise<void> {
           history,
           userName,
         })) as { text?: string };
-        text = typeof r.text === 'string' ? r.text.trim() : '';
+        text = typeof r.text === 'string' ? stripReplyPrefixClient(r.text) : '';
       } catch {
         text = '';
       }
       if (!text) {
         const npc = NPC_DEFS.find((n) => `npc:${n.id}` === authorKey);
         const lang = author.lang ?? 'zh-Hans';
-        const pool = npc
-          ? npc.replies
-          : lang !== 'zh-Hans'
-            ? [pickGenericComment(lang, new Set()) ?? '哈哈哈哈']
-            : ['有意思，蹲一个后续。', '这条我认可。', '顶上去让更多人看到。', '哈哈你这么一说我竟无法反驳。', '有道理，学到了。'];
-        text = pool[Math.floor(Math.random() * pool.length)];
+        // v7：兜底也要看帖作答——求推荐帖 → 推荐/同求/避雷池；主题帖 → 主题池；
+        // 池子尽/外语 → 原通用兜底（不再一律万金油「蹲一个后续」）
+        const used = new Set<string>();
+        const smart =
+          lang === 'zh-Hans'
+            ? pickTopicComment(`${parentContent} ${postContent}`, 'zh-Hans', used, target.community)
+            : pickGenericComment(lang, used);
+        if (smart) {
+          text = smart;
+        } else {
+          const pool = npc
+            ? npc.replies
+            : lang !== 'zh-Hans'
+              ? ['哈哈哈哈']
+              : ['有意思，蹲一个后续。', '这条我认可。', '顶上去让更多人看到。', '哈哈你这么一说我竟无法反驳。', '有道理，学到了。'];
+          text = pool[Math.floor(Math.random() * pool.length)];
+        }
       }
       const next = { ...forumData() };
       // AI 回复的热度按被回复父帖缩放（评论赞 << 主帖赞；用户的新帖 0 赞 → 回复也几乎 0 赞）
@@ -1781,7 +1855,7 @@ async function execJob(job: PendingJob): Promise<void> {
           history,
           userName: resolveAuthor('user').name,
         })) as { text?: string };
-        text = typeof r.text === 'string' ? r.text.trim() : '';
+        text = typeof r.text === 'string' ? stripReplyPrefixClient(r.text) : '';
       } catch {
         text = '';
       }
@@ -1816,6 +1890,41 @@ function syncCommunities(): void {
   }
 }
 
+/** v7 存量数据修复（幂等，boot 时执行）：
+ *  1. AI 生成的评论/楼中楼正文曾带「@某人 」「回复 @某人：」前缀（旧 prompt 要求 LLM 自己写，
+ *     批量错位时会@到从没出现过的人）——一律剥掉，改由前端按真实 parentId 动态渲染前缀；
+ *  2. replyToName 存的是生成时的快照名，NPC 后来被 LLM 改名后就变成「幽灵名字」
+ *     （如占位名 plmm在线冲浪）——统一回填为父帖作者的当前昵称。
+ *  用户手写的帖子/回复（authorKey=user）不动——@谁是 TA 自己的自由。 */
+function migrateV7ReplyData(): void {
+  try {
+    const d = forumData();
+    let changed = false;
+    const byId = new Map(d.posts.map((p) => [p.id, p]));
+    for (const p of d.posts) {
+      if (p.authorKey === 'user') continue;
+      // ① 剥正文前缀
+      const cleaned = stripReplyPrefixClient(p.content);
+      if (cleaned !== p.content && cleaned.length >= 1) {
+        p.content = cleaned;
+        changed = true;
+      }
+      // ② replyToName 回填为父帖作者当前名
+      if (p.replyTo !== null || p.replyToPost) {
+        const parent = byId.get(p.replyToPost ?? p.replyTo ?? '');
+        const want = parent ? resolveAuthor(parent.authorKey).name : null;
+        if (want && p.replyToName !== want) {
+          p.replyToName = want;
+          changed = true;
+        }
+      }
+    }
+    if (changed) saveForum({ ...d });
+  } catch {
+    /* 迁移失败静默（不影响正常使用） */
+  }
+}
+
 export async function bootForum(): Promise<void> {
   if (booting) return;
   booting = true;
@@ -1824,6 +1933,8 @@ export async function bootForum(): Promise<void> {
     // 只在用户下拉/上拉松开、点「更多评论」时才生成）
     await ensureSeed();
     syncCommunities();
+    // v7：存量评论数据修复（@前缀清洗 + 回复对象名回填）
+    migrateV7ReplyData();
     // v5 兜底迁移：限流期播种/中间版本数据没挂上内置 NPC 覆盖名的，现在补上
     //（幂等：已有覆盖名/LLM 名的跳过；保证任何情况下都不露出内置描述型网名）
     if (seedBuiltinNpcFallbackNames()) saveForum({ ...forumData() });

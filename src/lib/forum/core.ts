@@ -642,7 +642,8 @@ export const REAL_NAME_POOL: string[] = [
   '精神离职中', '周报编不下去', '这个月又不月光', '花呗还完了吗', '攒钱失败专员',
   '空调续命中', '外卖红包猎人', '快递比人先到家', '地铁人形立牌', '起床失败十连',
   // 极简英文/拼音型（Asdfgh/Zzzz_/Momo/不瘦十斤不改名）
-  'Asdfgh', 'Zzzz_', 'Momo', 'momo酱', 'dddd', 'xswl本wsl', 'plmm在线冲浪', 'yyds本人',
+  // v7：删掉 plmm在线冲浪（用户反馈：这个名字出现在回复对象里像写死的变量，太假）
+  'Asdfgh', 'Zzzz_', 'Momo', 'momo酱', 'dddd', 'xswl本wsl', 'yyds本人',
   'nsdd', 'u1s1', 'dbq我错了', 'awsl', 'szd', 'kdl', 'bhs', '不瘦十斤不改名', 'qwe123',
   'hhh别骂了', 'pyq不见不散', 'bili干杯', 'auoh', 'Lynn不在线', 'Cici今天很困',
 ];
@@ -1305,19 +1306,55 @@ export function resolveAuthor(key: AuthorKey): ForumAuthor {
   return { key, name: '论坛用户', handle: randomHandle(key || 'unknown'), avatar: null };
 }
 
-/** 粉丝数展示值（NPC = 基础值；user/char = 公式值）。
- *  「关注者」自定义已按用户要求移除：始终跟随真实（公式）值。 */
+/** 粉丝数展示值（v7 用户要求：正在关注/关注者默认 0）。
+ *  机主/联系人/动态网友一律真实 0（不再造 320+联系人×180 这种公式假数）；
+ *  仅保留内置认证大 V 的粉丝基数（蓝 V 人设的一部分）。 */
 export function followersOf(key: AuthorKey): number {
-  const a = resolveAuthor(key);
-  if (typeof a.baseFollowers === 'number') return a.baseFollowers;
-  if (key === 'user') return 320 + contactsSnap.length * 180;
-  if (key.startsWith('char:')) return 980;
-  return 1024;
+  if (key.startsWith('npc:')) {
+    const a = resolveAuthor(key);
+    if (typeof a.baseFollowers === 'number') return a.baseFollowers;
+  }
+  return 0;
 }
 
 /** 我的「正在关注」展示数（始终跟随真实关注数，用户要求移除自定义） */
 export function myFollowingCount(d: ForumData): number {
   return d.following.length;
+}
+
+// ---------------- 评论树（v7 楼中楼结构修复） ----------------
+
+/** 帖子的精确父对象（parentId 语义）：replyToPost 优先（精确被回复的那条），
+ *  旧数据/未落 replyToPost 的回退 replyTo（分组锚点）。null = 不是回复（独立帖）。 */
+export function parentPostOf(p: ForumPost): ForumPost | undefined {
+  const pid = p.replyToPost ?? p.replyTo;
+  if (!pid) return undefined;
+  return forumData().posts.find((x) => x.id === pid);
+}
+
+/** 回复对象显示名（动态）：始终从父帖作者取当前昵称——
+ *  v7 修复：旧数据存死的 replyToName 在 NPC 被 LLM 改名后变成「从没出现过的人」
+ *  （如占位名 plmm在线冲浪），一律改为动态解析。 */
+export function replyTargetNameOf(p: ForumPost): string | null {
+  if (p.replyTo === null && !p.replyToPost) return null;
+  const parent = parentPostOf(p);
+  if (parent) return resolveAuthor(parent.authorKey).name;
+  return p.replyToName;
+}
+
+/** 评论树子节点：postId 的直属回复（一级评论或某条评论的直接回复）。
+ *  v7 语义：parentId = replyToPost（缺省回退 replyTo）；直接回复主帖 → 挂在主帖下（一级）。 */
+export function childRepliesOf(d: ForumData, postId: string): ForumPost[] {
+  return d.posts
+    .filter((p) => p.id !== postId && (p.replyToPost ?? p.replyTo) === postId)
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/** 帖子的全部子孙回复数（含多层楼中楼；操作行计数用） */
+export function descendantCountOf(d: ForumData, postId: string, depth = 0): number {
+  if (depth > 8) return 0; // 防环
+  const kids = childRepliesOf(d, postId);
+  return kids.reduce((n, k) => n + 1 + descendantCountOf(d, k.id, depth + 1), 0);
 }
 
 /** 保存论坛内自定义资料（局部合并；某字段传 undefined 即清除该字段、恢复跟随全局）。

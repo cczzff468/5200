@@ -9,27 +9,32 @@
  * 互动栏（回复/转推/点赞/浏览/分享，爱心归位第三，带数字）+ 分隔线下接评论流；
  * 打开帖子不自动生成评论（用户要求：仅「显示更多评论」按钮触发，7~15 条）；
  * 评论流按参考图：头像 + 名字(bold) + @账号 · 时间(灰) + 右侧「···」，
- * 子回复带「回复 @xx」蓝字行，操作行为空心线性图标
- * （回复/转推/爱心/浏览/分享，图标+数字；书签已按用户要求删除）；头像右缘细竖线贯穿到子回复；
+ * v7 楼中楼树状重构：按真实 parentId（replyToPost）递归嵌套——楼中楼缩进显示、
+ * 头像随深度缩小；嵌套回复正文强制带「回复 @被回复者：」前缀（动态取父帖作者
+ * 当前昵称，NPC 被 LLM 改名也不会@错人）；一级评论正文绝不带任何@前缀字样；
+ * 操作行为空心线性图标（回复/转推/爱心/浏览/分享，图标+数字）；
+ * 头像右缘细竖线贯穿到子回复；
  * 底部回复输入条（头像 + input + 蓝色发送圆钮），
- * 点击评论/子回复即定向回复（显示「回复 @xx」提示条，可取消）；
+ * 点击评论/任意层子回复即定向回复（显示「回复 @xx」提示条，可取消）；
  * 用户回复 AI 评论 → AI 感觉主帖内容+用户评论内容再回一条，无限多轮（engine）。
  */
 
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { Languages } from 'lucide-react';
 import {
+  childRepliesOf,
   countShort,
+  descendantCountOf,
   forumData,
   forumSnapshot,
   likesOf,
   relTime,
-  repliesOf,
   resolveAuthor,
   saveForum,
   subscribeForum,
   uid,
   REPLY_MAX,
+  type ForumData,
   type ForumPost,
 } from '@/lib/forum/core';
 import { generateMoreComments, queueAiReplyToUserReply } from '@/lib/forum/engine';
@@ -328,23 +333,32 @@ function CommentNameRow({
   );
 }
 
-/** 子回复条目（独立组件：每条子回复有独立的翻译状态钩，按钮在其操作行最右） */
+/** 子回复树节点（v7 楼中楼结构修复：真正按 parentId 递归嵌套）。
+ *  · 数据：parentId = replyToPost（旧数据回退 replyTo）；直接回复主帖 → 挂在主帖下（一级）；
+ *  · 渲染：每层缩进（左侧留白）+ 头像随深度缩小；正文前强制「回复 @被回复者：」前缀
+ *    （动态取父帖作者当前昵称，NPC 改名也不会错）；
+ *  · 交互：点任意层回复 → 定向回复那一条（新回复挂到 TA 名下，多层无限往下接）。 */
 function SubReplyItem({
   s,
   rootId,
+  parentName,
+  depth,
   onReply,
 }: {
   s: ForumPost;
   rootId: string;
+  /** 被回复者显示名（父帖作者当前昵称，动态解析） */
+  parentName: string;
+  /** 嵌套深度：1 = 顶层评论的直接回复 */
+  depth: number;
   onReply: (rootId: string, postId: string, name: string) => void;
 }) {
   const f = useForum();
   const t = f.t;
   const sa = resolveAuthor(s.authorKey);
-  // 正文已以「@某某」开头（新 prompt 要求楼中楼正文带 @）时不再重复显示「回复 @xx」行
-  const replying =
-    s.replyToName && s.replyToName !== sa.name && !s.content.trim().startsWith('@') ? s.replyToName : null;
-  const sSubs = repliesOf(forumData(), s.id);
+  const d = forumData();
+  const sSubs = childRepliesOf(d, s.id);
+  const avSize = depth <= 1 ? 36 : depth === 2 ? 30 : 26;
   const tr = useCommentTr(s.content);
   return (
     <div
@@ -353,7 +367,7 @@ function SubReplyItem({
       aria-label={`回复 ${sa.name} 的评论`}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest('button')) return;
-        onReply(rootId, s.id, sa.name); // 点子回复 → 回复该作者（仍挂顶层评论下，多轮接话定位到 TA）
+        onReply(rootId, s.id, sa.name); // 点任意层 → 定向回复那一条（挂 TA 名下，AI 接话也定位到 TA）
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onReply(rootId, s.id, sa.name);
@@ -361,7 +375,7 @@ function SubReplyItem({
       className="cursor-pointer rounded-lg py-2 transition-colors active:opacity-60"
     >
       <div className="flex gap-2">
-        <XAvatar authorKey={s.authorKey} size={36} onClick={() => f.openProfile(s.authorKey)} />
+        <XAvatar authorKey={s.authorKey} size={avSize} onClick={() => f.openProfile(s.authorKey)} />
         <div className="min-w-0 flex-1">
           {/* 名行：名字(bold) + @账号 · 时间(灰) + 最右「···」 */}
           <CommentNameRow
@@ -370,17 +384,14 @@ function SubReplyItem({
             onMore={() => f.openPostMenu(s)}
             nameMax={90}
           />
-          {/* 被回复人提示（参考图：「回复 @xx」@为品牌蓝） */}
-          {replying && (
-            <p className="text-[14px]" style={{ color: t.secondary }}>
-              回复 <span style={{ color: t.blue }}>@{replying}</span>
-            </p>
-          )}
-          {/* 子回复正文 */}
+          {/* 子回复正文：强制带「回复 @被回复者：」前缀（动态取父帖作者名，永不错位） */}
           <p
             className="mt-[1px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]"
             style={{ color: t.text }}
           >
+            <span style={{ color: t.secondary }}>回复 </span>
+            <span style={{ color: t.blue }}>@{parentName}</span>
+            <span style={{ color: t.secondary }}>：</span>
             {s.content}
           </p>
           {/* 译文（附加在原文之后；按钮在下方操作行最右） */}
@@ -388,11 +399,29 @@ function SubReplyItem({
           {/* 小操作行（回复/转推/爱心/浏览/分享 + 最右翻译，小一号） */}
           <CommentActions
             post={s}
-            subCount={sSubs.length}
+            subCount={descendantCountOf(d, s.id)}
             compact
             onReplyClick={() => onReply(rootId, s.id, sa.name)}
             translate={{ loading: tr.st.loading, active: tr.st.shown, onClick: tr.toggle }}
           />
+          {/* 更深层楼中楼：递归嵌套 + 左侧留白缩进（用户要求：楼中楼必须缩进显示） */}
+          {sSubs.length > 0 && (
+            <div
+              className="mt-1 flex flex-col"
+              style={{ marginLeft: Math.min(depth, 3) * 14 }}
+            >
+              {sSubs.map((c) => (
+                <SubReplyItem
+                  key={c.id}
+                  s={c}
+                  rootId={rootId}
+                  parentName={sa.name}
+                  depth={depth + 1}
+                  onReply={onReply}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -401,10 +430,8 @@ function SubReplyItem({
 
 /** 顶层评论（参考图规格）：头像 44px + 头像右缘竖线贯穿到子回复 +
  *  名行（名字bold + @账号·时间灰 + 右侧···）+ 正文 + 图标操作行（最右翻译）；
- *  子回复嵌套在正文列下方：头像 36px、「回复 @xx」蓝字行，
- *  样式与顶层一致（用户要求子回复也显示头像名字爱心）。
- *  点评论/子回复 → 定向回复（onReply 传 rootId=顶层评论 id + postId=精确被回复帖 + 名字，
- *  支持无限多轮：用户回复谁、谁的作者 AI 就接话）。 */
+ *  v7 楼中楼树：子回复按真实 parentId 递归嵌套（带「回复 @xx：」前缀 + 缩进），
+ *  多层楼中楼不再扁平堆在第一层；点评论/子回复 → 定向回复（支持无限多轮）。 */
 function CommentRow({
   comment,
   onReply,
@@ -417,7 +444,9 @@ function CommentRow({
   const a = resolveAuthor(comment.authorKey);
   // 直算不 memo：论坛数据对象会被引擎原位变更（saveForum 浅拷贝外壳、posts 原数组），
   // useMemo 依赖 [comment.id] 在新增子回复时不会重算 → 子回复列表滞留旧值（同 profile-view 的教训）。
-  const subReplies = repliesOf(forumData(), comment.id);
+  const d = forumData();
+  const subReplies = childRepliesOf(d, comment.id);
+  const subTotal = descendantCountOf(d, comment.id);
   const tr = useCommentTr(comment.content);
 
   return (
@@ -454,15 +483,22 @@ function CommentRow({
           {/* 操作行：回复/转推/爱心/浏览/分享 + 最右翻译 */}
           <CommentActions
             post={comment}
-            subCount={subReplies.length}
+            subCount={subTotal}
             onReplyClick={() => onReply(comment.id, comment.id, a.name)}
             translate={{ loading: tr.st.loading, active: tr.st.shown, onClick: tr.toggle }}
           />
-          {/* 子回复：头像+名行+「回复 @xx」蓝字+正文+小操作行（与顶层一致的完整样式） */}
+          {/* 楼中楼（v7 树状）：按真实 parentId 递归嵌套 + 「回复 @被回复者：」前缀 + 缩进 */}
           {subReplies.length > 0 && (
             <div className="mt-2 flex flex-col">
               {subReplies.map((s) => (
-                <SubReplyItem key={s.id} s={s} rootId={comment.id} onReply={onReply} />
+                <SubReplyItem
+                  key={s.id}
+                  s={s}
+                  rootId={comment.id}
+                  parentName={a.name}
+                  depth={1}
+                  onReply={onReply}
+                />
               ))}
             </div>
           )}
@@ -472,16 +508,39 @@ function CommentRow({
   );
 }
 
+/** 帖子详情页一级评论（v7 树语义）：直接回复主帖的（parentId = 主帖 id）；
+ *  父对象丢失的孤儿回复（分组锚点指向本帖但按 parentId 挂不到树上的，如被回复的
+ *  评论已被删）兜底挂回一级——任何情况下评论都不丢、不凭空消失。 */
+function threadFirstLevel(d: ForumData, postId: string): ForumPost[] {
+  const first = childRepliesOf(d, postId);
+  // 可达集：一级评论的全部子孙（沿真实 parentId 走）
+  const reach = new Set<string>(first.map((p) => p.id));
+  const walk = (id: string, depth: number) => {
+    if (depth > 8) return; // 防环
+    for (const c of childRepliesOf(d, id)) {
+      if (!reach.has(c.id)) {
+        reach.add(c.id);
+        walk(c.id, depth + 1);
+      }
+    }
+  };
+  first.forEach((p) => walk(p.id, 0));
+  // 孤儿：锚点指向本帖但树挂不上 → 兜底视为一级
+  const orphans = d.posts.filter((p) => p.id !== postId && p.replyTo === postId && !reach.has(p.id));
+  return [...first, ...orphans].sort((x, y) => x.createdAt - y.createdAt);
+}
+
 export function ThreadView({ postId }: { postId: string }) {
   const f = useForum();
   const t = f.t;
   useSyncExternalStore(subscribeForum, forumSnapshot, forumSnapshot);
   const d = forumData();
   const post = d.posts.find((p) => p.id === postId);
-  /** 顶层评论（直接回复主帖）——直算不 memo：数据原位变更时 memo 依赖不可靠（同 profile-view 教训） */
-  const replies = post ? repliesOf(d, postId) : [];
-  /** 全部回复数（顶层 + 嵌套子回复） */
-  const totalReplies = replies.reduce((n, r) => n + 1 + repliesOf(d, r.id).length, 0);
+  /** 一级评论（直接回复主帖）——v7 树语义：parentId(replyToPost，缺省回退 replyTo) = 主帖 id；
+ *  其余回复按真实父子关系嵌套在楼中楼里，不再扁平堆在一级 */
+  const replies = post ? threadFirstLevel(d, postId) : [];
+  /** 全部回复数（含多层楼中楼子孙） */
+  const totalReplies = post ? descendantCountOf(d, postId) : 0;
   const [draft, setDraft] = useState('');
   /** 定向回复目标（null = 回复主帖作者）：commentId = 分组锚点（顶层评论 id），
  *  postId = 精确被回复的帖（多轮接话定位：AI 回应“我评论的那条”），name = 显示名 */
@@ -510,7 +569,9 @@ export function ThreadView({ postId }: { postId: string }) {
   const dt = new Date(post.createdAt);
   const dateStr = `${dt.getFullYear()}年${dt.getMonth() + 1}月${dt.getDate()}日`;
 
-  /** 发送回复：挂主帖（无目标）或顶层评论（微信式嵌套）；
+  /** 发送回复：v7 parentId 语义——直接回复主帖 → replyToPost 不落（一级评论）；
+   *  定向回复某条评论 → replyTo = 分组锚点（顶层评论 id，AI 对话链上下文用），
+   *  replyToPost = 那条评论的 id（树状嵌套挂到 TA 名下）。
    *  被回复对象作者是 AI 时，排一条 AI 再回复（带主帖+用户评论上下文，无限多轮）。 */
   const sendReply = () => {
     const text = draft.trim();
@@ -530,7 +591,8 @@ export function ThreadView({ postId }: { postId: string }) {
       views: 0,
       replyTo: groupId,
       replyToName: targetName,
-      replyToPost: exactId,
+      // 直接回复主帖 → undefined（一级评论）；回复评论 → 该评论 id（楼中楼嵌套）
+      replyToPost: replyTarget ? exactId : undefined,
       reposted: false,
     };
     nd.posts.push(reply);

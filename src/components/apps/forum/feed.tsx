@@ -19,6 +19,7 @@ import {
   relTime,
   repliesOf,
   resolveAuthor,
+  replyTargetNameOf,
   type ForumPost,
   COMMUNITY_DEFS,
 } from '@/lib/forum/core';
@@ -250,6 +251,9 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
   const likeCount = likesOf(post);
   const media = post.media ?? [];
   const scheduled = typeof post.visibleAt === 'number' && post.visibleAt > Date.now();
+  // v7：回复对象名动态解析（父帖作者当前昵称）——存死的 replyToName 在 NPC 被
+  // LLM 改名后会变成「从没出现过的人」；这里不存快照，每次渲染都取真名
+  const replyToName = replyTargetNameOf(post);
 
   return (
     <article
@@ -292,10 +296,10 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
               {XIcons.more(18)}
             </button>
           </div>
-          {/* 回复对象（X：回复 @xx） */}
-          {post.replyToName && (
+          {/* 回复对象（X：回复 @xx；动态取父帖作者当前昵称，改名不错位） */}
+          {replyToName && (
             <p className="mb-[2px] text-[14px]" style={{ color: t.secondary }}>
-              回复 <span style={{ color: t.blue }}>@{post.replyToName}</span>
+              回复 <span style={{ color: t.blue }}>@{replyToName}</span>
             </p>
           )}
           {/* 社区来源（X Communities 帖子显示来自哪个社区） */}

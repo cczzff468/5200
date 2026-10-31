@@ -606,6 +606,22 @@ export default function ForumApp() {
                 </div>
               </div>
             )}
+            {/* v7 状态栏衬底（仅主页）：主页顶栏随内容滚走后，信息流会直接滑到
+                状态栏正后方——时间/信号/电量后面不再是生内容（用户反馈「状态栏
+                后面有点问题」）。z-[15] 盖住滚动内容，低于吸顶 tab 行(z-20)、
+                推入页层(z-30)与系统状态栏(z-70)；在顶栏未滚走时叠在纯色顶栏上
+                无视觉变化，滚走后与吸顶 tab 行同材质（模糊半透明）无缝衔接 */}
+            {tab === 'home' && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 z-[15] h-[54px]"
+                style={{
+                  background: t.dark ? 'rgba(0,0,0,0.78)' : 'rgba(255,255,255,0.78)',
+                  backdropFilter: 'blur(12px)',
+                  WebkitBackdropFilter: 'blur(12px)',
+                }}
+              />
+            )}
             {tab === 'search' && <SearchView />}
             {tab === 'communities' && <CommunitiesView />}
             {tab === 'notifications' && <NotificationsView />}

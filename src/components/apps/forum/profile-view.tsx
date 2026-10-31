@@ -62,10 +62,12 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
   const ownPosts = all.filter((p) => p.replyTo === null);
   const replyPosts = all.filter((p) => p.replyTo !== null);
   // 「回复」tab（自己的主页）：别人回复我的（回复我任何帖/评论的），非我评论别人的
+  // v7：按真实 parentId（replyToPost，缺省回退 replyTo）判定——别人在我的楼中楼
+  // 下的任何一层回复（哪怕锚点挂在别人的评论分组上）都能正确算作「回复了我」
   const myPostIdSet = new Set(d.posts.filter((p) => p.authorKey === 'user').map((p) => p.id));
   const repliesToMe = d.posts
     .filter(
-      (p) => p.authorKey !== 'user' && p.replyTo !== null && myPostIdSet.has(p.replyTo) && isPostVisible(p),
+      (p) => p.authorKey !== 'user' && p.replyTo !== null && myPostIdSet.has(p.replyToPost ?? p.replyTo) && isPostVisible(p),
     )
     .sort((x, y) => y.createdAt - x.createdAt);
   // 「转推」tab（自己的主页）：我转推过的帖子
@@ -78,7 +80,9 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
   /** 真人主页（自己/联系人）无自定义背景时的默认横幅（精致渐变艺术图）；NPC 用品牌色渐变 */
   const useDefaultBanner = !myBanner && (isMe || authorKey.startsWith('char:'));
   const bannerBg = a.npcAvatar?.bg ?? (authorKey.startsWith('char:') ? '#5b7d9e' : '#657786');
-  const followingCount = isMe ? myFollowingCount(d) : 3 + (all.length > 3 ? 2 : 0);
+  // v7 用户要求：正在关注/关注者默认 0——自己 = 真实关注数，其他人 = 0（不造假数）；
+  // 关注者同样默认 0（followersOf：仅内置认证大 V 保留粉丝基数）
+  const followingCount = isMe ? myFollowingCount(d) : 0;
 
   /** 页内搜索关键词过滤（当前 tab 的列表） */
   const kw = q.trim().toLowerCase();
