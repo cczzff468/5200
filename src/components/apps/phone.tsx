@@ -64,7 +64,7 @@ import { getMemSettings, memAddEventFragment, memAfterAiTurn, memConvoFromRaw, m
 import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
-import { isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
+import { expressStyleTtsSpeed, isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
 // 通话语音识别：Web Speech（浏览器原生实时识别）为主；第十六轮起兜底升级为 transcribeBlob
 // 三级链（① SenseVoice 端侧 ② 用户配置的 OpenAI 兼容 STT ③ 内置 z-ai ASR 免配置）
 import { transcribeBlob } from '@/lib/ios/cabin-voice';
@@ -672,7 +672,7 @@ function CallScreen({
         const res = await fetch('/api/phone/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, gender }),
+          body: JSON.stringify({ text, gender, speed: expressStyleTtsSpeed(contact?.expressStyle) }), // B4 表达风格联动语速
           signal: AbortSignal.timeout(30000),
         });
         if (!res.ok) throw new Error('tts failed');
@@ -4491,7 +4491,7 @@ export default function PhoneApp() {
             const res = await fetch('/api/phone/tts', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: vm.text, gender: contactGender(contact) }),
+              body: JSON.stringify({ text: vm.text, gender: contactGender(contact), speed: expressStyleTtsSpeed(contact?.expressStyle) }), // B4 表达风格联动语速
               signal: AbortSignal.timeout(30000),
             });
             if (!res.ok) throw new Error('tts failed');

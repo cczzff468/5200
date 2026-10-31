@@ -16,6 +16,7 @@ export const runtime = 'nodejs';
  * 任何失败（未配置 / 上游故障 / 解析不出）都兜底 answer——宁可多接，不让用户白等。
  */
 
+import { extractThinkBlocks } from '@/lib/think-filter';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
 import {
   type CallApiMessage,
@@ -92,7 +93,9 @@ function normalizeDecision(raw: string): AnswerDecision {
   if (!obj) return { decision: 'answer' };
   const d = typeof obj.decision === 'string' ? obj.decision.trim().toLowerCase() : '';
   const decision: AnswerDecision['decision'] = d === 'reject' || d === 'miss' ? d : 'answer';
-  const afterRaw = typeof obj.afterText === 'string' ? obj.afterText.trim() : '';
+  // [思考]块兜底剥离（A1）：模型跨链路模仿单聊习惯时会把思考写进 afterText 字段或裹在
+  // JSON 外——思考内容会被当成留言朗读/落进气泡，必须剥掉
+  const afterRaw = extractThinkBlocks(typeof obj.afterText === 'string' ? obj.afterText : '').text.trim();
   // 去掉可能包裹的引号与 markdown 残留（解释文字要作为聊天气泡/留言原文呈现）
   const afterText = afterRaw
     .replace(/[*_`#>~[\]]/g, '')

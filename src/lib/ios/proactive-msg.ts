@@ -35,6 +35,7 @@ import { getMemSettings, memChatRecallBlock, memAfterAiTurn, memConvoFromRaw } f
 import { buildMomentsChatBlock } from '../moments';
 import { buildCrossAppBlock } from './cross-app-context';
 import { buildTimeAwareBlock, getTimeAware } from '@/lib/time-aware';
+import { extractThinkBlocks } from '@/lib/think-filter';
 import { scheduleAiDelivery } from './ai-delivery';
 import { pushChatNotification } from './island-notify';
 import { wxUnreads, qqUnreads } from '@/lib/unread-store';
@@ -766,8 +767,9 @@ async function generateProactiveText(app: ProactiveApp, contact: ContactRecord, 
   const user = parts.join('\n\n');
 
   const raw = await callLlmTwoTier(system, user, useSettings.getState().apiConfig);
-  // 清洗：去引号包裹/前缀说明/多余空白；主动消息必须短
-  let text = (raw ?? '').trim();
+  // 清洗：[思考]块兜底剥离（模型跨链路模仿单聊习惯偶发输出思考块，主动消息链路未注入思考指令，
+  // 但会话历史可能带偏——不过一遍会原样泄漏进微信/QQ聊天气泡）→ 去引号包裹/前缀说明；主动消息必须短
+  let text = extractThinkBlocks(raw ?? '').text.trim();
   text = text.replace(/^[「"'『]+|[」"'』]+$/g, '').trim();
   text = text.replace(/^(好的[，,]?|以下是?我(要发|给对方)的?消息[：:]?)\s*/i, '').trim();
   const firstLine = text.split('\n').map((s) => s.trim()).filter(Boolean)[0] ?? '';
@@ -866,13 +868,16 @@ async function decideAutonomous(app: ProactiveApp, contact: ContactRecord, npcEx
   parts.push('【任务】输出决策 JSON。');
 
   const raw = await callLlmTwoTier(system, parts.join('\n\n'), useSettings.getState().apiConfig).catch(() => '');
+  // [思考]块兜底剥离（同上：模型模仿单聊习惯在 JSON 前后裹思考块会令 JSON 提取失败/正文泄漏，先剥再解析）
+  const stripped = extractThinkBlocks(raw).text;
   // API/生成失败（空回复）：与「AI 决策 wait」区分开——fail 会让上层用本地兑底消息保底发送
   //（用户反馈：设置了自动发消息到点却收不到——之前 API 挂了会静默 wait，看起来像「到点没发」）
-  if (!raw.trim()) return { action: 'fail' };
-  const parsed = extractJsonObjectSafely(raw) as Partial<AutoDecision> & { reason?: unknown } | null;
+  if (!stripped.trim()) return { action: 'fail' };
+  const parsed = extractJsonObjectSafely(stripped) as Partial<AutoDecision> & { reason?: unknown } | null;
   if (!parsed) return { action: 'wait', delayMinutes: AUTO_WAIT_MIN_MINUTES };
   if (parsed.action === 'send' && typeof parsed.message === 'string' && parsed.message.trim()) {
-    let msg = parsed.message.trim().replace(/^[「"'『]+|[」"'』]+$/g, '');
+    // message 字段本身也可能裹着思考块/引号（模型偶发把思考写进 JSON 字段），同口径剥一道
+    let msg = extractThinkBlocks(parsed.message).text.trim().replace(/^[「"'『]+|[」"'』]+$/g, '');
     msg = msg.split('\n').map((s) => s.trim()).filter(Boolean)[0] ?? '';
     if (!msg) return { action: 'wait', delayMinutes: AUTO_WAIT_MIN_MINUTES };
     return { action: 'send', message: msg.slice(0, MAX_PROACTIVE_LEN) };

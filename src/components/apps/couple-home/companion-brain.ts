@@ -16,6 +16,7 @@
 
 import type { ApiConfig } from '@/lib/ios/store';
 import { buildPersonaSystemPrompt, type PersonaSource } from '@/lib/ios/persona';
+import { extractThinkBlocks } from '@/lib/think-filter';
 import type { RoomId } from './types';
 
 // ---------------- 当前情境 ----------------
@@ -214,7 +215,10 @@ const ROOM_IDS = new Set(['lr', 'br', 'kt', 'ba', 'bal', 'sr', 'yd']);
  * - 剩余文本按行拆成气泡消息（去空行、去动作块残留；全空时返回空数组由调用方兜底文案）。
  */
 export function parseAiReply(text: string): ParsedReply {
-  const raw = text ?? '';
+  // [思考]块兜底剥离：小屋 prompt 未注入思考指令，但模型会跨链路模仿单聊的输出习惯
+  // （会话历史/人设里带过思考块）偶发输出 [思考]…[/思考]——不过一遍会原样泄漏成 TA 头顶气泡；
+  // 此前只拦了 ACT 动作块，思考块是防御缺口（A1），剥除后思考内容就地丢弃（小屋无思维链 UI）
+  const raw = extractThinkBlocks(text ?? '').text;
   const actions: { type: string; room?: RoomId; song?: string; open?: boolean; inst?: 'piano' | 'guitar' }[] = [];
   let body = raw;
   // —— 全局遍历：每个完整动作块的 actions 都合并进来（顺序保留） ——

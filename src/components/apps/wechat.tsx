@@ -232,7 +232,7 @@ import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-t
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 // 深度思考：指令注入 + [思考]块剥离 + 开关（IndexedDB 按联系人隔离，渲染订阅版随设置页切换即时刷新）
 import { DEEP_THINK_RULE, extractThinkBlocks, setDeepThinkOn, useDeepThinkOn } from '@/lib/deep-think';
-import { ThinkCard } from './think-card';
+import { ThinkCard, ThinkLiveCard } from './think-card';
 import { ActionDescLine } from './action-desc-line';
 import { stripEmojiCodes, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
 import { InlineEmojiText } from './inline-emoji';
@@ -9753,6 +9753,14 @@ function ChatPage({
                 {stream.visionNotice}
               </p>
             )}
+            {/* B2 深度思考实况：流式期间思考增量到达时，输入指示气泡上方先展示「正在深度思考…」
+                脉动卡（可展开实时思考）；正文开始流后自动切「已深度思考 (点击展开)」，
+                与消息落盘后的 ThinkCard 无缝衔接；深度思考开关关闭时不渲染（思考照常后台进行） */}
+            {deepThinkOn && stream?.liveThink ? (
+              <div className="pl-0 pr-1 pb-[2px]">
+                <ThinkLiveCard text={stream.liveThink} done={stream.thinkDone ?? false} testId="wx-think-live" />
+              </div>
+            ) : null}
             <div className="flex items-start gap-2 py-1.5">
               <WxAvatar src={peer.avatar} alt={peer.name} size={38} />
               <div

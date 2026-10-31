@@ -1682,3 +1682,22 @@ Work Log:
 Stage Summary:
 - A 类三个实测 Bug 全修复：TA 不再念 JSON 代码、不再记假日子（含存量清洗）、限流期不再雪上加霜（三处退避+指数拉长）；B 类两个增强落地：TA 自主练琴会优先弹「上次你说好听的那首」（夸奖归因双维度+决策注入+本地兜底三层保证）、服务端记谱 LRU 让同歌跨角色跨设备零重复调用；C2 死键清理
 - 关键文件：companion-brain.ts（A1+A3a）、cabin-mind.ts（A2+B1 决策+C2+存量清洗）、CoupleHome.tsx（A3b+B1 归因接线）、api/ai-song/route.ts（A3c+B2）；验证产物 tmp-analysis/fix-verify/
+
+---
+Task ID: 9
+Agent: 主控 Agent（Z.ai Code）
+Task: 深度思考体系加固：A 类防御缺口（A1 [思考]四入口兜底 + A2 开关说明文案）+ B 类扩展（B1 群聊深度思考 + B2 流式思考实况动效 + B4 TTS 表达风格联动语速）
+
+Work Log:
+- A1 [思考]块泄漏兜底（模型跨链路模仿单聊习惯时四处原样泄漏）：思考过滤核心从 deep-think.ts 抽到纯模块 src/lib/think-filter.ts（无 'use client'、无 IndexedDB 依赖，服务端 route 可导入；deep-think.ts 顶部再导出，三端旧 import 路径零改动）。四处入口统一过 extractThinkBlocks：①主动消息 proactive-msg.ts（直发文案清洗处 + decideAutonomous JSON 决策剥后解析、message 字段再剥一道）②拾光小屋 companion-brain parseAiReply 入口（此前只拦 ACT 动作块）③朋友圈/QQ空间 moments/generate 路由（LLM 原文出口先剥再做双语拆分——思考块内含 | 会污染分隔判定）④电话挂断续聊 call-followup parseFollowupText 入口 + 服务端直出 messages 分支 + 接听决策 afterText（phone/answer 路由）
+- A2 深度思考开关说明小字（deepThinkCaption 此前只有定义无调用方）：chat-settings.tsx 两处开关（微信/QQ 面板 + 信息面板）下方挂说明——「关 ≠ 不思考」，关闭仅隐藏展示后台仍思考，防用户误以为关闭=省流量；信息面板 AI 助手会话（无开关）不显示
+- B1 群聊深度思考全链路（微信 wx-group + QQ qq-group 镜像）：①groups.ts WxGroupMsg 加 thinking 字段 + normalizeMsg 白名单透传（不加会被读盘时丢弃）②群设置加「深度思考」SwitchRow（kv 键 deep-think:wx:group:<gid>，按群隔离；useDeepThinkOn 订阅即时刷新）③成员发言 system 注入 DEEP_THINK_RULE（与单聊同口径：指令始终注入，开关只控制展示）④finalize 投递完成后思考回填到本回合该成员第一条消息（id=aiMsgId；patchGroupMsg Pick 白名单补 thinking 字段）⑤renderMsgRow 发言者名与气泡间渲染 ThinkCard（开关关闭不渲染但字段保留，重开可回看）⑥群上下文构建：成员自己的消息带 thinking 时注入 [思考] 块（延续思考脉络；他人思考不可见）
+- B2 流式「正在深度思考…」实况动效：①chat-stream-store ChatStreamState 加 liveThink/thinkDone——首个思考增量立即上屏、后续 150ms 节流合并推送（防高频分片拖慢渲染），正文开始流时相位切「已深度思考」只切一次，SDK 兜底重建时实况同口径清零，收尾把完整思考刷进状态钉死完成相位（投递窗口继续展示无缝衔接落盘卡）②think-card.tsx 新增 ThinkLiveCard：done=false 脉动「正在深度思考…」+ 三灰点错峰闪烁（可点击展开实时思考文本），done=true 复用 ThinkCard 视觉零差别 ③三端输入指示器接入：微信/QQ 卡片在指示气泡上方与头像左缘对齐（pl-0 pr-1），信息端无头像左贴边（px-1）；深度思考开关关闭时不渲染（思考照常后台进行）
+- B4 TTS 表达风格联动语速（受引擎能力限制的锦上添花）：tts-client.ts 新增 expressStyleTtsSpeed——轻声细语/温柔/慵懒类 0.85、活泼/元气/语速快类 1.12、识别不到 1 原速；speakUserTts 入口集中解析（未显式传 speed 且带 contactId 时按联系人表达风格推导，一次覆盖语音条朗读/三端通话播报/电话 App 全部调用方）；ai-voice synthesizeAiVoice（AI 语音条 API 合成）/api/phone/tts 路由（0.5~2 收敛）+ phone.tsx 通话兜底/留言合成两处下发
+- 逻辑校验（bun 一次性脚本，不入库）：extractThinkBlocks 5/5（前置思考/未闭合/多块/透传/思考含 JSON 字符）+ JSON 决策剥离 + expressStyleTtsSpeed 5/5
+- E2E 验证（agent-browser 390×844 + VLM 双证，全新库从零建号）：锁屏解锁→建 USER 档案（阿泽/16420214323）+ CHAR 角色（小鹿，表达风格「轻声细语爱用叠词」）→微信登录→搜索手机号加好友→聊天设置开「深度思考」——A2 截图证：开关下方小字「开启后，对方每条回复都会先深度思考，气泡上方可展开查看思考过程。」逐字正确；B2 证：投递窗口截图（w5）输入指示器上方「已深度思考 (点击展开)」实况卡与三点气泡同屏，消息落盘后 ThinkCard 挂载（脉动相位因内置 SDK 一次性返回全文而瞬时完成——增量同帧到达，机制经状态机路径验证）；B1 证：发起群聊「读书会」→群设置「深度思考」开关+说明文案正确→开启后群里发消息，小鹿（语音消息）名字下方「已深度思考」卡渲染、展开见真实群聊思考内容（「阿泽在群里发起话题…作为读书会成员我应该积极响应」）；B4 证：语音消息合成链路正常（语速为参数级改动）
+- lint：改动文件全过（chat-settings/tts-client/ai-voice/call-followup/think-filter/groups 等），大文件（wechat/qq/chat/wx-group/qq-group/phone）Turbopack 编译零错 + 真机 E2E 无渲染错误；dev.log 无 error；浏览器 console/errors 零异常（429 为上游 SDK 限流，与代码无关）
+
+Stage Summary:
+- A 类两处防御缺口补齐：[思考]块在主动消息/拾光小屋/朋友圈/QQ空间/电话续聊/拒接留言六条链路统一兜底剥离（一处不漏），开关说明文案消除「关闭=省流量」误解；B 类三项落地：群聊深度思考与单聊全口径一致（按群隔离开关+注入+卡片+上下文）、流式思考实况对标 DeepSeek/ChatGPT（脉动→已思考→落盘卡无缝衔接）、TTS 语速按表达风格轻推
+- 关键文件：think-filter.ts（新，纯模块）、deep-think.ts（再导出）、proactive-msg.ts、companion-brain.ts、moments/generate+phone/answer+phone/tts 路由、call-followup.ts、chat-settings.tsx、chat-stream-store.ts、think-card.tsx（ThinkLiveCard）、wechat/qq/chat.tsx（三端实况卡）、groups.ts + wx-group.tsx + qq-group.tsx（群聊全链路）、tts-client.ts + ai-voice.ts + phone.tsx（B4）

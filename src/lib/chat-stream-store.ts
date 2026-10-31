@@ -99,6 +99,15 @@ export interface ChatStreamState {
    * 不进对话上下文、不当角色台词、不影响本轮之后的聊天）
    */
   visionNotice?: string;
+  /**
+   * 深度思考实况（B2）：流式接收期间已收集的 [思考] 块内容（undefined = 本轮未输出思考块）。
+   * 首个思考增量立刻上屏、后续 150ms 节流合并推送；配合 thinkDone 驱动三端
+   * 「正在深度思考…」脉动动效 → 「已深度思考（点击展开）」两阶段展示；
+   * 流结束后随状态保留到投递完成，与落盘消息的 thinking 字段无缝衔接。
+   */
+  liveThink?: string;
+  /** 思考阶段是否已结束（true = 正文已开始流出或流已收尾，实况卡切「已深度思考」态） */
+  thinkDone?: boolean;
 }
 
 export interface ChatPayloadMessage {
@@ -529,6 +538,12 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
   // 会话零行为变化（纯透传），输出过则正文/思考两侧永不合流
   let thinkFilter = createThinkFilter();
   let thinkText = '';
+  // 深度思考实况（B2）：liveThinkShown = 已向状态推送过思考增量；thinkDonePatched = 正文已开始
+  // （思考阶段结束的相位切换只打一次）；推送按 150ms 节流合并，避免每个网络分片都触发全量重渲染
+  let liveThinkShown = false;
+  let thinkDonePatched = false;
+  let lastLivePatchAt = 0;
+  const LIVE_THINK_PATCH_MS = 150;
   // 条数多时消息总长更长：抬高 max_tokens 下限，防止多条连发被截断（代理与浏览器直连共用该配置）
   const effConfig =
     multi && opts.replyCount
@@ -542,8 +557,23 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     if (rt.aborted) return;
     // 深度思考：[思考]…[/思考] 块在进正文/分段器之前剥走（思考内容不进气泡、不被切成分段）
     const tk = thinkFilter.push(delta);
-    if (tk.thinking) thinkText += tk.thinking;
+    if (tk.thinking) {
+      thinkText += tk.thinking;
+      // 实况推送（B2）：首个思考增量立刻上屏（脉动「正在深度思考…」出现时机要快），
+      // 后续增量按节流窗合并，避免高频分片拖慢气泡列表渲染
+      const now = Date.now();
+      if (!liveThinkShown || now - lastLivePatchAt >= LIVE_THINK_PATCH_MS) {
+        lastLivePatchAt = now;
+        liveThinkShown = true;
+        patchState(rt, { liveThink: thinkText, thinkDone: false });
+      }
+    }
     if (!tk.text) return;
+    // 思考结束、正文开始：实况卡相位切到「已深度思考（点击展开）」（只切一次）
+    if (liveThinkShown && !thinkDonePatched) {
+      thinkDonePatched = true;
+      patchState(rt, { liveThink: thinkText, thinkDone: true });
+    }
     raw += tk.text;
     scanner?.push(tk.text);
   };
@@ -751,10 +781,13 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     // 流中已凑齐的分段已经过 onSegment 逐条投递上屏，出错不影响它们（不丢已到手的正文）
     // 关键：进入 SDK 兜底前清空 raw 并重建分段器，避免「半截上游文本 + 完整 SDK 文本」拼接成乱文；
     // 旧分段器已放出的分段保留上屏、不计入新分段器的条数计数
-    // 深度思考：剥离器/思考收集同口径重建清零（半截思考随旧正文一并作废，不混入 SDK 回复）
+    // 深度思考：剥离器/思考收集/实况状态同口径重建清零（半截思考随旧正文一并作废，不混入 SDK 回复）
     raw = '';
     thinkFilter = createThinkFilter();
     thinkText = '';
+    liveThinkShown = false;
+    thinkDonePatched = false;
+    if (rt.state.liveThink !== undefined) patchState(rt, { liveThink: undefined, thinkDone: undefined });
     if (multi && opts.onSegment) {
       scanner = createReplySegmentScanner(opts.onSegment);
     } else {
@@ -796,7 +829,9 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
           error: rt.state.error,
           startedAt: rt.state.startedAt,
         });
-        patchState(rt, { content: raw });
+        // 收尾实况（B2）：把完整思考（含 finish 归位的残量）一次性刷进状态并钉死「已深度思考」
+        // 相位——流结束到消息投递完成的窗口里，输入指示器上方的实况卡继续展示，无缝衔接
+        patchState(rt, { content: raw, ...(liveThinkShown ? { liveThink: thinkText, thinkDone: true } : {}) });
       } catch {
         // 落盘失败不影响状态广播（与各 App 持久化失败静默的既有策略一致）
       }

@@ -25,6 +25,9 @@ export async function POST(req: NextRequest) {
   const text = rawText.slice(0, MAX_TEXT);
   const gender = typeof root.gender === 'string' ? root.gender : null;
   const voice = gender === 'male' ? 'xiaochen' : 'tongtong';
+  // B4 表达风格联动：语速由调用方按联系人风格下发（缺省 1；收敛到 0.5~2 防御异常值）
+  const speedRaw = typeof root.speed === 'number' && Number.isFinite(root.speed) ? root.speed : 1;
+  const speed = Math.min(2, Math.max(0.5, speedRaw));
 
   try {
     const ZAI = (await import('z-ai-web-dev-sdk')).default;
@@ -32,7 +35,7 @@ export async function POST(req: NextRequest) {
     const response = await zai.audio.tts.create({
       input: text,
       voice,
-      speed: 1.0,
+      speed,
       response_format: 'wav',
       stream: false,
     });

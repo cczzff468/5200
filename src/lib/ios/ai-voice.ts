@@ -37,7 +37,8 @@ import { scopedConvKey } from './accounts';
 
 import { hashWaveBars } from './audio-utils';
 import { isBuiltinVoiceId, BUILTIN_DEFAULT_FEMALE, BUILTIN_DEFAULT_MALE } from './builtin-voices';
-import { cleanTextForTts, isTtsConfigured, resolveVoiceForContact } from './tts-client';
+import { cleanTextForTts, expressStyleTtsSpeed, isTtsConfigured, resolveVoiceForContact } from './tts-client';
+import { getContact } from './contacts-store';
 import { SAFE_VOICE_BY_PROVIDER, useSettings } from './store';
 
 // ---------------- 频率设置 ----------------
@@ -274,13 +275,17 @@ export async function synthesizeAiVoice(text: string, contactId: string | null |
     return { url: '', duration: estimateDuration(cleaned), wave, localText: cleaned, synth: 'builtin' };
   }
 
-  // ② 用户语音 API（MiniMax / OpenAI 兼容）：合成真实音频 → dataURL 持久化
+  // ② 用户语音 API（MiniMax / OpenAI 兼容）：合成真实音频 → dataURL 持久化；
+  //  B4 表达风格联动：语速按联系人「表达风格」微调（轻声细语稍慢 / 活泼元气稍快）
   try {
     const voiceId = await resolveAiVoiceIdForApi(contactId ?? null);
+    const styleSpeed = contactId
+      ? expressStyleTtsSpeed((await getContact(contactId).catch(() => null))?.expressStyle)
+      : 1;
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: cfg, voiceId, text: cleaned, speed: 1 }),
+      body: JSON.stringify({ config: cfg, voiceId, text: cleaned, speed: styleSpeed }),
     });
     if (!res.ok) return null;
     const blob = await res.blob();

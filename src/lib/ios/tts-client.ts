@@ -188,6 +188,20 @@ export function isSpeaking(): boolean {
   return currentAudio !== null;
 }
 
+/**
+ * 表达风格 → TTS 语速联动（B4，锦上添花）：从联系人「表达风格」文本识别语气关键词，
+ * 轻声细语类稍慢（0.85）/ 活泼元气类稍快（1.12）/ 识别不到 = 1 原速。
+ * 只影响语音条合成与朗读的语速参数（引擎不支持时由服务端自行收敛），不影响文字聊天；
+ * 受 TTS 引擎能力限制，效果不保证，属氛围增强。
+ */
+export function expressStyleTtsSpeed(style: string | null | undefined): number {
+  const s = (style ?? '').trim();
+  if (!s) return 1;
+  if (/轻声|轻柔|温柔|细语|温婉|慵懒|缓慢|慢条斯理|低声|缠绵/.test(s)) return 0.85;
+  if (/活泼|元气|兴奋|激动|急躁|急性子|机关枪|快人快语|干脆利落|语速快|咋咋呼呼/.test(s)) return 1.12;
+  return 1;
+}
+
 export interface SpeakOptions {
   /** 原始文本（内部会先 cleanTextForTts） */
   text: string;
@@ -222,7 +236,19 @@ export interface SpeakOptions {
  * - 否则走用户语音 API（经本站代理 /api/tts）。
  * 本地+云端都失败才抛错（含服务商中文文案）——调用方决定是否回退服务端兜底；文字聊天不受影响。
  */
-export async function speakUserTts(opts: SpeakOptions): Promise<void> {
+export async function speakUserTts(optsIn: SpeakOptions): Promise<void> {
+  let opts = optsIn;
+  // B4 表达风格 → 语速联动：调用方未显式指定语速且带联系人时，按 TA 的「表达风格」
+  // 关键词微调（轻声细语类稍慢 / 活泼元气类稍快，见 expressStyleTtsSpeed）——
+  // 一次覆盖语音条点击朗读、微信/QQ/信息通话播报、电话 App 朗读等全部调用方；
+  // 联系人读取失败或未识别到关键词 = 1 原速，行为不变
+  if (opts.speed === undefined && opts.contactId) {
+    try {
+      opts = { ...opts, speed: expressStyleTtsSpeed((await getContact(opts.contactId))?.expressStyle) };
+    } catch {
+      /* 联系人读取失败 = 原速 */
+    }
+  }
   const cfg = useSettings.getState().ttsConfig;
   const useBuiltinEngine = cfg.provider === 'builtin' || !isTtsConfigured(cfg);
   const cleaned = cleanTextForTts(opts.text);

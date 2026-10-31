@@ -18,6 +18,7 @@
 
 import { useSettings } from './store';
 import { directChatStream } from './direct-api';
+import { extractThinkBlocks } from '@/lib/think-filter';
 
 /** 前端直传的联系人资料（与 turn API 的 InlineContact 同形；联系人存浏览器本地 IndexedDB） */
 export interface CallFollowupContact {
@@ -91,6 +92,9 @@ function followupMax(_n: unknown): number {
  *  第四十四轮：max≤1 时把模型拆出的多段合并为一条（标点缺失自动补句号），内容截断上限 600 字——
  *  「一条把全部想说的说完」不被 200 字旧上限腰斩 */
 export function parseFollowupText(raw: string, max = 2): string[] {
+  // [思考]块兜底剥离（A1）：续聊链路未注入思考指令，但模型跨链路模仿单聊输出习惯时
+  // 会在正文/JSON 前裹 [思考]…[/思考]——不过一遍会原样泄漏进聊天气泡/语音留言朗读
+  const rawClean = extractThinkBlocks(raw ?? '').text;
   const cap = max <= 1 ? 600 : 200;
   const clean = (s: string) =>
     s
@@ -109,13 +113,13 @@ export function parseFollowupText(raw: string, max = 2): string[] {
     }
     return [joined.slice(0, cap)];
   };
-  const start = raw.indexOf('{');
+  const start = rawClean.indexOf('{');
   if (start >= 0) {
     let depth = 0;
     let inStr = false;
     let esc = false;
-    for (let i = start; i < raw.length; i++) {
-      const ch = raw[i];
+    for (let i = start; i < rawClean.length; i++) {
+      const ch = rawClean[i];
       if (inStr) {
         if (esc) esc = false;
         else if (ch === '\\') esc = true;
@@ -128,7 +132,7 @@ export function parseFollowupText(raw: string, max = 2): string[] {
         depth -= 1;
         if (depth === 0) {
           try {
-            const obj = JSON.parse(raw.slice(start, i + 1)) as { messages?: unknown };
+            const obj = JSON.parse(rawClean.slice(start, i + 1)) as { messages?: unknown };
             if (obj && Array.isArray(obj.messages)) {
               const out = (obj.messages as unknown[])
                 .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
@@ -145,7 +149,7 @@ export function parseFollowupText(raw: string, max = 2): string[] {
     }
   }
   return mergeToOne(
-    raw
+    rawClean
       .split('\n')
       .map((l) => clean(l))
       .filter(Boolean),
@@ -179,9 +183,10 @@ export async function requestCallFollowup(p: CallFollowupPayload): Promise<strin
       }
     }
     if (res.ok && Array.isArray(data.messages)) {
+      // 服务端直接产出的续聊文字：同口径过一遍思考块剥离（防御缺口 A1，与 parseFollowupText 一致）
       return (data.messages as unknown[])
         .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-        .map((x) => x.trim().slice(0, max <= 1 ? 600 : 200))
+        .map((x) => extractThinkBlocks(x).text.trim().slice(0, max <= 1 ? 600 : 200))
         .slice(0, max);
     }
     return [];

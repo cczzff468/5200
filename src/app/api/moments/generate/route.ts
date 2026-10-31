@@ -40,6 +40,7 @@ export const runtime = 'nodejs';
 
 import { completeWithFallback, extractUpstreamConfig, type LLMMessage } from '@/lib/server-llm';
 import { stripEmojiText } from '@/lib/emoji';
+import { extractThinkBlocks } from '@/lib/think-filter';
 
 interface PeerInput {
   name?: unknown;
@@ -455,12 +456,16 @@ export async function POST(req: Request) {
     // 这里抬高到 ≥0.9 保证多样性（仅影响本端点，不改用户全局配置）
     if (config) config.temperature = Math.max(config.temperature, 0.9);
     const { text } = await completeWithFallback(config, messages);
+    // [思考]块兜底剥离（A1）：动态/评论链路未注入思考指令，但模型会跨链路模仿单聊输出习惯
+    // 偶发在正文前裹 [思考]…[/思考]——必须先剥再做双语拆分（思考块里若含 | 会污染分隔判定）
+    // 与 cleanContent，否则思考内容会原样泄漏进朋友圈/QQ空间动态正文
+    const textClean = extractThinkBlocks(text).text;
     // #47：发动态 / 评论 / 回复统一硬性剥 emoji——朋友圈文字干净；提示词禁令之外再剥一次（模型偶尔无视禁令）
     // 48-3 / 53：bilingual=true 时 LLM 按「原文|中文译文」格式输出，splitBilingual 按 | 拆分；中文正文无 | 则 contentZh=''
-    let rawContent = text;
+    let rawContent = textClean;
     let rawZh = '';
     if (bilingual) {
-      const parts = splitBilingual(text);
+      const parts = splitBilingual(textClean);
       rawContent = parts.content;
       rawZh = parts.contentZh;
     }

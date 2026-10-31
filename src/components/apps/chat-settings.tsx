@@ -27,6 +27,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Palette, Search, Zap } from 'lucide-react';
+import { deepThinkCaption } from '@/lib/deep-think';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import type { ContactRecord } from '@/lib/contacts';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
@@ -582,6 +583,10 @@ export function ChatSettingsPage({
             />
           </div>
         </div>
+        {/* A2 开关说明小字：「关 ≠ 不思考」——指令始终注入，关闭仅隐藏思维链展示，防用户误以为关闭=省流量 */}
+        <p className="px-1 pt-2.5 text-[12.5px] leading-[1.6] text-black/40 dark:text-white/40">
+          {deepThinkCaption(deepThinkOn)}
+        </p>
 
         {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择） */}
         <div className={`${cardCls} mt-3 overflow-hidden`}>
@@ -1825,6 +1830,8 @@ export function SmsChatSettingsPage({
             </div>
           </div>
         )}
+        {/* A2 开关说明小字：与微信/QQ 面板同文案（「关 ≠ 不思考」，仅隐藏展示），三端口径一致 */}
+        {onToggleDeepThink && <p className={t.captionCls}>{deepThinkCaption(deepThinkOn)}</p>}
 
         {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择）；AI 助手会话无此入口 */}
         {onOpenWorldBooks && (

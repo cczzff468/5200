@@ -138,6 +138,9 @@ import { EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
 import { InlineEmojiText } from './inline-emoji';
 import { ChatRichInput, type ChatRichInputHandle } from './chat-rich-input';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
+// 深度思考（B1 群聊）：指令注入 + 开关（IndexedDB 按群隔离，渲染订阅版随群设置页切换即时刷新）
+import { DEEP_THINK_RULE, setDeepThinkOn, useDeepThinkOn } from '@/lib/deep-think';
+import { ThinkCard } from './think-card';
 import { ActionDescLine } from './action-desc-line';
 import { TextCardBubble } from './text-card-bubble';
 import { wxChatFlags, type ChatFlags } from '@/lib/chat-flags';
@@ -950,6 +953,8 @@ export function WxGroupInfoPage({
   const [timeAwareOn, setTimeAwareOn] = useState(() => getTimeAware(sessionKeyOf(gid)));
   // 动作描写开关（渲染订阅版：切换后经事件即时刷新聊天页渲染）
   const actionDescOn = useActionDescOn(sessionKeyOf(gid));
+  // 深度思考（B1，按群隔离）：渲染订阅版——群设置页切换后聊天页思维链卡片即时刷新
+  const deepThinkOn = useDeepThinkOn(sessionKeyOf(gid));
   // 「回车键发送消息」开关（微信 App 级、按账号隔离，群聊与单聊共用；默认开启）
   const enterSend = useEnterSend('wx');
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1382,6 +1387,16 @@ export function WxGroupInfoPage({
             saveActionDescOn(sessionKeyOf(gid), v);
           }}
           testId="wx-groupinfo-action-desc"
+        />
+        {/* B1 群聊深度思考：指令始终注入（成员后台始终思考），开关只控制思维链卡片显隐（与单聊同口径） */}
+        <SwitchRow
+          label="深度思考"
+          caption="开启后成员回复气泡上方可展开思维链卡片（按群独立）；关闭仅隐藏展示，成员仍会在后台深度思考"
+          checked={deepThinkOn}
+          onChange={(v) => {
+            setDeepThinkOn(sessionKeyOf(gid), v);
+          }}
+          testId="wx-groupinfo-deep-think"
         />
       </div>
 
@@ -2440,6 +2455,8 @@ export function WxGroupChatPage({
   const sKey = sessionKeyOf(gid);
   // 动作描写开关（渲染订阅版：群设置页切换后经事件即时刷新渲染）
   const actionDescOn = useActionDescOn(sKey);
+  // 深度思考（B1，按群隔离）：思维链卡片渲染开关（指令始终注入，开关只控制展示——与单聊同口径）
+  const grpThinkOn = useDeepThinkOn(sKey);
   // 「回车键发送消息」开关（微信 App 级、按账号隔离，群聊与单聊共用；默认开启=回车发送，关闭=回车换行）
   const enterSend = useEnterSend('wx');
   // 退出群聊页/切群：停止语音播放与 TTS 朗读并释放播放器（单例，防跨群串音）
@@ -2613,7 +2630,7 @@ export function WxGroupChatPage({
 
   /** 就地更新一条群消息的附加数据（红包/转账状态流转、语音转写结果用）：读改写存储 + 页面存活时同步 state */
   const patchGroupMsg = useCallback(
-    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'voice' | 'kind' | 'img' | 'replyFail' | 'failReason'>>) => {
+    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'voice' | 'kind' | 'img' | 'replyFail' | 'failReason' | 'thinking'>>) => {
       const next = loadGroupMsgs(gid).map((m) => (m.id === mid ? { ...m, ...patch } : m));
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
@@ -3051,7 +3068,12 @@ export function WxGroupChatPage({
           if (m.role === 'me') {
             return { role: 'user', content: `${meName}：${quoted}${msgTextOf(m)}` };
           }
-          if (m.senderId === char.id) return { role: 'assistant', content: `${quoted}${msgTextOf(m)}` };
+          // B1 群聊深度思考：成员自己的消息带思考过程时注入 [思考] 块（与单聊同口径——模型能
+          // 延续自己上一轮的思考脉络）；其他成员的思考对 TA 不可见，不注入
+          if (m.senderId === char.id) {
+            const ownThink = m.thinking?.trim();
+            return { role: 'assistant', content: `${ownThink ? `[思考]${ownThink}[/思考]\n` : ''}${quoted}${msgTextOf(m)}` };
+          }
           return { role: 'user', content: `${m.senderName || '成员'}：${quoted}${msgTextOf(m)}` };
         });
         // 最后一条机主消息的快照文本（走 msgTextOf：语音→转写文本、图片→[图片]，与历史构建同口径）
@@ -3258,7 +3280,7 @@ export function WxGroupChatPage({
           .join('\n\n');
         // 回复条数 replyCount 已在群聊规则处提前读取（条数约束与连发指令共用同一份设置）
         const payload: ChatPayloadMessage[] = [
-          { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount, { groupMode: true })}` : systemFull },
+          { role: 'system', content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount, { groupMode: true })}\n\n${DEEP_THINK_RULE}` : `${systemFull}\n\n${DEEP_THINK_RULE}` },
           ...history,
         ];
         const messages = applyWbUserBlocks(payload, wbBlocks);
@@ -3600,6 +3622,10 @@ export function WxGroupChatPage({
                 delay: (i) => (i + 1 < finalBatch.length ? typingDelayOf(finalBatch[i + 1].content ?? '') : 0),
               },
             ).then(() => {
+              // B1 群聊深度思考回填：本回合该成员的思考过程挂到其第一条消息（id=aiMsgId，分段模式
+              // 下第一条分段同样用该 id）；开关关闭时字段照存不渲染（与单聊同口径，重开可回看）
+              const thinkText = (result.thinking ?? '').trim();
+              if (thinkText) patchGroupMsg(aiMsgId, { thinking: thinkText });
               // 群记忆提取（按角色 + 按群隔离轮次；碎片带群来源标记；全部消息投递完后执行，后台异步失败静默）
               void (async () => {
                 try {
@@ -4931,6 +4957,13 @@ export function WxGroupChatPage({
               </span>
             )}
           </span>
+          {/* B1 群聊思维链卡片：成员消息携带思考过程时渲染（发言者名与气泡之间，与头像左缘对齐）；
+              开关按群隔离——关闭时不渲染但字段保留，重开开关可回看历史思考 */}
+          {!mine && grpThinkOn && m.thinking && !m.recalled ? (
+            <div className="pl-0 pr-1 pb-[2px]">
+              <ThinkCard text={m.thinking} testId={`wxgrp-think-${m.id}`} />
+            </div>
+          ) : null}
           {/* 引用块（截图样式）：独立半透明胶囊统一挂在气泡/卡片下方（「名字：内容」，小圆角 + 细黑边框）；
               文字/图片/红包等全部走这里（转发卡片自带引用展示，排除避免双渲染） */}
           {media}

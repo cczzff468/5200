@@ -236,6 +236,12 @@ export interface WxGroupMsg {
   /** AI 回复失败标记（红色 ! 徽标）：整轮群回复失败（网络/接口错误且无人产出）时打在触发的机主消息上；
    *  点击徽标重试（runGroupTurn(trigger)），任一成员成功产出后清除。不进 AI 上下文（消息本体照常参与） */
   replyFail?: boolean;
+  /**
+   * 深度思考（B1 群聊）：本回合该成员的思考过程（[思考]…[/思考] 剥离收集，挂在本回合
+   * 第一条消息上）；群设置「深度思考」开关只控制渲染展示（关闭 = 不渲染，字段照存——
+   * 与单聊同口径：指令始终注入、开关只控制思维链卡片显隐）
+   */
+  thinking?: string;
   /** 失败分类友好文案（Task 40「错误提示优化」）：整轮失败收口时由 classifyChatError 生成，
    *  与 replyFail 同生命周期（运行时态：重试成功/刷新后清除），渲染在触发消息行后的灰色提示行上；
    *  旧数据/无值时 UI 回退 CHAT_UNKNOWN_FAIL_TEXT。不进 AI 上下文 */
@@ -1110,6 +1116,8 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
       r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' || r.kind === 'redpacket' || r.kind === 'transfer' || r.kind === 'forward' || r.kind === 'voice' || r.kind === 'mtdraft'
         ? r.kind
         : 'text',
+    // 深度思考（B1 群聊）：思考过程透传（挂在本回合该成员第一条消息上；旧记录无此字段照常兼容）
+    thinking: typeof r.thinking === 'string' && r.thinking.trim() ? r.thinking : undefined,
     // 美团代点草稿卡字段透传（C11 群内帮点外卖；旧记录无此字段照常兼容）
     mtdraft:
       r.kind === 'mtdraft' && r.mtdraft && typeof r.mtdraft.did === 'string'
