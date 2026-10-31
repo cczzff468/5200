@@ -1,19 +1,22 @@
 'use client';
 
 /**
- * X论坛 · 发布弹层（X compose 全屏 sheet，按官方截图精修）。
- * 顶行：返回箭头 + 「草稿」蓝字 + 发布浅蓝胶囊（空文置灰）；
- * 正文区：头像 + 「有什么新鲜事？」；下方「所有人都可以回复」地球行；
- * 底行：发布到·版块（点选弹底部 sheet）+ X 字数圆环（超限变红）。
+ * X论坛 · 发布弹层（X compose 全屏 sheet，按官方截图 1:1 精修）。
+ * 顶行：返回箭头 + 「草稿」蓝字 + 「发布」胶囊（空文浅蓝、可发亮蓝）；
+ * 正文区：头像 + 「有什么新鲜事？」；下方蓝字「所有人都可以回复」地球行；
+ * 工具行：图片/GIF/投票/表情/定时/位置 蓝色图标（X 官方排布）+ 字数圆环；
+ * 底行：灰色媒体方块（加图入口）+ 「发布到·版块」胶囊（点选弹底部 sheet）。
  */
 
-import { useMemo, useRef, useState } from 'react';
-import { Globe } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { BarChart3, CalendarClock, Globe, Image as ImageIcon, MapPin, Smile } from 'lucide-react';
 import { COMMUNITY_DEFS } from '@/lib/forum/core';
 import { XAvatar, XIcons, useXTheme } from './shared';
 import { useForum } from './ctx';
 
 const LIMIT = 280;
+const EMOJIS = ['😄', '🎉', '🔥', '💙', '✨', '😂', '🥰', '👏', '🤔', '😭'];
+const SW = 1.9;
 
 /** X 字数圆环（剩余量；<20 转橙，<0 变红） */
 function Ring({ left }: { left: number }) {
@@ -54,7 +57,6 @@ export function ComposeSheet({ onClose, onPublish }: { onClose: () => void; onPu
   const [text, setText] = useState('');
   const [communityId, setCommunityId] = useState<string>('hot');
   const [picking, setPicking] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement | null>(null);
 
   const communityName = useMemo(
     () => COMMUNITY_DEFS.find((c) => c.id === communityId)?.name ?? '今日热议',
@@ -64,11 +66,24 @@ export function ComposeSheet({ onClose, onPublish }: { onClose: () => void; onPu
   const left = LIMIT - text.length;
   const canPublish = text.trim().length > 0 && left >= 0;
 
+  /** 工具行图标按钮（X 官方 compose 工具条：蓝色线条图标） */
+  const toolBtn = (label: string, icon: React.ReactNode, onClick: () => void) => (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-black/5 dark:active:bg-white/10"
+      style={{ color: t.blue }}
+    >
+      {icon}
+    </button>
+  );
+
   return (
     <div className="absolute inset-0 z-50" role="dialog" aria-modal="true" aria-label="发布帖子">
       <div className="flex h-full flex-col animate-[forum-sheet_.26s_ease-out]" style={{ background: t.bg, color: t.text }}>
-        {/* 顶行：返回 | 草稿 | 发布胶囊（官方 Post 规格） */}
-        <div className="flex shrink-0 items-center justify-between border-b px-4 pt-[54px]" style={{ borderColor: t.border, height: 100 }}>
+        {/* 顶行：返回 | 草稿 | 发布胶囊（官方 Post 规格：空文浅蓝、可发亮蓝） */}
+        <div className="flex shrink-0 items-center justify-between px-4 pt-[54px]" style={{ height: 100 }}>
           <button
             type="button"
             aria-label="关闭并返回"
@@ -93,19 +108,20 @@ export function ComposeSheet({ onClose, onPublish }: { onClose: () => void; onPu
               onPublish(text.trim(), communityId);
               onClose();
             }}
-            className="rounded-full px-5 h-[34px] text-[15px] font-bold text-white transition-opacity active:opacity-70 disabled:opacity-50"
-            style={{ background: t.blue }}
+            className="rounded-full px-5 h-[34px] text-[15px] font-bold text-white transition-opacity active:opacity-70"
+            style={{
+              background: canPublish ? t.blue : t.dark ? 'rgba(29,155,240,0.45)' : '#a9d4f5',
+            }}
             aria-label="发布"
           >
             发布
           </button>
         </div>
 
-        {/* 正文区 */}
-        <div className="flex min-h-0 flex-1 gap-3 px-4 pt-4">
+        {/* 正文区：头像 + 大号输入 */}
+        <div className="flex min-h-0 flex-1 gap-3 px-4 pt-3">
           <XAvatar authorKey="user" size={40} />
           <textarea
-            ref={taRef}
             value={text}
             onChange={(e) => setText(e.target.value.slice(0, LIMIT + 40))}
             placeholder="有什么新鲜事？"
@@ -115,29 +131,74 @@ export function ComposeSheet({ onClose, onPublish }: { onClose: () => void; onPu
           />
         </div>
 
-        {/* 回复权限行（官方 Earth · Everyone can reply） */}
+        {/* 回复权限行（官方 Earth · Everyone can reply，蓝色） */}
         <button
           type="button"
           onClick={() => f.toast('回复权限：所有人都可以回复')}
           className="flex shrink-0 items-center gap-2 px-4 py-2"
-          style={{ color: t.secondary }}
+          style={{ color: t.blue }}
           aria-label="回复权限设置"
         >
-          <Globe width={16} height={16} strokeWidth={1.9} aria-hidden="true" />
-          <span className="text-[13px]">所有人都可以回复</span>
+          <Globe width={16} height={16} strokeWidth={SW} aria-hidden="true" />
+          <span className="text-[13px] font-medium">所有人都可以回复</span>
         </button>
 
-        {/* 底行：版块 + 字数环 */}
-        <div className="flex shrink-0 items-center justify-between border-t px-4 py-3" style={{ borderColor: t.border }}>
+        {/* 工具行（官方：图片/GIF/投票/表情/定时/位置，蓝色）+ 字数圆环 */}
+        <div
+          className="forum-hide-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-t px-3 py-1"
+          style={{ borderColor: t.border }}
+        >
+          {toolBtn('添加图片', <ImageIcon width={21} height={21} strokeWidth={SW} />, () =>
+            f.toast('图片上传内测中，敬请期待'),
+          )}
+          {toolBtn(
+            'GIF',
+            <span
+              className="flex h-[15px] w-[26px] items-center justify-center rounded-[4px] border text-[10px] font-extrabold leading-none"
+              style={{ borderColor: t.blue, color: t.blue }}
+              aria-hidden="true"
+            >
+              GIF
+            </span>,
+            () => f.toast('GIF 搜索内测中，敬请期待'),
+          )}
+          {toolBtn('发起投票', <BarChart3 width={21} height={21} strokeWidth={SW} />, () =>
+            f.toast('投票功能内测中，敬请期待'),
+          )}
+          {toolBtn('插入表情', <Smile width={21} height={21} strokeWidth={SW} />, () => {
+            const e = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+            setText((s) => (s.length >= LIMIT ? s : s + e));
+          })}
+          {toolBtn('定时发布', <CalendarClock width={21} height={21} strokeWidth={SW} />, () =>
+            f.toast('定时发布内测中，敬请期待'),
+          )}
+          {toolBtn('添加位置', <MapPin width={21} height={21} strokeWidth={SW} />, () =>
+            f.toast('地理位置功能内测中，敬请期待'),
+          )}
+          <span className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center">
+            <Ring left={left} />
+          </span>
+        </div>
+
+        {/* 底行：灰色媒体方块 + 发布到·版块 */}
+        <div className="flex shrink-0 items-center gap-3 border-t px-4 pb-[20px] pt-3" style={{ borderColor: t.border }}>
+          <button
+            type="button"
+            aria-label="添加图片或视频"
+            onClick={() => f.toast('图片上传内测中，敬请期待')}
+            className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[12px] transition-transform active:scale-95"
+            style={{ background: t.dark ? '#202327' : '#eff3f4', color: t.secondary }}
+          >
+            <ImageIcon width={20} height={20} strokeWidth={SW} />
+          </button>
           <button
             type="button"
             onClick={() => setPicking(true)}
-            className="flex items-center gap-1 rounded-full px-3 h-[32px] text-[14px] font-medium active:opacity-60"
+            className="flex h-[32px] items-center gap-1 rounded-full px-3 text-[14px] font-medium active:opacity-60"
             style={{ background: t.dark ? 'rgba(29,155,240,0.15)' : 'rgba(29,155,240,0.12)', color: t.blue }}
           >
             发布到 · {communityName}
           </button>
-          <Ring left={left} />
         </div>
       </div>
 
@@ -152,7 +213,7 @@ export function ComposeSheet({ onClose, onPublish }: { onClose: () => void; onPu
             onClick={() => setPicking(false)}
           />
           <div
-            className="absolute inset-x-0 bottom-0 max-h-[70%] animate-[forum-sheet_.24s_ease-out] overflow-y-auto rounded-t-2xl pb-[24px]"
+            className="forum-hide-scrollbar absolute inset-x-0 bottom-0 max-h-[70%] animate-[forum-sheet_.24s_ease-out] overflow-y-auto rounded-t-2xl pb-[24px]"
             style={{ background: t.bg, color: t.text }}
           >
             <p className="px-5 pb-2 pt-4 text-[17px] font-bold">发布到版块</p>

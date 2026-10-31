@@ -92,13 +92,15 @@ export const XIcons = {
   communities: (filled: boolean, size = 25) => (
     <Users width={size} height={size} strokeWidth={SW} fill={filled ? 'currentColor' : 'none'} />
   ),
-  /** X 空间（Spaces，官方底栏第 3 位：圆环 + 闪电；选中实心圆） */
-  spaces: (filled: boolean, size = 25) => (
+  /** X 空间（Spaces，官方底栏第 3 位：圆环 + 闪电；选中实心圆 + 底色闪电镂空） */
+  spaces: (filled: boolean, size = 25, bg = '#ffffff') => (
     <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
       <circle cx="12" cy="12" r="10" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={SW} />
-      {!filled && (
-        <path d="M13.2 6.4 8.9 12.9h2.9l-1 4.7 4.4-6.9h-2.9l.9-4.3z" fill="currentColor" stroke="none" />
-      )}
+      <path
+        d="M13.2 6.4 8.9 12.9h2.9l-1 4.7 4.4-6.9h-2.9l.9-4.3z"
+        fill={filled ? bg : 'currentColor'}
+        stroke="none"
+      />
     </svg>
   ),
   bell: (filled: boolean, size = 25) => (

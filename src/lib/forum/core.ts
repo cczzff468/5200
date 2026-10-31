@@ -102,6 +102,8 @@ export interface ForumData {
   dms: ForumDm[];
   following: AuthorKey[];
   likesByMe: Record<string, true>;
+  /** 主页顶部分类标签（版块 id 列表，显示为「为你推荐|关注」后的附加 tab） */
+  pinnedTags?: string[];
   seeded: boolean;
   lastGenAt: number;
   joinedAt: number;
@@ -408,6 +410,7 @@ function blank(): ForumData {
     dms: [],
     following: [],
     likesByMe: {},
+    pinnedTags: [],
     seeded: false,
     lastGenAt: 0,
     joinedAt: Date.now(),

@@ -4,9 +4,10 @@
  * X论坛 App · 主框架。
  *
  * - 主页顶栏（X 官方规格）：左 32px 头像（开侧边抽屉）/ 中 𝕏 Logo / 右「订阅」描边胶囊；
- *   下方独立 tab 行「为你推荐|关注」（左对齐 + 蓝色圆头下划线）+ 右侧 + 号（打开发帖）；
+ *   下方独立 tab 行「为你推荐|关注|分类标签…」（左对齐 + 蓝色圆头下划线，可横滑）+
+ *   右侧 + 号（添加/管理分类标签，勾选后作为附加 tab 筛选版块帖子）；
  *   sticky backdrop-blur 半透明（X header 观感）。
- * - 底部 5 tab（X 图标底栏，无文字标签）：主页/搜索/社区/通知/私信，选中实心黑、未选灰。
+ * - 底部 5 tab（X 图标底栏，无文字标签）：主页/搜索/社区/通知/私信，选中品牌蓝实心、未选灰。
  * - 右下蓝色发布 FAB（X 圆形 #1d9bf0 + 白色编辑笔）。
  * - 页面栈：thread / profile / community / dm 整页层从右滑入（X push 观感），返回即 pop；
  *   主 tab 层保持挂载（返回后 feed 滚动位置不丢）。
@@ -15,7 +16,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { Check } from 'lucide-react';
 import {
+  COMMUNITY_DEFS,
+  communityName,
+  countShort,
   forumData,
   forumSnapshot,
   followersOf,
@@ -29,7 +34,7 @@ import {
 } from '@/lib/forum/core';
 import { bootForum, queueUserPostInteractions } from '@/lib/forum/engine';
 import { XAvatar, XIcons, XLogo, useXTheme } from './shared';
-import { FeedList, FeedSkeleton } from './feed';
+import { FeedList, FeedSkeleton, CommunityIcon } from './feed';
 import { ComposeSheet } from './compose-sheet';
 import { ThreadView } from './thread-view';
 import { ProfileView } from './profile-view';
@@ -46,6 +51,8 @@ const KEYFRAMES = `
 @keyframes forum-fade { from { opacity: 0 } to { opacity: 1 } }
 @keyframes forum-drawer { from { transform: translateX(-100%) } to { transform: translateX(0) } }
 @keyframes forum-sheet { from { transform: translateY(100%) } to { transform: translateY(0) } }
+.forum-hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.forum-hide-scrollbar::-webkit-scrollbar { display: none; }
 `;
 
 export default function ForumApp() {
@@ -55,7 +62,8 @@ export default function ForumApp() {
   const [views, setViews] = useState<ViewSpec[]>([]);
   const [drawer, setDrawer] = useState(false);
   const [compose, setCompose] = useState(false);
-  const [homeTab, setHomeTab] = useState<'foryou' | 'following'>('foryou');
+  const [tagPicker, setTagPicker] = useState(false);
+  const [homeTab, setHomeTab] = useState<string>('foryou');
   const [toastMsg, setToastMsg] = useState<{ id: number; text: string } | null>(null);
 
   // 数据订阅（rev 变化触发重渲）
@@ -151,6 +159,21 @@ export default function ForumApp() {
     [gotoTab, toast],
   );
 
+  /** 添加/移除主页分类标签（+ 号：勾选版块 → 作为附加 tab 显示在主页顶部） */
+  const toggleTag = useCallback(
+    (id: string) => {
+      const nd = forumData();
+      const cur = nd.pinnedTags ?? [];
+      const def = COMMUNITY_DEFS.find((c) => c.id === id);
+      const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+      nd.pinnedTags = next;
+      saveForum({ ...nd });
+      setHomeTab((h) => (h === id && !next.includes(id) ? 'foryou' : h));
+      toast(next.includes(id) ? `已添加「${def?.name ?? id}」标签` : `已移除「${def?.name ?? id}」标签`);
+    },
+    [toast],
+  );
+
   const ui = useMemo(
     () => ({
       t,
@@ -170,13 +193,27 @@ export default function ForumApp() {
 
   const d = forumData();
   const seeded = d.seeded && d.posts.length > 0;
+  const pinnedTags = (d.pinnedTags ?? []).filter((id) => COMMUNITY_DEFS.some((c) => c.id === id));
 
-  // Feed 数据：为你推荐 = 全部主帖；关注 = 已关注作者的主帖
+  /** 主页 tab 集：为你推荐 | 关注 | 已添加的分类标签（按添加顺序） */
+  const homeTabs: { key: string; label: string }[] = useMemo(
+    () => [
+      { key: 'foryou', label: '为你推荐' },
+      { key: 'following', label: '关注' },
+      ...pinnedTags.map((id) => ({ key: id, label: communityName(id) })),
+    ],
+    [pinnedTags],
+  );
+
+  // Feed 数据：为你推荐 = 全部主帖；关注 = 已关注作者的主帖；标签 tab = 对应版块主帖
   const feedPosts = useMemo(() => {
     const all = [...d.posts].sort((a, b) => b.createdAt - a.createdAt).filter((p) => p.replyTo === null);
     if (homeTab === 'following') {
       const followingSet = new Set(d.following);
       return all.filter((p) => followingSet.has(p.authorKey));
+    }
+    if (homeTab !== 'foryou') {
+      return all.filter((p) => (p.community ?? 'hot') === homeTab);
     }
     return all;
   }, [d, homeTab]);
@@ -219,38 +256,35 @@ export default function ForumApp() {
                       订阅
                     </button>
                   </div>
-                  {/* tab 行：为你推荐 | 关注 | ＋（X 新版布局） */}
+                  {/* tab 行：为你推荐 | 关注 | 分类标签… + ＋（添加分类标签），可横滑 */}
                   <div className="flex items-center border-b" style={{ borderColor: t.border, height: 46 }}>
-                    {(
-                      [
-                        ['foryou', '为你推荐'],
-                        ['following', '关注'],
-                      ] as const
-                    ).map(([k, label]) => {
-                      const active = homeTab === k;
-                      return (
-                        <button
-                          key={k}
-                          type="button"
-                          onClick={() => setHomeTab(k)}
-                          className="relative flex h-full items-center text-[15px]"
-                          style={{ color: active ? t.text : t.secondary, fontWeight: active ? 700 : 500 }}
-                        >
-                          {label}
-                          {active && (
-                            <span
-                              className="absolute bottom-0 left-1/2 h-[4px] w-12 -translate-x-1/2 rounded-full"
-                              style={{ background: t.blue }}
-                            />
-                          )}
-                        </button>
-                      );
-                    })}
+                    <div className="forum-hide-scrollbar flex h-full min-w-0 flex-1 items-center overflow-x-auto">
+                      {homeTabs.map(({ key: k, label }) => {
+                        const active = homeTab === k;
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            onClick={() => setHomeTab(k)}
+                            className="relative flex h-full shrink-0 items-center px-5 text-[15px]"
+                            style={{ color: active ? t.text : t.secondary, fontWeight: active ? 700 : 500 }}
+                          >
+                            {label}
+                            {active && (
+                              <span
+                                className="absolute bottom-0 left-1/2 h-[4px] w-12 -translate-x-1/2 rounded-full"
+                                style={{ background: t.blue }}
+                              />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                     <button
                       type="button"
-                      aria-label="发帖"
-                      onClick={() => setCompose(true)}
-                      className="ml-auto flex h-9 w-9 items-center justify-center rounded-full transition-colors active:bg-black/10 dark:active:bg-white/10"
+                      aria-label="添加分类标签"
+                      onClick={() => setTagPicker(true)}
+                      className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-black/10 dark:active:bg-white/10"
                       style={{ color: t.secondary }}
                     >
                       {XIcons.plus(22)}
@@ -296,7 +330,7 @@ export default function ForumApp() {
           )}
         </div>
 
-        {/* 底部 5 tab（X：纯图标无标签，选中实心） */}
+        {/* 底部 5 tab（X：纯图标无标签，选中品牌蓝实心） */}
         <nav
           aria-label="论坛主导航"
           className="flex shrink-0 items-stretch justify-around border-t pb-[16px]"
@@ -304,14 +338,14 @@ export default function ForumApp() {
         >
           {TABS.map((k) => {
             const active = tab === k && views.length === 0;
-            const color = active ? t.text : t.secondary;
+            const color = active ? t.blue : t.secondary;
             const icon =
               k === 'home' ? (
                 XIcons.home(active)
               ) : k === 'search' ? (
                 XIcons.search()
               ) : k === 'communities' ? (
-                XIcons.spaces(active)
+                XIcons.spaces(active, 25, t.bg)
               ) : k === 'notifications' ? (
                 XIcons.bell(active)
               ) : (
@@ -466,6 +500,66 @@ export default function ForumApp() {
 
         {/* 发布弹层 */}
         {compose && <ComposeSheet onClose={() => setCompose(false)} onPublish={publish} />}
+
+        {/* 添加分类标签弹层（+ 号：勾选版块作为主页附加 tab） */}
+        {tagPicker && (
+          <div className="absolute inset-0 z-50" role="dialog" aria-modal="true" aria-label="添加分类标签">
+            <button
+              type="button"
+              aria-label="关闭"
+              className="absolute inset-0 animate-[forum-fade_.18s_ease-out]"
+              style={{ background: 'rgba(0,0,0,0.4)' }}
+              onClick={() => setTagPicker(false)}
+            />
+            <div
+              className="forum-hide-scrollbar absolute inset-x-0 bottom-0 max-h-[72%] animate-[forum-sheet_.24s_ease-out] overflow-y-auto rounded-t-2xl pb-[24px]"
+              style={{ background: t.bg, color: t.text }}
+            >
+              <div className="sticky top-0 z-10 pb-1 pt-4" style={{ background: t.bg }}>
+                <p className="px-5 text-[17px] font-bold">添加分类标签</p>
+                <p className="mt-1 px-5 text-[13px] leading-relaxed" style={{ color: t.secondary }}>
+                  勾选的版块会作为标签显示在主页顶部，点击标签即可只看该版块的帖子
+                </p>
+                <div className="mx-5 mt-3 border-t" style={{ borderColor: t.border }} />
+              </div>
+              {COMMUNITY_DEFS.map((c) => {
+                const on = pinnedTags.includes(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => toggleTag(c.id)}
+                    className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors active:opacity-60"
+                    style={{ background: on ? t.hover : 'transparent' }}
+                    aria-pressed={on}
+                  >
+                    <CommunityIcon id={c.id} size={44} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[15px] font-bold">{c.name}</span>
+                      <span className="block truncate text-[13px]" style={{ color: t.secondary }}>
+                        {countShort(c.members)} 成员 · {c.desc}
+                      </span>
+                    </span>
+                    <span
+                      className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full"
+                      style={
+                        on
+                          ? { background: t.blue, color: '#fff' }
+                          : { border: `2px solid ${t.dark ? '#536471' : '#cfd9de'}` }
+                      }
+                      aria-hidden="true"
+                    >
+                      {on && <Check width={14} height={14} strokeWidth={3} />}
+                    </span>
+                  </button>
+                );
+              })}
+              <p className="px-5 pb-1 pt-3 text-center text-[12px]" style={{ color: t.secondary }}>
+                再次点击已勾选的版块可移除标签
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* 底部 toast（X 深色胶囊） */}
         {toastMsg && (

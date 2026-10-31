@@ -4,7 +4,7 @@
  * X论坛 · 搜索 / 社区 / 社区页 / 通知（三个主 tab + 推入页之一）。
  * - SearchView：X 搜索页（搜索胶囊 + 趋势榜 + 实时结果）
  * - CommunitiesView：X 社区页（我的社区 + 推荐版块；加入/进入）
- * - CommunityPage：版块内帖子流（横幅 + 加入状态）
+ * - CommunityPage：版块内帖子流（仅主帖，回复不在版块流展示；无横幅背景）
  * - NotificationsView：X 通知页（图标按类型着色；打开页 600ms 后全部标记已读）
  */
 
@@ -316,7 +316,10 @@ export function CommunityPage({ id }: { id: string }) {
   const def = COMMUNITY_DEFS.find((c) => c.id === id) ?? COMMUNITY_DEFS[0];
   const isJoined = !!d.communities.find((x) => x.id === id)?.joined;
   // 直算不 memo：数据对象会被引擎原位变更（点赞/转推），memo 依赖不可靠（react-hooks 规则）
-  const posts = d.posts.filter((p) => (p.community ?? 'hot') === id).sort((a, b) => b.createdAt - a.createdAt);
+  // 仅展示主帖（回复只出现在帖子详情页，不混入版块流）
+  const posts = d.posts
+    .filter((p) => p.replyTo === null && (p.community ?? 'hot') === id)
+    .sort((a, b) => b.createdAt - a.createdAt);
 
   return (
     <div className="flex h-full flex-col" style={{ background: t.bg, color: t.text }}>
@@ -361,8 +364,6 @@ export function CommunityPage({ id }: { id: string }) {
           </span>
         </div>
       </div>
-      {/* 版块横幅 */}
-      <div aria-hidden="true" className="h-[64px] w-full" style={{ background: `linear-gradient(120deg, ${def.coverBg}, ${t.dark ? '#14171a' : '#dfe6ec'})` }} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         {posts.length ? (
           posts.map((p) => <PostCard key={p.id} post={p} onOpen={() => f.openThread(p.id)} />)

@@ -3,8 +3,9 @@
 /**
  * X论坛 · 私信（X DMs）。
  * - DmsView 列表：论坛小助手（官方）+ 有过对话的作者；头像 + 最后一条预览 + 相对时间。
- * - DmThread 对话页：X 气泡（我方蓝底白字右侧、对方灰底左侧、rounded-2xl）；
- *   底部输入条发送 → engine.queueDmReply 延迟回复（LLM 人设驱动，官方小助手不聊天）。
+ * - DmThread 对话页：X 气泡（我方蓝底白字右侧、对方灰底左侧、rounded-2xl，无头像）；
+ *   顶栏仅名字+handle（无头像）；底部输入条发送 → engine.queueDmReply 延迟回复
+ *   （LLM 人设驱动，官方小助手不聊天）。
  */
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -148,16 +149,13 @@ export function DmThread({ peerKey }: { peerKey: AuthorKey }) {
           >
             {XIcons.back(20)}
           </button>
-          <button type="button" onClick={() => f.openProfile(peerKey)} className="flex min-w-0 items-center gap-2 text-left">
-            <XAvatar authorKey={peerKey} size={34} />
-            <span className="min-w-0">
-              <span className="flex items-center gap-1">
-                <span className="truncate text-[16px] font-bold">{peer.name}</span>
-                {peer.verified && <VerifiedBadge size={13} />}
-              </span>
-              <span className="block text-[12px]" style={{ color: t.secondary }}>
-                @{peer.handle}
-              </span>
+          <button type="button" onClick={() => f.openProfile(peerKey)} className="flex min-w-0 flex-col items-start text-left">
+            <span className="flex items-center gap-1">
+              <span className="truncate text-[17px] font-bold">{peer.name}</span>
+              {peer.verified && <VerifiedBadge size={14} />}
+            </span>
+            <span className="block text-[12px]" style={{ color: t.secondary }}>
+              @{peer.handle}
             </span>
           </button>
         </div>
@@ -174,7 +172,6 @@ export function DmThread({ peerKey }: { peerKey: AuthorKey }) {
           const mine = m.from === 'user';
           return (
             <div key={m.id} className={`mb-3 flex ${mine ? 'justify-end' : 'justify-start'}`}>
-              {!mine && <span className="mr-2 mt-auto"><XAvatar authorKey={peerKey} size={28} /></span>}
               <span
                 className={`max-w-[76%] whitespace-pre-wrap break-words rounded-[20px] px-[14px] py-[10px] text-[15px] leading-[1.4] ${
                   mine ? 'text-white' : ''
