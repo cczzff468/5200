@@ -3,26 +3,31 @@
 /**
  * X论坛 · 个人主页（X profile，按官方截图精修）。
  * 顶栏：返回 + 名字(bold) + 蓝V + 「N 帖子」副标题 + 右侧探索/搜索图标；
- * 横幅 150px + 80px 头像半嵌（4px 底色描边）+ 按钮排（他人：…/信封/关注黑胶囊；
- * 自己：编辑资料描边胶囊）+ 名字区 + 「获得认证」浅蓝胶囊（未认证）+ Joined 行 +
- * 「N 正在关注 N 关注者」统计 + 四 tab（帖子▼/回复/转推/媒体，蓝下划线）。
+ * 横幅 150px（自己可从手机上传背景图，右上相机按钮）+ 80px 头像半嵌（4px 底色描边）+
+ * 按钮排（他人：…/信封/关注黑胶囊；自己：编辑资料描边胶囊 → 编辑资料弹层）+ 名字区 +
+ * 「获得认证」浅蓝胶囊（未认证）+ Joined 行 + 「N 正在关注 N 关注者」统计
+ * （自己可自定义展示数）+ 四 tab（帖子▼/回复/转推/媒体，蓝下划线；
+ * 自己的「回复」= 别人回复我的，非我评论别人的）。
  */
 
-import { useState, useSyncExternalStore } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { useRef, useState, useSyncExternalStore } from 'react';
+import { Camera, ChevronDown } from 'lucide-react';
 import {
   followersOf,
   forumData,
   forumSnapshot,
+  myFollowingCount,
   postsOf,
   resolveAuthor,
   saveForum,
+  saveForumProfile,
   subscribeForum,
   type AuthorKey,
 } from '@/lib/forum/core';
 import { XAvatar, XIcons, VerifiedBadge } from './shared';
 import { useForum } from './ctx';
 import { PostCard, EmptyState } from './feed';
+import { EditProfileSheet, fileToBannerDataUrl } from './profile-edit';
 
 type PTab = 'posts' | 'replies' | 'reposts' | 'media';
 const PTABS: [PTab, string][] = [
@@ -40,23 +45,42 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
   const a = resolveAuthor(authorKey);
   const isMe = authorKey === 'user';
   const followed = d.following.includes(authorKey);
+  const [pTab, setPTab] = useState<PTab>('posts');
+  const [editing, setEditing] = useState(false);
+  const bannerInputRef = useRef<HTMLInputElement | null>(null);
   // 直算不 memo：数据对象会被引擎原位变更，memo 依赖不可靠（react-hooks 规则）
   const all = postsOf(d, authorKey);
   const ownPosts = all.filter((p) => p.replyTo === null);
   const replyPosts = all.filter((p) => p.replyTo !== null);
-  const [pTab, setPTab] = useState<PTab>('posts');
+  // 「回复」tab（自己的主页）：别人回复我的（回复我任何帖/评论的），非我评论别人的
+  const myPostIdSet = new Set(d.posts.filter((p) => p.authorKey === 'user').map((p) => p.id));
+  const repliesToMe = d.posts
+    .filter((p) => p.authorKey !== 'user' && p.replyTo !== null && myPostIdSet.has(p.replyTo))
+    .sort((x, y) => y.createdAt - x.createdAt);
   const joined = new Date(d.joinedAt);
   const joinedLabel = `${joined.getFullYear()}年${joined.getMonth() + 1}月加入`;
+  const myBanner = isMe ? d.profile?.banner : undefined;
   const bannerBg = a.npcAvatar?.bg ?? (a.key.startsWith('char:') ? '#5b7d9e' : '#657786');
-  const followingCount = isMe ? d.following.length : 3 + (all.length > 3 ? 2 : 0);
+  const followingCount = isMe ? myFollowingCount(d) : 3 + (all.length > 3 ? 2 : 0);
 
   /** 当前 tab 的列表内容 */
   const list = ownPosts.map((p) => (
     <PostCard key={p.id} post={p} onOpen={() => f.openThread(p.id)} />
   ));
-  const repliesList = replyPosts.map((p) => (
+  const repliesList = (isMe ? repliesToMe : replyPosts).map((p) => (
     <PostCard key={p.id} post={p} onOpen={() => f.openThread(p.id)} />
   ));
+
+  /** 横幅快捷上传（仅自己）：选图 → 3:1 裁剪 → 直接落库 */
+  const onBannerQuickUpload = (file: File | undefined) => {
+    if (!file) return;
+    fileToBannerDataUrl(file)
+      .then((dataUrl) => {
+        saveForumProfile({ banner: dataUrl });
+        f.toast('背景图已更新');
+      })
+      .catch(() => f.toast('图片处理失败，换一张试试'));
+  };
 
   const toggleFollow = () => {
     const nd = forumData();
@@ -114,12 +138,24 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* 横幅（150px，X 官方比例） */}
+        {/* 横幅（150px，X 官方比例；自己可上传手机相册图片作背景） */}
         <div
-          aria-hidden="true"
-          className="h-[150px] w-full"
-          style={{ background: `linear-gradient(135deg, ${bannerBg}, ${t.dark ? '#1b2733' : '#c9d6e2'})` }}
-        />
+          className="relative h-[150px] w-full shrink-0 overflow-hidden"
+          style={myBanner ? undefined : { background: `linear-gradient(135deg, ${bannerBg}, ${t.dark ? '#1b2733' : '#c9d6e2'})` }}
+        >
+          {myBanner && <img src={myBanner} alt="主页背景图" className="h-full w-full object-cover" />}
+          {isMe && (
+            <button
+              type="button"
+              onClick={() => bannerInputRef.current?.click()}
+              className="absolute right-3 top-3 flex h-[30px] items-center gap-1.5 rounded-full bg-black/50 px-3 text-[12px] font-semibold text-white backdrop-blur-sm transition-opacity active:opacity-70"
+              style={{ color: '#fff' }}
+            >
+              <Camera width={14} height={14} strokeWidth={2} aria-hidden="true" />
+              {myBanner ? '更换背景' : '上传背景'}
+            </button>
+          )}
+        </div>
         {/* 头像 + 操作排（X：80px 半嵌横幅，4px 底色描边） */}
         <div className="px-4">
           <div className="-mt-[40px] flex items-end justify-between">
@@ -131,7 +167,7 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
                 <button
                   type="button"
                   aria-label="编辑资料"
-                  onClick={() => f.toast('头像与名字跟随「主题 App › 专属资料」自动同步')}
+                  onClick={() => setEditing(true)}
                   className="flex h-[34px] items-center rounded-full border px-4 text-[14px] font-bold transition-opacity active:opacity-60"
                   style={{ borderColor: t.dark ? '#536471' : '#cfd9de', color: t.text }}
                 >
@@ -254,10 +290,16 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
               <EmptyState text={isMe ? '还没有发过帖子，点右下角蓝色按钮发一条吧' : 'TA 还没有发过帖子'} />
             ))}
           {pTab === 'replies' &&
-            (replyPosts.length ? (
+            (repliesList.length ? (
               repliesList
             ) : (
-              <EmptyState text={isMe ? '还没有回复过别人，去帖子里聊聊' : 'TA 还没有回复过别人'} />
+              <EmptyState
+                text={
+                  isMe
+                    ? '别人回复你的内容会出现在这里，多发帖和大家聊聊吧'
+                    : 'TA 还没有回复过别人'
+                }
+              />
             ))}
           {pTab === 'reposts' && <EmptyState text={isMe ? '转推过的帖子会出现在这里' : 'TA 还没有转推'} />}
           {pTab === 'media' && <EmptyState text={isMe ? '帖子附带的图片会出现在这里' : 'TA 还没有媒体内容'} />}
@@ -266,6 +308,23 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
           </p>
         </div>
       </div>
+
+      {/* 隐藏文件选择器（横幅快捷上传，仅自己） */}
+      {isMe && (
+        <input
+          ref={bannerInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            onBannerQuickUpload(e.target.files?.[0]);
+            e.currentTarget.value = '';
+          }}
+        />
+      )}
+
+      {/* 编辑资料弹层 */}
+      {editing && <EditProfileSheet onClose={() => setEditing(false)} />}
     </div>
   );
 }

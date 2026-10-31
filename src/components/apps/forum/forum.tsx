@@ -7,7 +7,8 @@
  *   下方独立 tab 行「为你推荐|关注|分类标签…」（左对齐 + 蓝色圆头下划线，可横滑）+
  *   右侧 + 号（添加/管理分类标签，勾选后作为附加 tab 筛选版块帖子）；
  *   sticky backdrop-blur 半透明（X header 观感）。
- * - 底部 5 tab（X 图标底栏，无文字标签）：主页/搜索/社区/通知/私信，选中品牌蓝实心、未选灰。
+ * - 底部 5 tab（X 图标底栏，无文字标签）：主页/搜索/社区/通知/私信，
+ *   选中黑实心（深色模式白，X 官方行为）、未选灰。
  * - 右下蓝色发布 FAB（X 圆形 #1d9bf0 + 白色编辑笔）。
  * - 页面栈：thread / profile / community / dm 整页层从右滑入（X push 观感），返回即 pop；
  *   主 tab 层保持挂载（返回后 feed 滚动位置不丢）。
@@ -24,6 +25,7 @@ import {
   forumData,
   forumSnapshot,
   followersOf,
+  myFollowingCount,
   refreshForumAuthors,
   resolveAuthor,
   saveForum,
@@ -330,7 +332,7 @@ export default function ForumApp() {
           )}
         </div>
 
-        {/* 底部 5 tab（X：纯图标无标签，选中品牌蓝实心） */}
+        {/* 底部 5 tab（X：纯图标无标签，选中黑实心/深色模式白，未选灰） */}
         <nav
           aria-label="论坛主导航"
           className="flex shrink-0 items-stretch justify-around border-t pb-[16px]"
@@ -338,7 +340,8 @@ export default function ForumApp() {
         >
           {TABS.map((k) => {
             const active = tab === k && views.length === 0;
-            const color = active ? t.blue : t.secondary;
+            // X 官方底栏：选中 = 正文色实心（浅色黑/深色白），未选 = 灰
+            const color = active ? t.text : t.secondary;
             const icon =
               k === 'home' ? (
                 XIcons.home(active)
@@ -425,7 +428,7 @@ export default function ForumApp() {
                       @{resolveAuthor('user').handle}
                     </span>
                     <span className="mt-[2px] block text-[13px]" style={{ color: t.secondary }}>
-                      <span style={{ color: t.text, fontWeight: 700 }}>{d.following.length}</span> 关注 ·{' '}
+                      <span style={{ color: t.text, fontWeight: 700 }}>{myFollowingCount(d)}</span> 关注 ·{' '}
                       <span style={{ color: t.text, fontWeight: 700 }}>{followersOf('user')}</span> 粉丝
                     </span>
                   </div>

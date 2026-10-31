@@ -104,9 +104,29 @@ export interface ForumData {
   likesByMe: Record<string, true>;
   /** 主页顶部分类标签（版块 id 列表，显示为「为你推荐|关注」后的附加 tab） */
   pinnedTags?: string[];
+  /** 论坛内自定义资料（编辑资料后生效；未编辑字段跟随全局机主资料） */
+  profile?: ForumProfile;
   seeded: boolean;
   lastGenAt: number;
   joinedAt: number;
+}
+
+/** 论坛个人资料自定义（槽位隔离语义，与微信/QQ 头像三入口同口径）：
+ *  每个字段未设置（undefined/null/空串）→ 跟随全局（设置›个人信息/联系人机主）；
+ *  设置过后 → 论坛内优先使用这里的值，不再随全局变化。 */
+export interface ForumProfile {
+  /** 自定义名字（空 = 跟随全局机主名） */
+  name?: string;
+  /** 自定义头像 dataURL（空 = 跟随全局头像；全局也没有 → XAvatar 默认头像图） */
+  avatar?: string | null;
+  /** 自定义简介（空 = 「X论坛用户」） */
+  bio?: string;
+  /** 主页背景图 dataURL（从手机上传，居中裁剪 3:1） */
+  banner?: string | null;
+  /** 自定义「正在关注」展示数（undefined = 真实关注数） */
+  followingCount?: number;
+  /** 自定义「关注者」展示数（undefined = 默认公式值） */
+  followersCount?: number;
 }
 
 // ---------------- 内置数据（NPC / 版块 / 官方账号） ----------------
@@ -490,15 +510,18 @@ export function forumContactsSnap(): ContactRecord[] {
   return contactsSnap;
 }
 
-/** 按 key 解析作者（含 user/official/NPC/char）；未知 key 给占位 */
+/** 按 key 解析作者（含 user/official/NPC/char）；未知 key 给占位。
+ *  user：论坛内自定义资料（name/avatar/bio）优先，未自定义跟随全局机主资料。 */
 export function resolveAuthor(key: AuthorKey): ForumAuthor {
   if (key === 'user') {
+    const fp = forumData().profile;
+    const name = fp?.name?.trim() || ownerName || '我';
     return {
       key,
-      name: ownerName || '我',
-      handle: (ownerName || 'me').replace(/\s+/g, '') || 'me',
-      avatar: ownerAvatar,
-      bio: 'X论坛用户',
+      name,
+      handle: name.replace(/\s+/g, '') || 'me',
+      avatar: fp?.avatar ?? ownerAvatar,
+      bio: fp?.bio?.trim() || 'X论坛用户',
     };
   }
   if (key === 'official') return OFFICIAL_AUTHOR;
@@ -536,13 +559,37 @@ export function resolveAuthor(key: AuthorKey): ForumAuthor {
   return { key, name: '论坛用户', handle: 'user_unknown', avatar: null };
 }
 
-/** 粉丝数展示值（user/char = 好友+NPC 混合的基础值；NPC = 基础值） */
+/** 粉丝数展示值（user/char = 好友+NPC 混合的基础值；NPC = 基础值）。
+ *  user 自定义过「关注者」数时优先展示自定义值。 */
 export function followersOf(key: AuthorKey): number {
+  if (key === 'user') {
+    const fc = forumData().profile?.followersCount;
+    if (typeof fc === 'number' && fc >= 0) return Math.floor(fc);
+  }
   const a = resolveAuthor(key);
   if (typeof a.baseFollowers === 'number') return a.baseFollowers;
   if (key === 'user') return 320 + contactsSnap.length * 180;
   if (key.startsWith('char:')) return 980;
   return 1024;
+}
+
+/** 我的「正在关注」展示数（自定义优先，否则真实关注数） */
+export function myFollowingCount(d: ForumData): number {
+  const fc = d.profile?.followingCount;
+  if (typeof fc === 'number' && fc >= 0) return Math.floor(fc);
+  return d.following.length;
+}
+
+/** 保存论坛内自定义资料（局部合并；某字段传 undefined 即清除该字段、恢复跟随全局） */
+export function saveForumProfile(patch: Partial<ForumProfile>): void {
+  const d = forumData();
+  d.profile = { ...(d.profile ?? {}), ...patch };
+  saveForum({ ...d });
+}
+
+/** 全局机主资料快照（编辑资料页 placeholder/预览用：展示「未自定义时」的取值） */
+export function ownerGlobalProfile(): { name: string; avatar: string | null } {
+  return { name: ownerName || '我', avatar: ownerAvatar };
 }
 
 // ---------------- 工具 ----------------

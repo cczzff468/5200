@@ -7,7 +7,8 @@
  *   浅色 白底/#0f1419 正文/#536471 次要/#eff3f4 分隔线；深色 纯黑底/#e7e9ea 正文/
  *   #71767b 次要/#2f3336 分隔线（X 深色即纯黑，与手机深色主题天然契合）。
  * - 图标 lucide 线条（strokeWidth 1.9），选中态实心填充（X 底栏行为：选中黑、未选灰）。
- * - 头像：dataURL 直出；NPC 彩底首字圆；缺省灰色剪影（X 默认头像观感）。
+ * - 头像：dataURL 直出；NPC 彩底首字圆；缺省用用户指定的默认头像图
+ *   （public/forum-default-avatar.jpg，极简灰蓝风）。
  * - 认证徽章：蓝圆白勾（X 2023 版认证样式）。
  */
 
@@ -187,12 +188,14 @@ export function XAvatar({
       </span>
     );
   } else {
-    // X 默认头像：浅灰圆 + 灰剪影
+    // 默认头像：用户指定的极简灰蓝头像图（无自定义/全局头像时使用）
     inner = (
-      <svg viewBox="0 0 24 24" fill="#cfd9de" style={{ width: size * 0.6, height: size * 0.6 }} aria-hidden="true">
-        <circle cx="12" cy="8.2" r="4.3" />
-        <path d="M12 14.1c-4.7 0-8.1 2.7-8.1 6.3 0 .9.7 1.6 1.6 1.6h13c.9 0 1.6-.7 1.6-1.6 0-3.6-3.4-6.3-8.1-6.3z" />
-      </svg>
+      <img
+        src="/forum-default-avatar.jpg"
+        alt={a.name}
+        draggable={false}
+        className="h-full w-full select-none object-cover"
+      />
     );
   }
   const cls = 'shrink-0 select-none overflow-hidden rounded-full bg-black/[0.03] dark:bg-white/[0.06]';
