@@ -1,14 +1,15 @@
 'use client';
 
 /**
- * X论坛 · 帖子详情页（X thread + 微信式嵌套评论）。
+ * X论坛 · 帖子详情页（X thread，评论流按用户参考图 1:1 精修）。
  * 顶栏：返回 + 「帖子」；主帖 48px 头像 / 名行右侧「关注」黑胶囊；
  * 官方元数据行「H:mm · 年月日 · N 次浏览」+ 蓝色「翻译」按钮
  * （X 官方行为：译文原位替换正文展示，下方标注「由 AI 翻译」，
  * 按钮可在 查看原文/查看译文 间切换）；
  * 互动栏（回复/转推/书签/分享/点赞，爱心置最右，带数字）+ 分隔线下接评论流；
- * 评论流为微信式嵌套：顶层评论（头像+名字+内容+回复/赞），
- * 子回复同样带头像+名字+时间+回复/爱心（与顶层评论一致的完整样式）；
+ * 评论流按参考图：头像 + 名字(bold) + @账号 · 时间(灰) + 右侧「···」，
+ * 子回复带「回复 @xx」蓝字行，操作行为六个空心线性图标
+ * （回复/转推/爱心/浏览/书签/分享，图标+数字）；头像右缘细竖线贯穿到子回复；
  * 底部回复输入条（头像 + input + 蓝色发送圆钮），
  * 点击评论/子回复即定向回复（显示「回复 @xx」提示条，可取消）。
  */
@@ -45,6 +46,7 @@ function ThreadAction({
   hoverBg,
   onClick,
   label,
+  size = 'md',
 }: {
   icon: React.ReactNode;
   count?: number;
@@ -53,13 +55,16 @@ function ThreadAction({
   hoverBg: string;
   onClick?: () => void;
   label: string;
+  size?: 'md' | 'sm';
 }) {
   return (
     <button
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="flex items-center gap-[3px] rounded-full p-[6px] transition-colors active:opacity-60"
+      className={`flex items-center gap-[3px] rounded-full transition-colors active:opacity-60 ${
+        size === 'sm' ? 'p-[4px]' : 'p-[6px]'
+      }`}
       style={{ color }}
       onMouseEnter={(e) => {
         e.currentTarget.style.color = hoverColor;
@@ -72,15 +77,161 @@ function ThreadAction({
     >
       {icon}
       {typeof count === 'number' && count > 0 && (
-        <span className="pr-[3px] text-[14px] leading-none">{countShort(count)}</span>
+        <span className={`pr-[3px] leading-none ${size === 'sm' ? 'text-[12px]' : 'text-[14px]'}`}>
+          {countShort(count)}
+        </span>
       )}
     </button>
   );
 }
 
-/** 微信式嵌套评论行：顶层评论 = 头像 + 蓝名 + 内容 + （回复/赞）；
- *  子回复同样带头像 + 蓝名 + 时间 + 内容 + （回复/赞），收在灰色圆角盒里
- *  （与顶层评论一致的完整样式，用户要求子回复也显示头像名字爱心）。
+/** 评论操作行（参考图规格）：回复/转推/爱心/浏览/书签/分享 六个空心线性图标
+ *  （未激活灰色；爱心激活粉色实心、转推激活绿色），图标+数字，悬停浅色圆底。 */
+function CommentActions({
+  post,
+  subCount,
+  compact,
+  onReplyClick,
+}: {
+  post: ForumPost;
+  subCount: number;
+  compact?: boolean;
+  onReplyClick: () => void;
+}) {
+  const f = useForum();
+  const t = f.t;
+  const liked = post.likes.includes('user');
+  const reposted = post.reposted === true;
+  const iconSize = compact ? 15 : 16;
+  const size = compact ? 'sm' : 'md';
+  const a = resolveAuthor(post.authorKey);
+  const [bookmarked, setBookmarked] = useState(false);
+  return (
+    <div
+      className={`mt-1.5 flex items-center ${compact ? 'gap-[2px] pr-4' : 'justify-between pr-6'}`}
+      style={{ maxWidth: compact ? 340 : 430 }}
+    >
+      <ThreadAction
+        icon={XIcons.reply(iconSize)}
+        count={subCount}
+        label="回复"
+        size={size}
+        color={t.secondary}
+        hoverColor={t.blue}
+        hoverBg="rgba(29,155,240,0.12)"
+        onClick={onReplyClick}
+      />
+      <ThreadAction
+        icon={XIcons.repost(iconSize)}
+        count={post.reposts}
+        label={reposted ? '撤销转推' : '转推'}
+        size={size}
+        color={reposted ? t.green : t.secondary}
+        hoverColor={t.green}
+        hoverBg="rgba(0,186,124,0.12)"
+        onClick={() => f.repostToggle(post.id)}
+      />
+      <ThreadAction
+        icon={XIcons.like(liked, iconSize)}
+        count={post.likes.length}
+        label={liked ? '取消点赞' : '点赞'}
+        size={size}
+        color={liked ? t.pink : t.secondary}
+        hoverColor={t.pink}
+        hoverBg="rgba(249,24,128,0.12)"
+        onClick={() => f.likeToggle(post.id)}
+      />
+      <ThreadAction
+        icon={XIcons.views(iconSize)}
+        count={post.views}
+        label="浏览量"
+        size={size}
+        color={t.secondary}
+        hoverColor={t.blue}
+        hoverBg="rgba(29,155,240,0.12)"
+        onClick={() => f.toast(`这条回复已有 ${countShort(post.views)} 次浏览`)}
+      />
+      <ThreadAction
+        icon={XIcons.bookmark(bookmarked, iconSize)}
+        label={bookmarked ? '移除书签' : '添加书签'}
+        size={size}
+        color={bookmarked ? t.blue : t.secondary}
+        hoverColor={t.blue}
+        hoverBg="rgba(29,155,240,0.12)"
+        onClick={() => {
+          setBookmarked(!bookmarked);
+          f.toast(bookmarked ? '已移除书签' : '已添加到书签');
+        }}
+      />
+      <ThreadAction
+        icon={XIcons.share(iconSize)}
+        label="分享"
+        size={size}
+        color={t.secondary}
+        hoverColor={t.blue}
+        hoverBg="rgba(29,155,240,0.12)"
+        onClick={() => {
+          try {
+            void navigator.clipboard?.writeText(`https://x.com/${a.handle}/status/${post.id}`);
+          } catch {
+            /* 剪贴板不可用无妨 */
+          }
+          f.toast('链接已复制');
+        }}
+      />
+    </div>
+  );
+}
+
+/** 评论名行（参考图规格）：名字(bold 黑) + 认证 + @账号 · 时间(灰) + 最右「···」 */
+function CommentNameRow({
+  authorKey,
+  createdAt,
+  onMore,
+  nameMax,
+}: {
+  authorKey: string;
+  createdAt: number;
+  onMore: () => void;
+  nameMax: number;
+}) {
+  const f = useForum();
+  const t = f.t;
+  const a = resolveAuthor(authorKey);
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => f.openProfile(authorKey)}
+        className="shrink truncate text-[15px] font-bold"
+        style={{ color: t.text, maxWidth: nameMax }}
+      >
+        {a.name}
+      </button>
+      {a.verified && <VerifiedBadge size={14} />}
+      <span className="truncate text-[14px]" style={{ color: t.secondary }}>
+        @{a.handle} · {relTime(createdAt)}
+      </span>
+      <button
+        type="button"
+        aria-label="更多"
+        onClick={(e) => {
+          e.stopPropagation();
+          onMore();
+        }}
+        className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors active:bg-black/10 dark:active:bg-white/10"
+        style={{ color: t.secondary }}
+      >
+        {XIcons.more(18)}
+      </button>
+    </div>
+  );
+}
+
+/** 顶层评论（参考图规格）：头像 44px + 头像右缘竖线贯穿到子回复 +
+ *  名行（名字bold + @账号·时间灰 + 右侧···）+ 正文 + 六图标操作行；
+ *  子回复嵌套在正文列下方：头像 36px、「回复 @xx」蓝字行，
+ *  样式与顶层一致（用户要求子回复也显示头像名字爱心）。
  *  点评论/子回复 → 定向回复（onReply 传顶层评论 id + 被回复者名字）。 */
 function CommentRow({
   comment,
@@ -95,7 +246,6 @@ function CommentRow({
   // 直算不 memo：论坛数据对象会被引擎原位变更（saveForum 浅拷贝外壳、posts 原数组），
   // useMemo 依赖 [comment.id] 在新增子回复时不会重算 → 子回复列表滞留旧值（同 profile-view 的教训）。
   const subReplies = repliesOf(forumData(), comment.id);
-  const liked = comment.likes.includes('user');
 
   return (
     <div
@@ -103,37 +253,42 @@ function CommentRow({
       style={{ borderColor: t.border }}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest('button')) return;
-        onReply(comment.id, a.name); // 微信行为：点评论即回复
+        onReply(comment.id, a.name); // X 行为：点评论即定向回复
       }}
     >
       <div className="flex gap-2.5">
-        <XAvatar authorKey={comment.authorKey} size={38} onClick={() => f.openProfile(comment.authorKey)} />
+        {/* 头像列：44px 头像 + 右缘细竖线贯穿到子回复（X 官方嵌套对话流连接线） */}
+        <div className="flex shrink-0 flex-col items-center">
+          <XAvatar authorKey={comment.authorKey} size={44} onClick={() => f.openProfile(comment.authorKey)} />
+          {subReplies.length > 0 && (
+            <span className="mt-1 w-[2px] flex-1" style={{ background: t.border }} aria-hidden="true" />
+          )}
+        </div>
         <div className="min-w-0 flex-1">
-          {/* 名行：蓝名 + 时间 */}
-          <p className="flex items-baseline gap-2">
-            <button
-              type="button"
-              onClick={() => f.openProfile(comment.authorKey)}
-              className="max-w-[160px] truncate text-[15px] font-bold"
-              style={{ color: t.blue }}
-            >
-              {a.name}
-            </button>
-            <span className="shrink-0 text-[12px]" style={{ color: t.secondary }}>
-              {relTime(comment.createdAt)}
-            </span>
-          </p>
+          {/* 名行：名字(bold) + @账号 · 时间(灰) + 最右「···」 */}
+          <CommentNameRow
+            authorKey={comment.authorKey}
+            createdAt={comment.createdAt}
+            onMore={() => f.openPostMenu(comment)}
+            nameMax={110}
+          />
           {/* 评论正文 */}
           <p className="mt-[2px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]" style={{ color: t.text }}>
             {comment.content}
           </p>
-          {/* 子回复（微信式嵌套：灰盒内每条子回复也是 头像+名字+时间+内容+回复/爱心 完整样式） */}
+          {/* 操作行：回复/转推/爱心/浏览/书签/分享（空心线性图标 + 数字） */}
+          <CommentActions
+            post={comment}
+            subCount={subReplies.length}
+            onReplyClick={() => onReply(comment.id, a.name)}
+          />
+          {/* 子回复：头像+名行+「回复 @xx」蓝字+正文+小操作行（与顶层一致的完整样式） */}
           {subReplies.length > 0 && (
-            <div className="mt-2 rounded-xl px-3 py-1" style={{ background: t.dark ? '#202327' : '#f7f9f9' }}>
+            <div className="mt-2 flex flex-col">
               {subReplies.map((s) => {
                 const sa = resolveAuthor(s.authorKey);
-                const sLiked = s.likes.includes('user');
                 const replying = s.replyToName && s.replyToName !== sa.name ? s.replyToName : null;
+                const sSubs = repliesOf(forumData(), s.id);
                 return (
                   <div
                     key={s.id}
@@ -150,53 +305,35 @@ function CommentRow({
                     className="cursor-pointer rounded-lg py-2 transition-colors active:opacity-60"
                   >
                     <div className="flex gap-2">
-                      <XAvatar authorKey={s.authorKey} size={28} onClick={() => f.openProfile(s.authorKey)} />
+                      <XAvatar authorKey={s.authorKey} size={36} onClick={() => f.openProfile(s.authorKey)} />
                       <div className="min-w-0 flex-1">
-                        {/* 名行：蓝名 + 时间 */}
-                        <p className="flex items-baseline gap-2">
-                          <button
-                            type="button"
-                            onClick={() => f.openProfile(s.authorKey)}
-                            className="max-w-[130px] truncate text-[14px] font-bold"
-                            style={{ color: t.blue }}
-                          >
-                            {sa.name}
-                          </button>
-                          <span className="shrink-0 text-[11px]" style={{ color: t.secondary }}>
-                            {relTime(s.createdAt)}
-                          </span>
-                        </p>
-                        {/* 被回复人提示（非顶层作者时） */}
+                        {/* 名行：名字(bold) + @账号 · 时间(灰) + 最右「···」 */}
+                        <CommentNameRow
+                          authorKey={s.authorKey}
+                          createdAt={s.createdAt}
+                          onMore={() => f.openPostMenu(s)}
+                          nameMax={90}
+                        />
+                        {/* 被回复人提示（参考图：「回复 @xx」@为品牌蓝） */}
                         {replying && (
-                          <p className="text-[12px]" style={{ color: t.secondary }}>
+                          <p className="text-[14px]" style={{ color: t.secondary }}>
                             回复 <span style={{ color: t.blue }}>@{replying}</span>
                           </p>
                         )}
                         {/* 子回复正文 */}
-                        <p className="mt-[1px] whitespace-pre-wrap break-words text-[14px] leading-[1.45]" style={{ color: t.text }}>
+                        <p
+                          className="mt-[1px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]"
+                          style={{ color: t.text }}
+                        >
                           {s.content}
                         </p>
-                        {/* 操作行：回复 / 爱心（与顶层评论一致） */}
-                        <div className="mt-1 flex items-center gap-4">
-                          <button
-                            type="button"
-                            onClick={() => onReply(comment.id, sa.name)}
-                            className="text-[12px] font-medium active:opacity-50"
-                            style={{ color: t.secondary }}
-                          >
-                            回复
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={sLiked ? '取消点赞' : '点赞'}
-                            onClick={() => f.likeToggle(s.id)}
-                            className="flex items-center gap-1 rounded-full py-[2px] text-[12px] font-medium transition-colors active:opacity-50"
-                            style={{ color: sLiked ? t.pink : t.secondary }}
-                          >
-                            {XIcons.like(sLiked, 13)}
-                            {s.likes.length > 0 && <span>{s.likes.length}</span>}
-                          </button>
-                        </div>
+                        {/* 小操作行（与顶层一致的六图标，小一号） */}
+                        <CommentActions
+                          post={s}
+                          subCount={sSubs.length}
+                          compact
+                          onReplyClick={() => onReply(comment.id, sa.name)}
+                        />
                       </div>
                     </div>
                   </div>
@@ -204,27 +341,6 @@ function CommentRow({
               })}
             </div>
           )}
-          {/* 操作行：回复 / 赞（微信式小字操作） */}
-          <div className="mt-1.5 flex items-center gap-5">
-            <button
-              type="button"
-              onClick={() => onReply(comment.id, a.name)}
-              className="text-[13px] font-medium active:opacity-50"
-              style={{ color: t.secondary }}
-            >
-              回复
-            </button>
-            <button
-              type="button"
-              aria-label={liked ? '取消点赞' : '点赞'}
-              onClick={() => f.likeToggle(comment.id)}
-              className="flex items-center gap-1 rounded-full py-[2px] text-[13px] font-medium transition-colors active:opacity-50"
-              style={{ color: liked ? t.pink : t.secondary }}
-            >
-              {XIcons.like(liked, 14)}
-              {comment.likes.length > 0 && <span>{comment.likes.length}</span>}
-            </button>
-          </div>
         </div>
       </div>
     </div>
@@ -515,13 +631,17 @@ export function ThreadView({ postId }: { postId: string }) {
           </div>
         </div>
 
-        {/* 评论流（微信式嵌套） */}
+        {/* 评论流（参考图规格：X 官方回复卡 + 嵌套连接线） */}
         {replies.length === 0 ? (
           <p className="py-10 text-center text-[14px]" style={{ color: t.secondary }}>
             还没有回复，来抢沙发
           </p>
         ) : (
-          replies.map((r) => <CommentRow key={r.id} comment={r} onReply={startReply} />)
+          <div className="border-t" style={{ borderColor: t.border }}>
+            {replies.map((r) => (
+              <CommentRow key={r.id} comment={r} onReply={startReply} />
+            ))}
+          </div>
         )}
         <p className="py-6 text-center text-[13px]" style={{ color: t.secondary }}>
           已经到底啦

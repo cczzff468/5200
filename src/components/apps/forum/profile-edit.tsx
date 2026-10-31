@@ -9,18 +9,18 @@
  * - 在这里编辑保存过 → X论坛内一直使用这里的值，不再随全局变化；
  * - 每项可单独「移除」恢复跟随全局，底部另有一键全部恢复。
  *
- * 可编辑：头像与背景图（均从手机上传；背景图居中裁剪 3:1）、名字、账号（@handle）、简介、
- * 「正在关注 / 关注者」展示数（自定义数字）。
+ * 可编辑：头像与背景图（均从手机上传；背景图居中裁剪 3:1）、名字、账号（默认 @qvq12345678）、简介。
+ * 「正在关注/关注者」已按用户要求移除编辑入口，始终跟随真实数据。
  */
 
 import { useRef, useState } from 'react';
 import { Camera, ImagePlus, RotateCcw, Trash2 } from 'lucide-react';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 import {
-  forumContactsSnap,
   forumData,
   ownerGlobalProfile,
   saveForumProfile,
+  DEFAULT_USER_HANDLE,
 } from '@/lib/forum/core';
 import { useForum } from './ctx';
 
@@ -109,23 +109,14 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
   const [bio, setBio] = useState(fp.bio ?? '');
   const [avatar, setAvatar] = useState<string | undefined>(fp.avatar ?? undefined);
   const [banner, setBanner] = useState<string | undefined>(fp.banner ?? undefined);
-  const [following, setFollowing] = useState(
-    typeof fp.followingCount === 'number' ? String(fp.followingCount) : '',
-  );
-  const [followers, setFollowers] = useState(
-    typeof fp.followersCount === 'number' ? String(fp.followersCount) : '',
-  );
   const avatarRef = useRef<HTMLInputElement | null>(null);
   const bannerRef = useRef<HTMLInputElement | null>(null);
 
   /** 头像预览：自定义 → 全局 → 默认头像图 */
   const previewAvatar = avatar ?? gp.avatar;
-  const defaultFollowers = 320 + forumContactsSnap().length * 180;
-  const hasCustom = Boolean(
-    fp.name || fp.handle || fp.bio || fp.avatar || fp.banner || fp.followingCount != null || fp.followersCount != null,
-  );
-  /** 账号预览（自动生成的跟随值）：名字去空格，@ 前缀仅展示 */
-  const handleFallback = (name.trim() || gp.name).replace(/\s+/g, '') || 'me';
+  const hasCustom = Boolean(fp.name || fp.handle || fp.bio || fp.avatar || fp.banner);
+  /** 账号默认值：@qvq12345678（用户指定，未自定义时始终用它） */
+  const handleFallback = DEFAULT_USER_HANDLE;
 
   const onAvatarFile = (file: File | undefined) => {
     if (!file) return;
@@ -147,15 +138,6 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
       .catch(() => f.toast('图片处理失败，换一张试试'));
   };
 
-  /** 空串 → undefined（跟随全局/真实值）；非负整数才生效 */
-  const parseCount = (s: string): number | undefined => {
-    const v = s.trim();
-    if (v === '') return undefined;
-    const n = Math.floor(Number(v));
-    if (!Number.isFinite(n) || n < 0) return undefined;
-    return Math.min(n, 999_999_999);
-  };
-
   /** 账号输入清洗：不允许 @ 与空白（保存时再清洗一次） */
   const onHandleChange = (v: string) => {
     setHandle(v.replace(/@+/g, '').replace(/\s+/g, '').slice(0, 20));
@@ -168,8 +150,6 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
       bio: bio.trim() || undefined,
       avatar,
       banner,
-      followingCount: parseCount(following),
-      followersCount: parseCount(followers),
     });
     f.toast('资料已保存');
     onClose();
@@ -182,8 +162,6 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
       bio: undefined,
       avatar: undefined,
       banner: undefined,
-      followingCount: undefined,
-      followersCount: undefined,
     });
     f.toast('已清除全部自定义，恢复跟随全局');
     onClose();
@@ -276,7 +254,7 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
-          {/* 名字 / 简介 / 关注数（未填跟随全局或真实值） */}
+          {/* 名字 / 简介（未填跟随全局；「正在关注/关注者」已按用户要求移除，跟随真实数据） */}
           <Field
             label="名字"
             value={name}
@@ -289,12 +267,12 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
             label="账号"
             value={handle}
             onChange={onHandleChange}
-            placeholder={`跟随名字自动生成（@${handleFallback}）`}
+            placeholder={`默认 @${handleFallback}，可自定义`}
             maxLength={20}
             ariaLabel="自定义账号"
           />
           <p className="px-4 pt-1.5 text-[12px]" style={{ color: t.secondary }}>
-            账号是你在X论坛的唯一标识，仅限字母、数字、下划线或中文，不能包含 @ 或空格。
+            账号是你在X论坛的唯一标识，默认 @{handleFallback}，仅限字母、数字、下划线或中文，不能包含 @ 或空格。
           </p>
           <Field
             label="简介"
@@ -303,24 +281,6 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
             placeholder="X论坛用户"
             maxLength={60}
             ariaLabel="自定义简介"
-          />
-          <Field
-            label="正在关注（展示数）"
-            value={following}
-            onChange={setFollowing}
-            placeholder={`跟随真实关注（当前 ${d.following.length}）`}
-            inputMode="numeric"
-            maxLength={9}
-            ariaLabel="自定义正在关注展示数"
-          />
-          <Field
-            label="关注者（展示数）"
-            value={followers}
-            onChange={setFollowers}
-            placeholder={`跟随默认（当前 ${defaultFollowers.toLocaleString()}）`}
-            inputMode="numeric"
-            maxLength={9}
-            ariaLabel="自定义关注者展示数"
           />
 
           <p className="px-4 pt-4 text-[12px] leading-relaxed" style={{ color: t.secondary }}>

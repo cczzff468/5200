@@ -130,11 +130,12 @@ export interface ForumData {
 
 /** 论坛个人资料自定义（槽位隔离语义，与微信/QQ 头像三入口同口径）：
  *  每个字段未设置（undefined/null/空串）→ 跟随全局（设置›个人信息/联系人机主）；
- *  设置过后 → 论坛内优先使用这里的值，不再随全局变化。 */
+ *  设置过后 → 论坛内优先使用这里的值，不再随全局变化。
+ *  「正在关注/关注者」展示数已按用户要求改为始终跟随真实数据，不再提供自定义。 */
 export interface ForumProfile {
   /** 自定义名字（空 = 跟随全局机主名） */
   name?: string;
-  /** 自定义账号 handle（不带 @；空 = 由名字自动生成） */
+  /** 自定义账号 handle（不带 @；空 = 默认 qvq12345678） */
   handle?: string;
   /** 自定义头像 dataURL（空 = 跟随全局头像；全局也没有 → XAvatar 默认头像图） */
   avatar?: string | null;
@@ -142,10 +143,6 @@ export interface ForumProfile {
   bio?: string;
   /** 主页背景图 dataURL（从手机上传，居中裁剪 3:1） */
   banner?: string | null;
-  /** 自定义「正在关注」展示数（undefined = 真实关注数） */
-  followingCount?: number;
-  /** 自定义「关注者」展示数（undefined = 默认公式值） */
-  followersCount?: number;
 }
 
 // ---------------- 内置数据（NPC / 版块 / 官方账号） ----------------
@@ -346,7 +343,7 @@ export const NPC_DEFS: {
     persona: '追星女孩糖糖，语气活泼带波浪号，聊起偶像两眼放光，但坚决理智追星，反代拍反私生，主张喜欢是成为更好的自己。',
     pool: [
       '今天的演唱会唱到那首歌的时候，全场手机灯亮起来的瞬间我又哭了。八年了，还是会被同一个瞬间击中呀～#下班后的生活#',
-      '姐妹们理智追星三件套：不打投对赌、不买代拍图、不蹲酒店。喜欢他的方式，是先过好自己的生活呀～#下班后的生活#',
+      '姐妹们理智追星三件套：理性消费、不买代拍图、不蹲酒店。最好的喜欢，是把自己先过好～#下班后的生活#',
       '今天新歌上线，单曲循环第 38 遍，室友已经会背了。她说她不是粉，她只是被迫营业。#下班后的生活#',
       '有人问我追星图什么。图他唱到那句时我正好在场的那个瞬间呀。那个瞬间是我的，谁也拿不走～#下班后的生活#',
       '今日份感慨：因为他开始学剪辑，现在居然接了小单子。最好的追星，是两个人都在变好。#下班后的生活#',
@@ -541,13 +538,37 @@ function sanitizeHandle(raw: string): string {
   return raw.replace(/@+/g, '').replace(/\s+/g, '').slice(0, 20);
 }
 
+/** 机主默认账号（用户指定）：未自定义时始终显示 @qvq12345678 */
+export const DEFAULT_USER_HANDLE = 'qvq12345678';
+
+/** 由作者 key 确定性生成「字母+数字」随机账号（同 key 永远同值，刷新不变）。
+ *  用户要求：除机主外其他作者的账号随机来（字母+数字，形如 kiko4820）。 */
+export function randomHandle(key: string): string {
+  // FNV-1a 播种 + LCG 伪随机（纯函数：同一 key 每次算出同一 handle）
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) h = (h ^ key.charCodeAt(i)) * 16777619;
+  h = h >>> 0;
+  const next = () => {
+    h = (Math.imul(h, 1103515245) + 12345) >>> 0;
+    return h / 4294967296;
+  };
+  const letters = 'abcdefghijkmnpqrstuvwxyz';
+  const L = 4 + Math.floor(next() * 3); // 4~6 位字母
+  let s = '';
+  for (let i = 0; i < L; i++) s += letters[Math.floor(next() * letters.length)];
+  const D = 3 + Math.floor(next() * 4); // 3~6 位数字
+  const num = String(Math.floor(next() * Math.pow(10, D))).padStart(D, '0');
+  return s + num.slice(0, D);
+}
+
 /** 按 key 解析作者（含 user/official/NPC/char）；未知 key 给占位。
  *  user：论坛内自定义资料（name/handle/avatar/bio）优先，未自定义跟随全局机主资料。 */
 export function resolveAuthor(key: AuthorKey): ForumAuthor {
   if (key === 'user') {
     const fp = forumData().profile;
     const name = fp?.name?.trim() || ownerName || '我';
-    const handle = sanitizeHandle(fp?.handle ?? '') || name.replace(/\s+/g, '') || 'me';
+    // 账号默认 @qvq12345678（用户指定）；自定义后用自定义值
+    const handle = sanitizeHandle(fp?.handle ?? '') || DEFAULT_USER_HANDLE;
     return {
       key,
       name,
@@ -556,14 +577,18 @@ export function resolveAuthor(key: AuthorKey): ForumAuthor {
       bio: fp?.bio?.trim() || 'X论坛用户',
     };
   }
-  if (key === 'official') return OFFICIAL_AUTHOR;
+  if (key === 'official') {
+    // 官方小助手也用随机字母+数字账号（用户要求：除机主外其他账号都随机）
+    return { ...OFFICIAL_AUTHOR, handle: randomHandle('official') };
+  }
   if (key.startsWith('npc:')) {
     const def = NPC_DEFS.find((n) => `npc:${n.id}` === key);
     if (def) {
       return {
         key,
         name: def.name,
-        handle: def.handle,
+        // 随机字母+数字账号（用户要求；不再用固定英文 handle）
+        handle: randomHandle(key),
         avatar: null,
         npcAvatar: { bg: def.bg, ch: def.name.slice(0, 1) },
         verified: def.verified,
@@ -581,23 +606,19 @@ export function resolveAuthor(key: AuthorKey): ForumAuthor {
       return {
         key,
         name,
-        handle: name.replace(/\s+/g, '') || c.id.slice(0, 6),
+        handle: randomHandle(key),
         avatar: c.avatar || null,
         bio: [c.occupation, c.region, c.persona].filter(Boolean).join(' · ').slice(0, 60) || 'X论坛用户',
         persona: [c.persona, c.background, c.expressStyle].filter(Boolean).join('；'),
       };
     }
   }
-  return { key, name: '论坛用户', handle: 'user_unknown', avatar: null };
+  return { key, name: '论坛用户', handle: randomHandle(key || 'unknown'), avatar: null };
 }
 
-/** 粉丝数展示值（user/char = 好友+NPC 混合的基础值；NPC = 基础值）。
- *  user 自定义过「关注者」数时优先展示自定义值。 */
+/** 粉丝数展示值（NPC = 基础值；user/char = 公式值）。
+ *  「关注者」自定义已按用户要求移除：始终跟随真实（公式）值。 */
 export function followersOf(key: AuthorKey): number {
-  if (key === 'user') {
-    const fc = forumData().profile?.followersCount;
-    if (typeof fc === 'number' && fc >= 0) return Math.floor(fc);
-  }
   const a = resolveAuthor(key);
   if (typeof a.baseFollowers === 'number') return a.baseFollowers;
   if (key === 'user') return 320 + contactsSnap.length * 180;
@@ -605,17 +626,19 @@ export function followersOf(key: AuthorKey): number {
   return 1024;
 }
 
-/** 我的「正在关注」展示数（自定义优先，否则真实关注数） */
+/** 我的「正在关注」展示数（始终跟随真实关注数，用户要求移除自定义） */
 export function myFollowingCount(d: ForumData): number {
-  const fc = d.profile?.followingCount;
-  if (typeof fc === 'number' && fc >= 0) return Math.floor(fc);
   return d.following.length;
 }
 
-/** 保存论坛内自定义资料（局部合并；某字段传 undefined 即清除该字段、恢复跟随全局） */
+/** 保存论坛内自定义资料（局部合并；某字段传 undefined 即清除该字段、恢复跟随全局）。
+ *  兼容清理：旧版本存过的「正在关注/关注者」自定义数一并移除（已改为跟随真实数据）。 */
 export function saveForumProfile(patch: Partial<ForumProfile>): void {
   const d = forumData();
-  d.profile = { ...(d.profile ?? {}), ...patch };
+  const merged: Record<string, unknown> = { ...(d.profile ?? {}), ...patch };
+  delete merged.followingCount;
+  delete merged.followersCount;
+  d.profile = merged as ForumProfile;
   saveForum({ ...d });
 }
 

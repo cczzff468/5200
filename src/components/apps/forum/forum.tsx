@@ -501,14 +501,6 @@ export default function ForumApp() {
                         toast('论坛已重置，正在重新开张');
                       },
                     },
-                    {
-                      label: '关于X论坛',
-                      hint: 'v1.0 · 界面 1:1 复刻 X',
-                      onClick: () => {
-                        setDrawer(false);
-                        toast('X论坛 v1.0 —— 公开广场，什么都能聊');
-                      },
-                    },
                   ].map((item) => (
                     <button
                       key={item.label}
@@ -523,9 +515,6 @@ export default function ForumApp() {
                     </button>
                   ))}
                 </div>
-                <p className="py-6 text-center text-[12px]" style={{ color: t.secondary }}>
-                  于 {new Date(d.joinedAt).getMonth() + 1}月{new Date(d.joinedAt).getDate()}日 加入
-                </p>
               </div>
             </div>
           </div>

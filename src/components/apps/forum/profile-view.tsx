@@ -6,7 +6,8 @@
  *   搜索图标 = 页内搜索（过滤下方 帖子/回复/转推/媒体 四个 tab 的内容），
  *   点击后半透明标题区变为搜索输入胶囊，✕ 退出（不再跳转全局搜索 tab）。
  * 横幅 150px（背景图改在「编辑资料」里从手机上传，横幅本身无按钮）+
- * 80px 头像完整显示在横幅下方（不再半嵌，避免背景遮住头像上半部分）+
+ * 80px 头像上半部分叠在背景图上（X 官方样式：头像负边距 -40px 压在横幅上，
+ * 上半 40px 在背景图上、下半 40px 在横幅下方，头像绘制在横幅之上）+
  * 按钮排（他人：…/信封/关注黑胶囊；
  * 自己：编辑资料描边胶囊 → 编辑资料弹层，名字/账号/简介/关注数/头像/背景均可自定义）+
  * 「获得认证」浅蓝胶囊 + Joined 行 + 「N 正在关注 N 关注者」统计 + 四 tab
@@ -202,10 +203,11 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
             <img src="/forum-default-banner.svg" alt="默认背景图" className="h-full w-full object-cover" />
           ) : null}
         </div>
-        {/* 头像 + 操作排（用户要求：头像完整显示在横幅下方，
-            不再半嵌进背景，避免背景遮住头像上半部分） */}
-        <div className="px-4">
-          <div className="mt-3 flex items-end justify-between">
+        {/* 头像 + 操作排（用户要求：头像上半部分叠在背景图上——X 官方样式，
+            头像 80px 以负边距 -40px 上移，上半 40px 压在横幅之上；
+            容器需 relative z-10：横幅为定位元素，否则头像会被横幅盖住） */}
+        <div className="relative z-10 px-4">
+          <div className="-mt-[40px] flex items-end justify-between">
             <XAvatar authorKey={authorKey} size={80} />
             <div className="flex items-center gap-2">
               {isMe ? (

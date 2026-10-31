@@ -27,6 +27,7 @@ import {
   Maximize2,
   Minimize2,
   Smile,
+  Type,
   X,
 } from 'lucide-react';
 import { trendingTopics, forumData } from '@/lib/forum/core';
@@ -68,6 +69,52 @@ function schedulePresets(): { label: string; at: number }[] {
     { label: '今晚 20:00', at: tonight.getTime() },
     { label: '明天上午 9:00', at: tomorrow9.getTime() },
   ];
+}
+
+/** 文字图片渲染（用户参考图 1:1）：1080×1080 纯白底，中灰 #999997，
+ * 「iMessage HH:mm」时间戳行 + 正文同字号居中排布，大量留白；
+ * 布局取自参考图实测：时间戳中心 y≈502、正文首行中心 y≈562（中心距 60px），
+ * 多行正文自动换行（行距 53px），整块垂直居中。 */
+export function renderTextImage(text: string, when = new Date()): string {
+  const W = 1080;
+  const H = 1080;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('canvas 不可用');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+  const fs = 28;
+  const lh = 53;
+  ctx.font = `400 ${fs}px system-ui, -apple-system, 'PingFang SC', 'Segoe UI', 'Noto Sans SC', sans-serif`;
+  ctx.fillStyle = '#999997';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // 自动换行（每行宽 ≤ 960px）
+  const maxW = 960;
+  const lines: string[] = [];
+  let cur = '';
+  for (const ch of text.trim()) {
+    if (ctx.measureText(cur + ch).width > maxW && cur) {
+      lines.push(cur);
+      cur = ch;
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) lines.push(cur);
+  const n = Math.max(1, lines.length);
+  // 垂直居中布局（参考图实测：n=1 时时间戳中心 502 / 正文中心 562）
+  const blockH = 99 + (n - 1) * lh;
+  const blockTop = 536.5 - blockH / 2;
+  const stampCy = blockTop + 12.5;
+  const firstCy = stampCy + 60;
+  const hh = String(when.getHours()).padStart(2, '0');
+  const mm = String(when.getMinutes()).padStart(2, '0');
+  ctx.fillText(`iMessage ${hh}:${mm}`, W / 2, stampCy);
+  lines.forEach((ln, i) => ctx.fillText(ln, W / 2, firstCy + i * lh));
+  return canvas.toDataURL('image/png');
 }
 
 const fmtSchedule = (at: number) =>
@@ -159,7 +206,7 @@ export function ComposeSheet({
   const [location, setLocation] = useState<string | null>(null);
   const [visibleAt, setVisibleAt] = useState<number | null>(null);
   const [full, setFull] = useState(false);
-  const [sheet, setSheet] = useState<null | 'gallery' | 'emoji' | 'schedule' | 'geo' | 'gif' | 'topic'>(null);
+  const [sheet, setSheet] = useState<null | 'gallery' | 'emoji' | 'schedule' | 'geo' | 'gif' | 'topic' | 'textimg'>(null);
   const [gifQuery, setGifQuery] = useState('');
   const [gifResults, setGifResults] = useState<{ url: string; source?: string }[]>([]);
   const [gifLoading, setGifLoading] = useState(false);
@@ -167,6 +214,8 @@ export function ComposeSheet({
   const [customSchedule, setCustomSchedule] = useState('');
   /** 自定义话题输入（话题面板顶部） */
   const [customTopic, setCustomTopic] = useState('');
+  /** 文字图片输入（相册弹层第三入口） */
+  const [textImgInput, setTextImgInput] = useState('');
 
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -556,6 +605,29 @@ export function ComposeSheet({
                 <button
                   type="button"
                   onClick={() => {
+                    setTextImgInput('');
+                    setSheet('textimg');
+                  }}
+                  className="mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors active:opacity-60"
+                  style={{ background: t.hover }}
+                >
+                  <span
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                    style={{ background: 'rgba(123,79,224,0.12)', color: '#7b4fe0' }}
+                    aria-hidden="true"
+                  >
+                    <Type width={20} height={20} strokeWidth={SW} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-bold">文字图片</span>
+                    <span className="block text-[12px]" style={{ color: t.secondary }}>
+                      用文字描述生成图片：白底留白，文字居中
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setGifResults([]);
                     setGifQuery('');
                     setSheet('gif');
@@ -577,6 +649,65 @@ export function ComposeSheet({
                     </span>
                   </span>
                 </button>
+              </div>
+            )}
+
+            {/* --- 文字图片（用户参考图 1:1）：白底居中，iMessage 时间戳 + 正文 --- */}
+            {sheet === 'textimg' && (
+              <div className="px-4 pt-3">
+                <p className="pb-1 text-[15px] font-bold">文字图片</p>
+                <p className="pb-3 text-[12px]" style={{ color: t.secondary }}>
+                  用文字描述图片：生成纯白留白图，iMessage 时间戳 + 你的文字同字号居中（与参考图同款）
+                </p>
+                {/* 实时预览（与成品同布局；比例缩小的白底居中灰字卡） */}
+                <div
+                  className="mb-3 flex aspect-square items-center justify-center rounded-xl border"
+                  style={{ borderColor: t.border, background: '#ffffff' }}
+                  aria-hidden="true"
+                >
+                  <div className="px-6 text-center" style={{ color: '#999997' }}>
+                    <p style={{ fontSize: 13, lineHeight: 1 }}>
+                      iMessage {String(new Date().getHours()).padStart(2, '0')}:
+                      {String(new Date().getMinutes()).padStart(2, '0')}
+                    </p>
+                    <p className="mt-[6px] break-all" style={{ fontSize: 13, lineHeight: 1.9 }}>
+                      {textImgInput.trim() || '输入文字，生成你的文字图片'}
+                    </p>
+                  </div>
+                </div>
+                <textarea
+                  value={textImgInput}
+                  onChange={(e) => setTextImgInput(e.target.value.slice(0, 60))}
+                  rows={3}
+                  placeholder="用一句文字描述图片，如 伦敦雨季很长，长到能忘记很多人和事。"
+                  className="w-full resize-none rounded-xl px-3 py-[10px] text-[15px] outline-none"
+                  style={{ background: t.dark ? '#202327' : '#eff3f4', color: t.text, caretColor: t.blue }}
+                  aria-label="文字图片内容"
+                />
+                <div className="mt-3 flex items-center justify-between pb-1">
+                  <span className="text-[12px]" style={{ color: t.secondary }}>
+                    {textImgInput.length}/60 字，超出自动换行居中
+                  </span>
+                  <button
+                    type="button"
+                    disabled={!textImgInput.trim()}
+                    onClick={() => {
+                      try {
+                        const url = renderTextImage(textImgInput);
+                        addMedia([url]);
+                        setSheet(null);
+                        setTextImgInput('');
+                        f.toast('文字图片已生成，发布后可见');
+                      } catch {
+                        f.toast('生成失败，稍后再试');
+                      }
+                    }}
+                    className="rounded-full px-5 py-2 text-[14px] font-bold text-white transition-opacity active:opacity-70 disabled:opacity-40"
+                    style={{ background: t.blue }}
+                  >
+                    生成并添加
+                  </button>
+                </div>
               </div>
             )}
 
