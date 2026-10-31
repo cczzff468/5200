@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Check, Flag, Sparkles, EyeOff } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, Flag, Sparkles, EyeOff } from 'lucide-react';
 import {
   COMMUNITY_DEFS,
   communityName,
@@ -37,7 +37,7 @@ import {
   type ForumPost,
   POST_MAX,
 } from '@/lib/forum/core';
-import { bootForum, generateMoreFeedPosts, queueUserPostInteractions } from '@/lib/forum/engine';
+import { bootForum, generateMoreFeedPosts, generateNewFeedPosts, queueUserPostInteractions } from '@/lib/forum/engine';
 import { XAvatar, XIcons, XLogo, useXTheme } from './shared';
 import { FeedList, FeedSkeleton, CommunityIcon } from './feed';
 import { ComposeSheet, type ComposePayload } from './compose-sheet';
@@ -49,6 +49,14 @@ import { ForumCtx, type ViewSpec } from './ctx';
 
 type Tab = 'home' | 'search' | 'communities' | 'notifications' | 'dms';
 const TABS: Tab[] = ['home', 'search', 'communities', 'notifications', 'dms'];
+
+/** 过界拖拽手势（用户要求：滑到最后一个帖子不生成，继续上滑并「松开」才生成；
+ *  顶部同理：滑到最上面下拉松开生成新内容）。
+ *  原始行程达到 PULL_THRESHOLD 且松开才触发；视觉行程有阻尼（橡胶手感）。 */
+const PULL_THRESHOLD = 72;
+const PULL_RESIST = 0.6;
+const PULL_MAX_VIS = 84;
+const VIS_THRESHOLD = Math.round(PULL_THRESHOLD * PULL_RESIST);
 
 /** 动画 keyframes（推入页右滑入 / 遮罩淡入 / 抽屉左滑入） */
 const KEYFRAMES = `
@@ -70,10 +78,22 @@ export default function ForumApp() {
   const [tagPicker, setTagPicker] = useState(false);
   const [homeTab, setHomeTab] = useState<string>('foryou');
   const [toastMsg, setToastMsg] = useState<{ id: number; text: string } | null>(null);
-  /** 主页无限生成：滑到底再滑 → 生成 7~20 条新帖（loading 期间不重复触发） */
+  /** 主页无限生成（过界手势）：滑到底后继续上滑、松开 → 生成 7~20 条（追加下方，旧帖永不消失）；
+   *  滑到顶后下拉、松开 → 生成 7~20 条新内容（插入最上方）。 */
   const [moreLoading, setMoreLoading] = useState(false);
+  const [topLoading, setTopLoading] = useState(false);
+  const [pullUpPx, setPullUpPx] = useState(0);
+  const [pullDownPx, setPullDownPx] = useState(0);
+  const [pulling, setPulling] = useState(false);
   const homeScrollRef = useRef<HTMLDivElement | null>(null);
   const moreLoadingRef = useRef(false);
+  const topLoadingRef = useRef(false);
+  const gestureRef = useRef<{ mode: null | 'up' | 'down'; startY: number; lastY: number; pull: number }>({
+    mode: null,
+    startY: 0,
+    lastY: 0,
+    pull: 0,
+  });
   /** 帖子「···」底部菜单：当前操作的帖子（null = 关闭） */
   const [menuPost, setMenuPost] = useState<ForumPost | null>(null);
   /** 定时发布到期重绘 tick（30s；到点的帖子自动出现在列表顶部） */
@@ -100,25 +120,140 @@ export default function ForumApp() {
     setToastMsg({ id: Date.now(), text });
   }, []);
 
-  /** 主页滑到底（最后一个帖子附近）再滑一下 → 无限生成一批帖子（7~20 条）。
- *  生成中不重复触发；新帖时间戳更早、追加在列表下方，已生成的帖子永不消失。 */
-  const tryGenerateMore = useCallback(() => {
+  /** 底部生成（上拉松开触发 / footer 点击兜底） */
+  const doGenerateMore = useCallback(() => {
     if (moreLoadingRef.current) return;
-    const el = homeScrollRef.current;
-    if (!el) return;
-    // 距底 140px 内即触发（滑到最后一个帖子再往下滑必然命中）
-    if (el.scrollTop + el.clientHeight < el.scrollHeight - 140) return;
     moreLoadingRef.current = true;
     setMoreLoading(true);
     void generateMoreFeedPosts()
       .then((n) => {
-        if (n > 0) toast(`已为你生成 ${n} 条新帖子`);
+        if (n > 0) toast(`已为你生成 ${n} 条帖子`);
       })
       .finally(() => {
         moreLoadingRef.current = false;
         setMoreLoading(false);
       });
   }, [toast]);
+
+  /** 顶部生成（下拉松开触发）：新内容整批插入信息流最上方 */
+  const doGenerateFresh = useCallback(() => {
+    if (topLoadingRef.current) return;
+    topLoadingRef.current = true;
+    setTopLoading(true);
+    void generateNewFeedPosts()
+      .then((n) => {
+        if (n > 0) toast(`已为你生成 ${n} 条新内容`);
+      })
+      .finally(() => {
+        topLoadingRef.current = false;
+        setTopLoading(false);
+      });
+  }, [toast]);
+
+  /** 过界拖拽：按住起点（touch/mouse 通用，坐标 = clientY） */
+  const gestureBegin = useCallback((y: number) => {
+    const g = gestureRef.current;
+    g.startY = y;
+    g.lastY = y;
+    g.pull = 0;
+    g.mode = null;
+  }, []);
+
+  /** 过界拖拽移动：仅在「已贴底且继续上滑」或「已贴顶且继续下拉」时累计行程；
+   *  中途滚回边界内（模式失效）自动取消。底部展开区会撑高 scrollHeight，
+   *  边界判断需把展开高度算进余量，否则手势会被自己取消。 */
+  const gestureMove = useCallback((y: number) => {
+    const g = gestureRef.current;
+    const el = homeScrollRef.current;
+    if (!el) return;
+    if (g.mode === null) {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 12;
+      const atTop = el.scrollTop < 6;
+      if (y < g.startY - 10 && atBottom) {
+        g.mode = 'up';
+        g.lastY = y;
+        setPulling(true);
+      } else if (y > g.startY + 10 && atTop) {
+        g.mode = 'down';
+        g.lastY = y;
+        setPulling(true);
+      } else {
+        return;
+      }
+    }
+    let delta = y - g.lastY; // 手指向下为正
+    g.lastY = y;
+    if (g.mode === 'up') delta = -delta; // 上拉行程为正
+    g.pull = Math.max(0, g.pull + delta);
+    const vis = Math.min(PULL_MAX_VIS, Math.round(g.pull * PULL_RESIST));
+    if (g.mode === 'up') {
+      const diff = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (diff > 12 + vis) {
+        g.mode = null;
+        g.pull = 0;
+        setPulling(false);
+        setPullUpPx(0);
+        return;
+      }
+      setPullUpPx(vis);
+    } else {
+      if (el.scrollTop > 6) {
+        g.mode = null;
+        g.pull = 0;
+        setPulling(false);
+        setPullDownPx(0);
+        return;
+      }
+      setPullDownPx(vis);
+    }
+  }, []);
+
+  /** 松手：达到阈值才触发生成（fire=false 表示手势被打断，不触发） */
+  const gestureEnd = useCallback(
+    (fire: boolean) => {
+      const g = gestureRef.current;
+      const mode = g.mode;
+      const reached = g.pull >= PULL_THRESHOLD;
+      g.mode = null;
+      g.pull = 0;
+      setPulling(false);
+      setPullUpPx(0);
+      setPullDownPx(0);
+      if (!fire || !mode || !reached) return;
+      if (mode === 'up') doGenerateMore();
+      else doGenerateFresh();
+    },
+    [doGenerateFresh, doGenerateMore],
+  );
+
+  // 桌面/预览环境：鼠标按住拖拽同样支持过界手势（底部向上拖 / 顶部向下拖，松开触发）
+  useEffect(() => {
+    if (tab !== 'home') return;
+    const el = homeScrollRef.current;
+    if (!el) return;
+    let dragging = false;
+    const down = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      dragging = true;
+      gestureBegin(e.clientY);
+    };
+    const move = (e: MouseEvent) => {
+      if (dragging) gestureMove(e.clientY);
+    };
+    const up = () => {
+      if (!dragging) return;
+      dragging = false;
+      gestureEnd(true);
+    };
+    el.addEventListener('mousedown', down);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    return () => {
+      el.removeEventListener('mousedown', down);
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+  }, [tab, gestureBegin, gestureMove, gestureEnd]);
 
   // toast 自动消隐（1.9s）
   useEffect(() => {
@@ -295,12 +430,65 @@ export default function ForumApp() {
           <div className={views.length ? 'invisible absolute inset-0' : 'absolute inset-0'}>
             {tab === 'home' && (
               /* 主页整页滚动：顶栏+tab 行+信息流一起滚（用户要求：滑动时顶部跟随滑动）；
-                 滑到底再滑 → 无限生成 7~20 条新帖（onScroll 触发，旧帖永不消失） */
+                 过界手势：滑到底继续上滑松开 → 生成更多（追加下方，旧帖永不消失）；
+                 滑到顶继续下拉松开 → 生成新内容（插入最上方） */
               <div
                 ref={homeScrollRef}
-                onScroll={tryGenerateMore}
-                className="forum-hide-scrollbar h-full overflow-y-auto overscroll-contain"
+                data-feed-scroll=""
+                onTouchStart={(e) => gestureBegin(e.touches[0]?.clientY ?? 0)}
+                onTouchMove={(e) => {
+                  const y = e.touches[0]?.clientY;
+                  if (typeof y === 'number') gestureMove(y);
+                }}
+                onTouchEnd={() => gestureEnd(true)}
+                onTouchCancel={() => gestureEnd(false)}
+                className="forum-hide-scrollbar relative h-full overflow-y-auto overscroll-none"
               >
+                {/* 顶部下拉生成指示器（仅 scrollTop=0 下拉时可见；覆盖内容、不拦截点击） */}
+                <div className="pointer-events-none absolute inset-x-0 top-0 z-20" aria-live="polite">
+                  <div style={{ paddingTop: 54 }} />
+                  <div
+                    className="flex items-center justify-center gap-2 overflow-hidden"
+                    style={{
+                      height: topLoading ? 46 : pullDownPx,
+                      opacity: topLoading || pullDownPx > 0 ? 1 : 0,
+                      transition: pulling ? 'opacity .15s' : 'height .22s ease, opacity .22s ease',
+                    }}
+                  >
+                    {topLoading ? (
+                      <>
+                        <span
+                          className="h-[16px] w-[16px] animate-spin rounded-full border-2"
+                          style={{ borderColor: t.blue, borderTopColor: 'transparent' }}
+                          aria-hidden="true"
+                        />
+                        <span className="text-[13px]" style={{ color: t.secondary }}>
+                          正在生成新内容…
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span
+                          aria-hidden="true"
+                          className="flex transition-transform duration-150"
+                          style={{ color: t.secondary, transform: `rotate(${pullDownPx >= VIS_THRESHOLD ? 180 : 0}deg)` }}
+                        >
+                          <ArrowDown size={16} />
+                        </span>
+                        <span className="text-[13px]" style={{ color: t.secondary }}>
+                          {pullDownPx >= VIS_THRESHOLD ? '松开生成新内容' : '下拉生成新内容'}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {/* 手势下拉时内容整体下移让位（loading 期间保持 46px 空隙给指示器） */}
+                <div
+                  style={{
+                    transform: `translateY(${topLoading ? 46 : pullDownPx}px)`,
+                    transition: pulling ? 'none' : 'transform .25s ease',
+                  }}
+                >
                 {/* 顶栏（X：头像 | 𝕏 | 订阅）+ tab 行（为你推荐|关注 + +），随内容滚走，不吸附 */}
                 <div style={{ background: t.bg }}>
                   {/* 主顶栏：头像 / 𝕏 / 订阅胶囊 */}
@@ -358,30 +546,57 @@ export default function ForumApp() {
                   <FeedList
                     posts={feedPosts}
                     footer={
-                      /* 无限生成 footer：生成中转圈，平时提示上滑加载（滑到底自动触发） */
-                      <div className="flex items-center justify-center gap-2 py-6" aria-live="polite">
-                        {moreLoading ? (
-                          <>
-                            <span
-                              className="h-[16px] w-[16px] animate-spin rounded-full border-2"
-                              style={{ borderColor: t.blue, borderTopColor: 'transparent' }}
-                              aria-hidden="true"
-                            />
-                            <span className="text-[13px]" style={{ color: t.secondary }}>
-                              正在为你生成更多帖子…
-                            </span>
-                          </>
-                        ) : (
-                          <span className="text-[13px]" style={{ color: t.secondary }}>
-                            上滑加载更多帖子 · X论坛
+                      /* 底部过界手势 footer：上拉展开区（达到行程箭头翻转提示「松开」）+ 提示行（可点击，桌面兜底） */
+                      <div aria-live="polite">
+                        <div
+                          className="flex items-center justify-center gap-2 overflow-hidden"
+                          style={{
+                            height: pullUpPx,
+                            opacity: pullUpPx > 0 ? 1 : 0,
+                            transition: pulling ? 'none' : 'height .22s ease, opacity .22s ease',
+                          }}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="flex transition-transform duration-150"
+                            style={{ color: t.secondary, transform: `rotate(${pullUpPx >= VIS_THRESHOLD ? 180 : 0}deg)` }}
+                          >
+                            <ArrowUp size={16} />
                           </span>
-                        )}
+                          <span className="text-[13px]" style={{ color: t.secondary }}>
+                            {pullUpPx >= VIS_THRESHOLD ? '松开生成更多帖子' : '继续上拉加载更多'}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          aria-label="加载更多帖子"
+                          onClick={doGenerateMore}
+                          className="flex w-full items-center justify-center gap-2 py-6"
+                        >
+                          {moreLoading ? (
+                            <>
+                              <span
+                                className="h-[16px] w-[16px] animate-spin rounded-full border-2"
+                                style={{ borderColor: t.blue, borderTopColor: 'transparent' }}
+                                aria-hidden="true"
+                              />
+                              <span className="text-[13px]" style={{ color: t.secondary }}>
+                                正在为你生成更多帖子…
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-[13px]" style={{ color: t.secondary }}>
+                              上滑加载更多帖子 · X论坛
+                            </span>
+                          )}
+                        </button>
                       </div>
                     }
                   />
                 ) : (
                   <FeedSkeleton rows={7} />
                 )}
+                </div>
               </div>
             )}
             {tab === 'search' && <SearchView />}

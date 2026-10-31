@@ -118,22 +118,25 @@ export async function POST(req: Request) {
               name: typeof it.name === 'string' ? it.name.slice(0, 24) : '网友',
               persona: typeof it.persona === 'string' ? it.persona.slice(0, 300) : '',
               community: typeof it.community === 'string' ? it.community.slice(0, 16) : '今日热议',
+              topic: typeof it.topic === 'string' ? it.topic.slice(0, 16) : '',
             }))
             .filter((it) => it.persona || it.name)
         : [];
       if (!items.length) return NextResponse.json({ error: 'items 为空' }, { status: 400 });
       const expect = items.length;
       const spec = items
-        .map((it, i) => `${i + 1}. ${it.name}（人设：${it.persona || '普通论坛网友'}；发在「${it.community}」版块）`)
+        .map((it, i) => `${i + 1}. ${it.name}（人设：${it.persona || '普通论坛网友'}；主题方向：${it.topic || '娱乐热点'}；发在「${it.community}」版块）`)
         .join('\n');
       const messages: LLMMessage[] = [
         {
           role: 'system',
           content:
             '你在为一个中文论坛（风格类似 X/Twitter 的公开广场）批量生成不同网友的帖子。' +
-            '每条帖子必须严格符合该网友的人设口吻；内容是日常生活向（吐槽/感慨/分享/提问），真实自然像真人随手发的。' +
-            '可以偶尔带一个 #话题 标签（最多一个，形如 #话题名#）。禁止出现任何人设说明、编号说明以外的格式；' +
-            '每条一行，行数与作者数一致。每条 30~90 字。禁止 emoji。同一人设出现多次时，每条聊不同的事。',
+            '内容主题方向：明星八卦、影视综艺、汽车、吃瓜爆料、娱乐热点、日常吐槽——每条严格按给定的「主题方向」来写，像真实网友随手发的。' +
+            '吃瓜要有「蹲后续」「瓜保熟」「让子弹飞一会儿」的口吻；吐槽要毒舌但有道理；追剧要有发疯文学味；车友要有圈内感。' +
+            '涉及明星一律用模糊称呼（某顶流、某女星、某剧组），禁止使用真实存在的明星姓名；影视剧可用泛称（某悬疑剧、刚上映的那部）或虚构名。' +
+            '每条必须严格符合该网友的人设口吻；可以偶尔带一个 #话题 标签（最多一个，形如 #话题名#）。' +
+            '禁止出现任何人设说明、编号说明以外的格式；每条一行，行数与作者数一致。每条 30~90 字。禁止 emoji。同一人设出现多次时，每条聊不同的事。',
         },
         {
           role: 'user',
@@ -169,6 +172,7 @@ export async function POST(req: Request) {
             content:
               '你在为一个中文论坛（X/Twitter 风格广场）的帖子批量生成网友评论。' +
               '每条评论严格符合该网友的人设口吻；风格多样：有人共鸣、有人吐槽、有人接梗、有人认真讨论、有人跑题闲聊，像真实评论区。' +
+              '帖子主题多为吃瓜八卦、影视追剧、汽车、娱乐热点——评论者自然代入吃瓜群众/剧友/车友/路人的口吻即可。' +
               '每条 10~60 字，口语化，禁止 emoji 和任何格式标记。每条一行，行数与网友数一致，第 N 行对应第 N 位。',
           },
           {

@@ -26,6 +26,7 @@
 
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import {
+  COMMUNITY_DEFS,
   NPC_DEFS,
   POST_MAX,
   REPLY_MAX,
@@ -148,23 +149,40 @@ function basePost(authorKey: AuthorKey, content: string, community: string | nul
   };
 }
 
-/** NPC → 默认版块 */
+/** NPC → 默认版块（主题化：吃瓜/明星→娱乐八卦，影视→影视片单，车→汽车俱乐部，吐槽→吐槽大会） */
 function defaultCommunityFor(npcId: string): string | null {
   const map: Record<string, string> = {
-    wang: 'digital',
-    canteen: 'food',
-    kitty: 'work',
-    iron: 'fit',
-    boat: 'travel',
-    abacus: 'work',
-    kai: 'game',
+    wang: 'gossip',
+    canteen: 'gossip',
+    kitty: 'rant',
+    iron: 'car',
+    boat: 'movie',
+    abacus: 'movie',
+    kai: 'car',
+    candy: 'gossip',
+    liang: 'rant',
+    sunny: 'gossip',
+    gua: 'gossip',
+    ju: 'movie',
+    che: 'car',
+    bao: 'gossip',
   };
   const v = map[npcId];
   return v === undefined ? null : v;
 }
 
-/** 池内 #话题# → 版块 id（null = 广场/今日热议） */
+/** 池内 #话题# → 版块 id（null = 广场/今日热议）。新主题话题 + 旧话题兼容（历史帖归位） */
 const NPC_COMMUNITY_MAP: Record<string, string | null> = {
+  吃瓜现场: 'gossip',
+  热搜围观: 'gossip',
+  明星动态: 'gossip',
+  追剧日常: 'movie',
+  剧荒互助: 'movie',
+  电影短评: 'movie',
+  汽车俱乐部: 'car',
+  提车日记: 'car',
+  老司机日常: 'car',
+  今日吐槽: 'rant',
   数码圈: 'digital',
   吃货联盟: 'food',
   职场摸鱼: 'work',
@@ -263,7 +281,13 @@ async function llmPolish(): Promise<void> {
     ].slice(0, 5);
     if (!items.length) return;
     const avoid = d.posts.slice(-8).map((p) => p.content.slice(0, 60));
-    const r = (await callApi({ kind: 'posts', items: items.map(({ name, persona, community }) => ({ name, persona, community })), avoid, userName: resolveAuthor('user').name })) as { items?: string[] };
+    const topics = FEED_TOPICS.slice().sort(() => Math.random() - 0.5);
+    const r = (await callApi({
+      kind: 'posts',
+      items: items.map(({ name, persona, community }, i) => ({ name, persona, community, topic: topics[i % topics.length] })),
+      avoid,
+      userName: resolveAuthor('user').name,
+    })) as { items?: string[] };
     const texts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length > 5) : [];
     if (!texts.length) return;
     const now = Date.now();
@@ -316,9 +340,9 @@ export async function ensureFresh(): Promise<void> {
   }
 }
 
-// ---------------- 主页无限生成（滑到底 → 再来 7~20 条） ----------------
+// ---------------- 主页无限生成（底部上拉松开 / 顶部下拉松开 → 过界手势触发） ----------------
 
-let generatingMore = false;
+let feedGenerating = false;
 
 /** 通用评论池（LLM 失败时的兜底扩充：与 NPC 池合计保证任何帖子都能补满 10~30 条不重样评论；
  *  去重只在本帖内——不同帖子评论区出现相似短评很正常） */
@@ -363,34 +387,57 @@ const GENERIC_COMMENTS = [
   '这个观点我保留，但尊重',
   '细想还真是这个理',
   '先赞后看，习惯了',
+  '前排吃瓜，瓜子已备好',
+  '这瓜太大了，先马后看',
+  '蹲一个后续，别断更',
+  '车主路过，确实是这样',
+  '这剧我也在追，上头了',
+  '反转了反转了，快看最新',
+  '让子弹再飞一会儿',
+  '课代表什么时候来总结',
+  '追星女孩路过，理智看待',
+  '这瓜保熟吗',
+  '老司机看不下去了，说两句',
+  '省流：就是那么回事',
+  '已经开始二刷了，别拦我',
+  '这车我也试驾过，感觉还行',
+  '热搜挂一整天了，看疲劳了',
 ];
 
+/** 生成主题池（用户指定内容方向：八卦/明星/吐槽/车/影视/娱乐/吃瓜）——
+ *  LLM 按主题方向生成；兜底组合池同主题，保证无 LLM 也是对味内容 */
+export const FEED_TOPICS = ['明星八卦', '吃瓜现场', '影视综艺', '汽车圈', '娱乐热点', '今日吐槽'];
+
 /** 组合式帖子兜底（NPC 池耗尽 + LLM 失败时：话题×开头×正文×结尾 组合出近乎无限的帖子，
- *  保证「下滑无限生成」在任何情况下都有新内容） */
-const GEN_TOPICS = ['加班', '奶茶', '地铁通勤', '周末', '早起', '外卖', '网购', '健身', '追剧', '失眠', '旅行', '攒钱', '养猫', '下雨天', '下班路上', '搬家', '做饭', '夜跑', '读书', '体检报告'];
+ *  保证「下滑无限生成」在任何情况下都有新内容；主题与 FEED_TOPICS 同向） */
+const GEN_TOPICS = ['明星塌房', '恋情官宣', '热搜第一', '大结局烂尾', '新剧上头', '电影彩蛋', '提车第一天', '油价', '早高峰堵车', '司机加塞', '综艺名场面', '红毯造型', '剧组路透', '新车发布', '试驾感受', '二手车避坑', '追星开销', '剧荒求推', '瓜反转', '代拍乱象'];
 const GEN_MOODS = [
-  '今天聊聊{t}：',
-  '关于{t}的一点碎碎念：',
-  '又是被{t}整破防的一天。',
-  '问大家一个{t}的问题：',
-  '记录一下今天的{t}。',
-  '{t}，真的会谢。',
-  '谁能懂{t}的痛。',
-  '今日份{t}小结：',
+  '刚刷到{t}，先蹲一个后续：',
+  '关于{t}，说点个人看法：',
+  '{t}这事儿，懂的都懂。',
+  '不是，{t}都能上热搜？',
+  '{t}，建议全体围观：',
+  '一觉醒来又被{t}刷屏了。',
+  '有人聊{t}吗，在线等。',
+  '今日份{t}，瓜保熟：',
 ];
 const GEN_BODIES = [
-  '本来以为坚持不下来了，结果咬咬牙也就过去了',
-  '计划做得再漂亮，也架不住临时变卦',
-  '一开始最抗拒，后来真香的那个人就是我',
-  '省下来的钱和花掉的时间，总得占一样',
-  '坚持到第三天的时候最想放弃，第七天开始反而习惯了',
-  '别人的经验可以听，但自己的坑还得自己踩一遍才懂',
-  '嘴上说着最后一次，身体却很诚实',
-  '查了一晚上攻略，最后还是凭感觉选的',
-  '早知道这么累，当初就该多练练',
-  '其实没什么诀窍，就是别想太多，先开始再说',
+  '前排吃瓜，目前信息还很乱，先别急着站队',
+  '瓜越吃越大，反转比剧还精彩，我已经搬好小板凳了',
+  '追了三季，这个走向我直接傻眼，编剧你出来',
+  '红毯造型一出，评论区已经吵了八百楼',
+  '试驾了一圈，动力是真好，价格也是真硬',
+  '早高峰被加塞三次，血压和油门一起踩到底了',
+  '路透看着还行，正片出来之前保持冷静',
+  '官宣文案我都能背了，就等一个后续',
+  '粉丝说是状态问题，路人说是审美问题，我说都有问题',
+  '第二集开始封神，安利给所有还没看的人',
+  '剧组宣发真会玩，预告剪得比正片好看',
+  '朋友提了新车，我把副驾坐出包浆了',
+  '黄牛加价三倍，官方声明管用吗，蹲一个结果',
+  '这瓜保熟吗，先让子弹飞一会儿',
 ];
-const GEN_TAILS = ['你们呢？', '评论区聊聊。', '有没有同款经历？', '就问还有谁。', '在线等一个答案。', '不吐不快。', '越想越觉得对。', '随手一记。', '仅代表个人观点。', ''];
+const GEN_TAILS = ['评论区蹲一个真相。', '有懂哥出来讲讲吗？', '理性讨论，别吵架。', '先吃瓜，后负责。', '就问还有谁。', '懂的都懂。', '让我看看谁的DNA动了。', ''];
 
 /** 从组合池里抽一条不重复的帖子文案（used = 已用内容前缀指纹；80 次抽不到就放弃） */
 function comboPostText(used: Set<string>): string | null {
@@ -409,14 +456,83 @@ function comboPostText(used: Set<string>): string | null {
   return null;
 }
 
-/** 主页滑到最后一个帖子再滑一下 → 无限生成一批新帖子。
- *  - 一次 7~20 条（LLM 批量，设置里的 API 模型）；
+/** 批量生成一批 feed 帖子（作者池 = 主题 NPC 轮换 + 偶尔 char 好友 15%；每人带主题方向）。
+ *  LLM 批量（设置›API 模型）→ NPC 文案池补齐 → 组合式兜底，任何情况下都有内容。
+ *  used = 全局内容前缀指纹（跨调用累积去重）。 */
+async function buildFeedBatch(
+  n: number,
+  used: Set<string>,
+  avoid: string[],
+): Promise<{ key: AuthorKey; text: string }[]> {
+  const chars = forumContactsSnap().filter((c) => c.kind === 'char' && (c.persona || c.background));
+  const shuffledNpcs = NPC_DEFS.slice().sort(() => Math.random() - 0.5);
+  const topics = FEED_TOPICS.slice().sort(() => Math.random() - 0.5);
+  const specs: { key: AuthorKey; name: string; persona: string; community: string | null; topic: string }[] = [];
+  for (let i = 0; i < n; i++) {
+    const ch = chars.length && Math.random() < 0.15 ? chars[Math.floor(Math.random() * chars.length)] : null;
+    const topic = topics[i % topics.length];
+    if (ch) {
+      specs.push({
+        key: `char:${ch.id}`,
+        name: ch.nickname || ch.name,
+        persona: [ch.persona, ch.background, ch.expressStyle].filter(Boolean).join('；'),
+        community: null,
+        topic,
+      });
+    } else {
+      const nd = shuffledNpcs[i % shuffledNpcs.length];
+      specs.push({ key: `npc:${nd.id}`, name: nd.name, persona: nd.persona, community: defaultCommunityFor(nd.id), topic });
+    }
+  }
+
+  // LLM 批量生成（一次 7~20 条；失败静默走池子）
+  const results: { key: AuthorKey; text: string }[] = [];
+  try {
+    const r = (await callApi({
+      kind: 'posts',
+      items: specs.map(({ name, persona, community, topic }) => ({ name, persona, community: community ?? '今日热议', topic })),
+      avoid,
+      userName: resolveAuthor('user').name,
+    })) as { items?: string[] };
+    const texts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length > 5) : [];
+    texts.forEach((t, i) => {
+      if (used.has(t.slice(0, 20))) return;
+      used.add(t.slice(0, 20));
+      results.push({ key: specs[i]?.key ?? `npc:${NPC_DEFS[0].id}`, text: t });
+    });
+  } catch {
+    /* 走池子兜底 */
+  }
+  // NPC 文案池补齐（LLM 失败/条数不足；全局去重——同一帖子不应重复出现）
+  if (results.length < n) {
+    for (const npc of NPC_DEFS.slice().sort(() => Math.random() - 0.5)) {
+      if (results.length >= n) break;
+      for (const cand of npc.pool) {
+        if (results.length >= n) break;
+        if (used.has(cand.slice(0, 20))) continue;
+        used.add(cand.slice(0, 20));
+        results.push({ key: `npc:${npc.id}`, text: cand });
+      }
+    }
+  }
+  // NPC 池也耗尽 → 组合式生成兜底（话题×开头×正文×结尾，近乎无限，下滑永远有新帖）
+  while (results.length < n) {
+    const t = comboPostText(used);
+    if (!t) break;
+    const npc = NPC_DEFS[Math.floor(Math.random() * NPC_DEFS.length)];
+    results.push({ key: `npc:${npc.id}`, text: t });
+  }
+  return results;
+}
+
+/** 主页滑到最后一个帖子、继续上滑并松开 → 无限生成一批新帖子（过界手势触发）。
+ *  - 一次 7~20 条（LLM 批量，设置里的 API 模型，主题：八卦/明星/吐槽/车/影视/娱乐/吃瓜）；
  *  - 时间戳排在现有最老主帖之前（信息流向下无限延伸，上面已生成的帖子永不消失）；
  *  - LLM 失败/不足时 NPC 文案池兜底，永远有内容。
  *  返回本次新增条数。 */
 export async function generateMoreFeedPosts(): Promise<number> {
-  if (generatingMore) return 0;
-  generatingMore = true;
+  if (feedGenerating) return 0;
+  feedGenerating = true;
   try {
     const d = forumData();
     if (!d.seeded) return 0;
@@ -433,62 +549,7 @@ export async function generateMoreFeedPosts(): Promise<number> {
       .slice(0, 12)
       .map((p) => p.content.slice(0, 60));
 
-    // 作者池：NPC 轮换 + 偶尔 char 好友（15%）
-    const chars = forumContactsSnap().filter((c) => c.kind === 'char' && (c.persona || c.background));
-    const shuffledNpcs = NPC_DEFS.slice().sort(() => Math.random() - 0.5);
-    const specs: { key: AuthorKey; name: string; persona: string; community: string | null }[] = [];
-    for (let i = 0; i < n; i++) {
-      const ch = chars.length && Math.random() < 0.15 ? chars[Math.floor(Math.random() * chars.length)] : null;
-      if (ch) {
-        specs.push({
-          key: `char:${ch.id}`,
-          name: ch.nickname || ch.name,
-          persona: [ch.persona, ch.background, ch.expressStyle].filter(Boolean).join('；'),
-          community: null,
-        });
-      } else {
-        const nd = shuffledNpcs[i % shuffledNpcs.length];
-        specs.push({ key: `npc:${nd.id}`, name: nd.name, persona: nd.persona, community: defaultCommunityFor(nd.id) });
-      }
-    }
-
-    // LLM 批量生成（一次 7~20 条；失败静默走池子）
-    const results: { key: AuthorKey; text: string }[] = [];
-    try {
-      const r = (await callApi({
-        kind: 'posts',
-        items: specs.map(({ name, persona, community }) => ({ name, persona, community: community ?? '今日热议' })),
-        avoid,
-        userName: resolveAuthor('user').name,
-      })) as { items?: string[] };
-      const texts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length > 5) : [];
-      texts.forEach((t, i) => {
-        if (used.has(t.slice(0, 20))) return;
-        used.add(t.slice(0, 20));
-        results.push({ key: specs[i]?.key ?? `npc:${NPC_DEFS[0].id}`, text: t });
-      });
-    } catch {
-      /* 走池子兜底 */
-    }
-    // NPC 文案池补齐（LLM 失败/条数不足；全局去重——同一帖子不应重复出现）
-    if (results.length < n) {
-      for (const npc of NPC_DEFS.slice().sort(() => Math.random() - 0.5)) {
-        if (results.length >= n) break;
-        for (const cand of npc.pool) {
-          if (results.length >= n) break;
-          if (used.has(cand.slice(0, 20))) continue;
-          used.add(cand.slice(0, 20));
-          results.push({ key: `npc:${npc.id}`, text: cand });
-        }
-      }
-    }
-    // NPC 池也耗尽 → 组合式生成兜底（话题×开头×正文×结尾，近乎无限，下滑永远有新帖）
-    while (results.length < n) {
-      const t = comboPostText(used);
-      if (!t) break;
-      const npc = NPC_DEFS[Math.floor(Math.random() * NPC_DEFS.length)];
-      results.push({ key: `npc:${npc.id}`, text: t });
-    }
+    const results = await buildFeedBatch(n, used, avoid);
     if (!results.length) return 0;
 
     // 落库：时间戳自 frontier 向前递减（20~120 分钟一档），旧帖永在上方
@@ -510,7 +571,49 @@ export async function generateMoreFeedPosts(): Promise<number> {
   } catch {
     return 0;
   } finally {
-    generatingMore = false;
+    feedGenerating = false;
+  }
+}
+
+/** 主页滑到最顶部、下拉并松开 → 生成一批全新内容（过界手势触发）。
+ *  - 一次 7~20 条，时间戳全部晚于现有最新帖（新内容整批插入信息流最上方）；
+ *  - 与底部生成共用互斥锁与批量生成器（主题同向），旧帖永不消失。 */
+export async function generateNewFeedPosts(): Promise<number> {
+  if (feedGenerating) return 0;
+  const d0 = forumData();
+  if (!d0.seeded) return 0;
+  feedGenerating = true;
+  try {
+    const n = 7 + Math.floor(Math.random() * 14); // 7~20 条
+    const used = new Set(d0.posts.map((p) => p.content.slice(0, 20)));
+    const avoid = [...d0.posts]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 12)
+      .map((p) => p.content.slice(0, 60));
+
+    const results = await buildFeedBatch(n, used, avoid);
+    if (!results.length) return 0;
+
+    // 落库：时间戳从「现在」向前铺（40s~3.4min 一档递减），最新在最上、整批压过现有 feed
+    const next = { ...forumData() };
+    let at = Date.now() - 20_000;
+    for (const { key, text } of results) {
+      const tag = /#([^#\s]+)#/.exec(text)?.[1];
+      const cid = key.startsWith('npc:')
+        ? communityOfPoolText(key.slice(4), text)
+        : tag
+          ? NPC_COMMUNITY_MAP[tag] ?? null
+          : null;
+      next.posts.push(basePost(key, text, cid, at));
+      at -= (40 + Math.random() * 160) * 1000;
+    }
+    next.lastGenAt = Date.now();
+    saveForum(next);
+    return results.length;
+  } catch {
+    return 0;
+  } finally {
+    feedGenerating = false;
   }
 }
 
@@ -950,12 +1053,27 @@ async function execJob(job: PendingJob): Promise<void> {
 
 let booting = false;
 
+/** 版块同步：COMMUNITY_DEFS 新增的主题版块（娱乐八卦/影视片单/汽车俱乐部/吐槽大会）
+ *  补进老数据（不动已加入状态）——存量用户不清数据也能看到新板块。 */
+function syncCommunities(): void {
+  try {
+    const d = forumData();
+    const missing = COMMUNITY_DEFS.filter((c) => !d.communities.some((x) => x.id === c.id));
+    if (!missing.length) return;
+    d.communities = [...d.communities, ...missing.map((c) => ({ ...c, joined: false }))];
+    saveForum({ ...d });
+  } catch {
+    /* 静默 */
+  }
+}
+
 export async function bootForum(): Promise<void> {
   if (booting) return;
   booting = true;
   try {
     await ensureSeed();
     await ensureFresh();
+    syncCommunities();
     runPending();
   } catch {
     /* 引擎失败不拦 UI */
