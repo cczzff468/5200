@@ -3,12 +3,15 @@
 /**
  * X论坛 · 时间线（帖子卡 / 列表 / 加载骨架）。
  * PostCard 严格按 X 官方规格：48px 圆头像 + 名行（名字/认证/·时间/更多）+
- * 社区来源行 + 正文 17px 行高 1.42 + 操作行（回复/转推/点赞/书签/分享，
- * 均匀铺满内容宽；深灰线条图标，悬停浅色圆底 + 图标/数字同步变色）。
+ * 社区来源行 + 正文 17px 行高 1.42 + 媒体网格 + 投票卡 + 位置行 +
+ * 操作行（回复/转推/点赞/书签/分享，均匀铺满内容宽；深灰线条图标，
+ * 悬停浅色圆底 + 图标/数字同步变色）。
+ * 「···」更多按钮 → 底部弹层菜单（推荐/不感兴趣/举报，主框架渲染）。
  */
 
 import { memo, useState } from 'react';
 import {
+  castVote as castVoteCore,
   communityName,
   countShort,
   forumData,
@@ -90,6 +93,119 @@ function ActionBtn({
   );
 }
 
+// ---------------- 媒体 / 投票 / 位置（PostCard 与 thread 主帖共用） ----------------
+
+/** 帖子附图网格（X 官方观感）：1 张 16:9 大图；2 张两列方图；3-4 张 2x2 宫格 */
+export function PostMedia({ media }: { media: string[] }) {
+  if (!media.length) return null;
+  if (media.length === 1) {
+    return (
+      <div className="mt-2.5 overflow-hidden rounded-2xl border" style={{ borderColor: 'rgba(137,151,166,0.35)' }}>
+        <img src={media[0]} alt="帖子图片" className="aspect-[16/9] w-full select-none object-cover" draggable={false} loading="lazy" />
+      </div>
+    );
+  }
+  const cells = media.length === 3 ? [media[0], media[1], media[2]] : media.slice(0, 4);
+  return (
+    <div className="mt-2.5 grid grid-cols-2 gap-[3px] overflow-hidden rounded-2xl border" style={{ borderColor: 'rgba(137,151,166,0.35)' }}>
+      {cells.map((m, i) => (
+        <img
+          key={i}
+          src={m}
+          alt={`帖子图片 ${i + 1}`}
+          className={`aspect-square w-full select-none object-cover ${media.length === 3 && i === 2 ? 'col-span-2' : ''}`}
+          draggable={false}
+          loading="lazy"
+        />
+      ))}
+    </div>
+  );
+}
+
+/** 投票卡（X 官方样式）：未投 → 圆角描边选项行；已投 → 进度条 + 百分比 */
+export function PollBlock({ post }: { post: ForumPost }) {
+  const t = useXTheme();
+  const poll = post.poll;
+  if (!poll) return null;
+  const voted = typeof poll.voted === 'number' && poll.voted >= 0;
+  const votes = poll.votes.length === poll.options.length ? poll.votes : poll.options.map(() => 0);
+  const total = votes.reduce((s, v) => s + v, 0);
+  return (
+    <div className="mt-2.5 flex flex-col gap-2" role="group" aria-label="帖子投票">
+      {poll.options.map((opt, i) => {
+        const pct = total > 0 ? Math.round((votes[i] / total) * 100) : 0;
+        const mine = poll.voted === i;
+        if (!voted) {
+          return (
+            <button
+              key={i}
+              type="button"
+              aria-label={`投票给「${opt}」`}
+              onClick={(e) => {
+                e.stopPropagation();
+                castVoteCore(post.id, i);
+              }}
+              className="flex items-center gap-2.5 text-left"
+            >
+              <span
+                className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border-[1.5px]"
+                style={{ borderColor: t.blue }}
+                aria-hidden="true"
+              />
+              <span className="truncate text-[15px]" style={{ color: t.text }}>
+                {opt}
+              </span>
+            </button>
+          );
+        }
+        return (
+          <div key={i} className="relative overflow-hidden rounded-[6px]" aria-label={`「${opt}」${pct}%`}>
+            <span
+              className="absolute inset-y-0 left-0 rounded-[6px] transition-[width]"
+              style={{
+                width: `${pct}%`,
+                minWidth: pct > 0 ? '8px' : 0,
+                background: mine ? 'rgba(29,155,240,0.55)' : t.dark ? 'rgba(231,233,234,0.18)' : 'rgba(15,20,25,0.10)',
+              }}
+              aria-hidden="true"
+            />
+            <span className="relative flex items-center justify-between rounded-[6px] px-3 py-[7px]">
+              <span className="flex items-center gap-1.5 truncate text-[15px]" style={{ color: t.text }}>
+                {opt}
+                {mine && (
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke={t.blue} strokeWidth="3" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+              </span>
+              <span className="ml-2 shrink-0 text-[14px] font-bold" style={{ color: t.text }}>
+                {pct}%
+              </span>
+            </span>
+          </div>
+        );
+      })}
+      <p className="text-[13px]" style={{ color: t.secondary }}>
+        {total > 0 ? `${countShort(total)} 人参与 · ` : ''}投票截止时间未定
+      </p>
+    </div>
+  );
+}
+
+/** 位置行（X：📍 地名，次要色，帖子卡与 thread 主帖共用） */
+export function LocationLine({ name }: { name: string }) {
+  const t = useXTheme();
+  return (
+    <p className="mt-1 flex items-center gap-1.5 text-[14px]" style={{ color: t.secondary }} aria-label={`位置：${name}`}>
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx="12" cy="10" r="3" />
+      </svg>
+      {name}
+    </p>
+  );
+}
+
 /** X 帖子卡（时间线/回复列表通用） */
 export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPost; onOpen?: () => void }) {
   const f = useForum();
@@ -101,6 +217,8 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
   const communityLabel = post.community && post.community !== 'hot' ? communityName(post.community) : '';
   const time = relTime(post.createdAt);
   const replyCount = repliesOf(forumData(), post.id).length;
+  const media = post.media ?? [];
+  const scheduled = typeof post.visibleAt === 'number' && post.visibleAt > Date.now();
 
   return (
     <article
@@ -133,7 +251,10 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
             <button
               type="button"
               aria-label="更多"
-              onClick={() => f.toast('已为你推荐同类帖子')}
+              onClick={(e) => {
+                e.stopPropagation();
+                f.openPostMenu(post);
+              }}
               className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors active:bg-black/10 dark:active:bg-white/10"
               style={{ color: t.secondary }}
             >
@@ -158,6 +279,15 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
             </div>
           )}
           <PostText text={post.content} />
+          {media.length > 0 && <PostMedia media={media} />}
+          {post.poll && <PollBlock post={post} />}
+          {post.location && <LocationLine name={post.location} />}
+          {/* 定时标记（列表一般不会出现未到时间的帖子；详情打开时可见） */}
+          {scheduled && (
+            <p className="mt-1 text-[13px]" style={{ color: t.secondary }}>
+              ⏱ 定时发布 · {new Date(post.visibleAt!).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 自动发出
+            </p>
+          )}
           {/* 操作行：X 官方顺序 回复/转推/点赞/书签/分享（均分铺满可用宽，悬停浅色圆底） */}
           <div className="mt-2 mb-1 flex w-full items-center justify-between">
             <ActionBtn

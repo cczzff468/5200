@@ -199,7 +199,10 @@ export function XAvatar({
       />
     );
   }
-  const cls = 'shrink-0 select-none overflow-hidden rounded-full bg-black/[0.03] dark:bg-white/[0.06]';
+  // inline-block 必须显式声明：span 默认 inline 无法设置宽高，
+  // 会导致头像在无点击场景（个人主页 80px 大头像等）被内容撑破变形。
+  // overflow-hidden 需要 display 非 inline 才能裁切生效。
+  const cls = 'inline-block shrink-0 select-none overflow-hidden rounded-full bg-black/[0.03] dark:bg-white/[0.06]';
   const style: React.CSSProperties = { width: size, height: size, padding: 0, border: 0 };
   if (onClick) {
     return (

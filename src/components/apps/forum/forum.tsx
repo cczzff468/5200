@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { Check } from 'lucide-react';
+import { Check, Flag, Sparkles, EyeOff } from 'lucide-react';
 import {
   COMMUNITY_DEFS,
   communityName,
@@ -25,11 +25,14 @@ import {
   forumData,
   forumSnapshot,
   followersOf,
+  isPostVisible,
   myFollowingCount,
   refreshForumAuthors,
   resolveAuthor,
   saveForum,
   subscribeForum,
+  castVote as castVoteCore,
+  hidePost,
   uid,
   type ForumPost,
   POST_MAX,
@@ -37,7 +40,7 @@ import {
 import { bootForum, queueUserPostInteractions } from '@/lib/forum/engine';
 import { XAvatar, XIcons, XLogo, useXTheme } from './shared';
 import { FeedList, FeedSkeleton, CommunityIcon } from './feed';
-import { ComposeSheet } from './compose-sheet';
+import { ComposeSheet, type ComposePayload } from './compose-sheet';
 import { ThreadView } from './thread-view';
 import { ProfileView } from './profile-view';
 import { SearchView, CommunitiesView, CommunityPage, NotificationsView } from './extras';
@@ -67,6 +70,10 @@ export default function ForumApp() {
   const [tagPicker, setTagPicker] = useState(false);
   const [homeTab, setHomeTab] = useState<string>('foryou');
   const [toastMsg, setToastMsg] = useState<{ id: number; text: string } | null>(null);
+  /** 帖子「···」底部菜单：当前操作的帖子（null = 关闭） */
+  const [menuPost, setMenuPost] = useState<ForumPost | null>(null);
+  /** 定时发布到期重绘 tick（30s；到点的帖子自动出现在列表顶部） */
+  const [tick, setTick] = useState(0);
 
   // 数据订阅（rev 变化触发重渲）
   useSyncExternalStore(subscribeForum, forumSnapshot, forumSnapshot);
@@ -95,6 +102,14 @@ export default function ForumApp() {
     const h = window.setTimeout(() => setToastMsg(null), 1900);
     return () => window.clearTimeout(h);
   }, [toastMsg]);
+
+  // 定时帖到期 tick：每 30s 触发一次重绘，visibleAt 到点的帖子自动现身
+  useEffect(() => {
+    const hasScheduled = forumData().posts.some((p) => typeof p.visibleAt === 'number');
+    if (!hasScheduled) return;
+    const h = window.setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => window.clearInterval(h);
+  }, []);
 
   const push = useCallback((v: ViewSpec) => setViews((s) => [...s, v]), []);
   const pop = useCallback(() => setViews((s) => s.slice(0, -1)), []);
@@ -135,28 +150,44 @@ export default function ForumApp() {
     [toast],
   );
 
-  /** 发帖（compose 发布回调）：落库 + 触发 AI 互动 + 切回主页顶部 */
+  /** 发帖（compose 发布回调）：落库 + 触发 AI 互动 + 切回主页顶部。
+   *  extras：媒体/投票/位置/定时；定时帖 createdAt=visibleAt（到点才出现在列表）。 */
   const publish = useCallback(
-    (text: string, community: string | null) => {
+    (text: string, community: string | null, extras?: ComposePayload) => {
       const d = forumData();
+      const scheduled = typeof extras?.visibleAt === 'number' && extras.visibleAt > Date.now();
       const post: ForumPost = {
         id: uid('p'),
         authorKey: 'user',
         content: text.slice(0, POST_MAX),
         community: community === 'hot' ? null : community,
-        createdAt: Date.now(),
+        createdAt: scheduled ? extras!.visibleAt! : Date.now(),
         likes: [],
         reposts: 0,
         views: 0,
         replyTo: null,
         replyToName: null,
+        media: extras?.media?.length ? extras.media.slice(0, 4) : undefined,
+        poll: extras?.poll?.options.length
+          ? {
+              options: extras.poll.options.slice(0, 4).map((o) => o.slice(0, 25)),
+              votes: extras.poll.options.slice(0, 4).map(() => 3 + Math.floor(Math.random() * 42)),
+              voted: null,
+            }
+          : undefined,
+        location: extras?.location?.trim() || undefined,
+        visibleAt: scheduled ? extras!.visibleAt : undefined,
       };
       d.posts.push(post);
       saveForum({ ...d });
-      queueUserPostInteractions(post);
+      if (!scheduled) queueUserPostInteractions(post);
       setHomeTab('foryou');
       gotoTab(0);
-      toast('已发布');
+      toast(
+        scheduled
+          ? `已定时，${new Date(extras!.visibleAt!).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 自动发布`
+          : '已发布',
+      );
     },
     [gotoTab, toast],
   );
@@ -189,6 +220,8 @@ export default function ForumApp() {
       likeToggle,
       repostToggle,
       gotoTab,
+      openPostMenu: (p: ForumPost) => setMenuPost(p),
+      castVote: (postId: string, optionIndex: number) => castVoteCore(postId, optionIndex),
     }),
     [t, push, pop, openThread, openProfile, openCommunity, openDm, toast, likeToggle, repostToggle, gotoTab],
   );
@@ -207,9 +240,13 @@ export default function ForumApp() {
     [pinnedTags],
   );
 
-  // Feed 数据：为你推荐 = 全部主帖；关注 = 已关注作者的主帖；标签 tab = 对应版块主帖
+  // Feed 数据：为你推荐 = 全部主帖；关注 = 已关注作者的主帖；标签 tab = 对应版块主帖。
+  // 过滤：被隐藏（不感兴趣/举报）与未到时间的定时帖不进列表。tick 变化触发重算（定时到期现身）。
   const feedPosts = useMemo(() => {
-    const all = [...d.posts].sort((a, b) => b.createdAt - a.createdAt).filter((p) => p.replyTo === null);
+    const now = Date.now();
+    const all = [...d.posts]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .filter((p) => p.replyTo === null && isPostVisible(p, now));
     if (homeTab === 'following') {
       const followingSet = new Set(d.following);
       return all.filter((p) => followingSet.has(p.authorKey));
@@ -218,7 +255,7 @@ export default function ForumApp() {
       return all.filter((p) => (p.community ?? 'hot') === homeTab);
     }
     return all;
-  }, [d, homeTab]);
+  }, [d, homeTab, tick]);
 
   const unread = d.notifications.filter((n) => !n.read).length;
   const topView = views.length ? views[views.length - 1] : null;
@@ -232,16 +269,10 @@ export default function ForumApp() {
           {/* 主 tab 层（推入页覆盖其上；保持挂载，返回不丢滚动位置） */}
           <div className={views.length ? 'invisible absolute inset-0' : 'absolute inset-0'}>
             {tab === 'home' && (
-              <div className="flex h-full flex-col">
-                {/* 顶栏（X：头像 | 𝕏 | 订阅）+ tab 行（为你推荐|关注 + +），sticky blur */}
-                <div
-                  className="sticky top-0 z-20 shrink-0"
-                  style={{
-                    background: t.dark ? 'rgba(0,0,0,0.78)' : 'rgba(255,255,255,0.78)',
-                    backdropFilter: 'blur(12px)',
-                    WebkitBackdropFilter: 'blur(12px)',
-                  }}
-                >
+              /* 主页整页滚动：顶栏+tab 行+信息流一起滚（用户要求：滑动时顶部跟随滑动） */
+              <div className="forum-hide-scrollbar h-full overflow-y-auto overscroll-contain">
+                {/* 顶栏（X：头像 | 𝕏 | 订阅）+ tab 行（为你推荐|关注 + +），随内容滚走，不吸附 */}
+                <div style={{ background: t.bg }}>
                   {/* 主顶栏：头像 / 𝕏 / 订阅胶囊 */}
                   <div className="flex items-center justify-between px-4 pt-[54px]" style={{ height: 100 }}>
                     <XAvatar authorKey="user" size={36} onClick={() => setDrawer(true)} />
@@ -293,9 +324,7 @@ export default function ForumApp() {
                     </button>
                   </div>
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto">
-                  {authorsReady && seeded ? <FeedList posts={feedPosts} /> : <FeedSkeleton rows={7} />}
-                </div>
+                {authorsReady && seeded ? <FeedList posts={feedPosts} /> : <FeedSkeleton rows={7} />}
               </div>
             )}
             {tab === 'search' && <SearchView />}
@@ -503,6 +532,99 @@ export default function ForumApp() {
 
         {/* 发布弹层 */}
         {compose && <ComposeSheet onClose={() => setCompose(false)} onPublish={publish} />}
+
+        {/* 帖子「···」底部菜单（X iOS 风格：摘要 + 推荐/不感兴趣/举报） */}
+        {menuPost && (
+          <div className="absolute inset-0 z-50" role="dialog" aria-modal="true" aria-label="帖子更多操作">
+            <button
+              type="button"
+              aria-label="关闭菜单"
+              className="absolute inset-0 animate-[forum-fade_.18s_ease-out]"
+              style={{ background: 'rgba(0,0,0,0.45)' }}
+              onClick={() => setMenuPost(null)}
+            />
+            <div
+              className="absolute inset-x-0 bottom-0 animate-[forum-sheet_.24s_ease-out] rounded-t-2xl pb-[20px]"
+              style={{ background: t.bg, color: t.text }}
+            >
+              {/* grabber */}
+              <div className="flex justify-center pt-2" aria-hidden="true">
+                <span className="h-[5px] w-9 rounded-full" style={{ background: t.dark ? '#2f3336' : '#eff3f4' }} />
+              </div>
+              {/* 帖子摘要（X 官方菜单顶部预览） */}
+              <div className="flex gap-3 border-b px-5 pb-3 pt-3" style={{ borderColor: t.border }}>
+                <XAvatar authorKey={menuPost.authorKey} size={40} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[15px] font-bold" style={{ color: t.text }}>
+                    {resolveAuthor(menuPost.authorKey).name}
+                    <span className="ml-1 font-normal" style={{ color: t.secondary }}>
+                      @{resolveAuthor(menuPost.authorKey).handle}
+                    </span>
+                  </p>
+                  <p className="mt-[2px] line-clamp-2 text-[14px] leading-snug" style={{ color: t.secondary }}>
+                    {menuPost.content}
+                  </p>
+                </div>
+              </div>
+              {/* 菜单项（用户需求：推荐最上 / 不感兴趣→帖子消失 / 举报→帖子消失） */}
+              {(
+                [
+                  {
+                    icon: <Sparkles width={21} height={21} strokeWidth={1.9} />,
+                    label: '推荐',
+                    desc: '为你推荐更多同类帖子',
+                    color: t.text,
+                    onClick: () => {
+                      setMenuPost(null);
+                      toast('已为你推荐更多同类帖子');
+                    },
+                  },
+                  {
+                    icon: <EyeOff width={21} height={21} strokeWidth={1.9} />,
+                    label: '不感兴趣',
+                    desc: '之后会少推荐这类帖子',
+                    color: t.text,
+                    onClick: () => {
+                      hidePost(menuPost.id);
+                      setMenuPost(null);
+                      toast('已记录，之后会少推荐这类帖子');
+                    },
+                  },
+                  {
+                    icon: <Flag width={21} height={21} strokeWidth={1.9} />,
+                    label: '举报',
+                    desc: '该帖子将不再展示给你',
+                    color: '#f4212e',
+                    onClick: () => {
+                      hidePost(menuPost.id);
+                      setMenuPost(null);
+                      toast('已收到举报，该帖子不会再展示给你');
+                    },
+                  },
+                ] as const
+              ).map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={item.onClick}
+                  className="flex w-full items-center gap-3 px-5 py-[14px] text-left transition-colors active:bg-black/5 dark:active:bg-white/5"
+                >
+                  <span className="shrink-0" style={{ color: item.color }} aria-hidden="true">
+                    {item.icon}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[16px] font-bold" style={{ color: item.color }}>
+                      {item.label}
+                    </span>
+                    <span className="block text-[13px]" style={{ color: t.secondary }}>
+                      {item.desc}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 添加分类标签弹层（+ 号：勾选版块作为主页附加 tab） */}
         {tagPicker && (

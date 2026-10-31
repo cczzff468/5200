@@ -25,7 +25,7 @@ import {
 import { queueAiReplyToUserReply } from '@/lib/forum/engine';
 import { XAvatar, XIcons, VerifiedBadge } from './shared';
 import { useForum } from './ctx';
-import { PostCard, CommunityIcon } from './feed';
+import { PostCard, CommunityIcon, PostMedia, PollBlock, LocationLine } from './feed';
 
 /** 详情页互动栏单个图标钮（X 官方：带数字，悬停浅色圆底 + 图标/数字同步变色） */
 function ThreadAction({
@@ -189,7 +189,7 @@ export function ThreadView({ postId }: { postId: string }) {
                   <button
                     type="button"
                     aria-label="更多"
-                    onClick={() => f.toast('已为你推荐同类帖子')}
+                    onClick={() => f.openPostMenu(post)}
                     className="flex h-8 w-8 items-center justify-center rounded-full active:bg-black/10 dark:active:bg-white/10"
                     style={{ color: t.secondary }}
                   >
@@ -202,6 +202,10 @@ export function ThreadView({ postId }: { postId: string }) {
           <p className="mt-2.5 whitespace-pre-wrap break-words text-[17px] leading-[1.42]" style={{ color: t.text }}>
             {post.content}
           </p>
+          {/* 主帖附图 / 投票 / 位置（与帖子卡同规格） */}
+          {(post.media ?? []).length > 0 && <PostMedia media={post.media!} />}
+          {post.poll && <PollBlock post={post} />}
+          {post.location && <div className="mt-1"><LocationLine name={post.location} /></div>}
           {/* 社区来源引用卡（X 引用块观感：圆角容器 + 版块入口） */}
           {communityLabel && post.community && (
             <button

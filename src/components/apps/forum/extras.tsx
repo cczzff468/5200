@@ -14,6 +14,7 @@ import {
   countShort,
   forumData,
   forumSnapshot,
+  isPostVisible,
   relTime,
   resolveAuthor,
   saveForum,
@@ -74,9 +75,10 @@ export function SearchView() {
     return d.posts
       .filter(
         (p) =>
-          p.content.toLowerCase().includes(kw) ||
-          resolveAuthor(p.authorKey).name.toLowerCase().includes(kw) ||
-          resolveAuthor(p.authorKey).handle.toLowerCase().includes(kw),
+          isPostVisible(p) &&
+          (p.content.toLowerCase().includes(kw) ||
+            resolveAuthor(p.authorKey).name.toLowerCase().includes(kw) ||
+            resolveAuthor(p.authorKey).handle.toLowerCase().includes(kw)),
       )
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 30);
@@ -87,7 +89,7 @@ export function SearchView() {
   const tabPosts = useMemo(() => {
     if (stabCommunity === null) return [];
     return d.posts
-      .filter((p) => p.replyTo === null)
+      .filter((p) => p.replyTo === null && isPostVisible(p))
       .filter((p) => stabCommunity === '' || (p.community ?? 'hot') === stabCommunity)
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 8);
@@ -316,9 +318,9 @@ export function CommunityPage({ id }: { id: string }) {
   const def = COMMUNITY_DEFS.find((c) => c.id === id) ?? COMMUNITY_DEFS[0];
   const isJoined = !!d.communities.find((x) => x.id === id)?.joined;
   // 直算不 memo：数据对象会被引擎原位变更（点赞/转推），memo 依赖不可靠（react-hooks 规则）
-  // 仅展示主帖（回复只出现在帖子详情页，不混入版块流）
+  // 仅展示主帖（回复只出现在帖子详情页，不混入版块流）；隐藏帖（不感兴趣/举报）与未到点的定时帖不展示
   const posts = d.posts
-    .filter((p) => p.replyTo === null && (p.community ?? 'hot') === id)
+    .filter((p) => p.replyTo === null && (p.community ?? 'hot') === id && isPostVisible(p))
     .sort((a, b) => b.createdAt - a.createdAt);
 
   return (

@@ -3,7 +3,7 @@
 /** X论坛 · UI 上下文（主框架提供；各页面/卡片消费）。 */
 
 import { createContext, useContext } from 'react';
-import type { AuthorKey } from '@/lib/forum/core';
+import { type AuthorKey, type ForumPost } from '@/lib/forum/core';
 import type { XTheme } from './shared';
 
 export type ViewSpec =
@@ -11,6 +11,14 @@ export type ViewSpec =
   | { kind: 'profile'; key: AuthorKey }
   | { kind: 'community'; id: string }
   | { kind: 'dm'; peerKey: AuthorKey };
+
+/** 发布界面提交的扩展内容（媒体/投票/位置/定时） */
+export interface ComposeExtras {
+  media?: string[];
+  poll?: { options: string[] };
+  location?: string;
+  visibleAt?: number;
+}
 
 export interface ForumUi {
   t: XTheme;
@@ -25,6 +33,10 @@ export interface ForumUi {
   repostToggle: (postId: string) => void;
   /** 跳去某个主 tab（0..4 = 主页/搜索/社区/通知/私信） */
   gotoTab: (i: number) => void;
+  /** 帖子右上「···」→ 底部更多菜单（推荐/不感兴趣/举报） */
+  openPostMenu: (post: ForumPost) => void;
+  /** 投票：点选某选项 */
+  castVote: (postId: string, optionIndex: number) => void;
 }
 
 export const ForumCtx = createContext<ForumUi | null>(null);

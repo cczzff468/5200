@@ -63,6 +63,21 @@ export interface ForumPost {
   /** 回复链：回复某帖时同时是一条帖（X 语义：回复即发帖） */
   replyTo: string | null;
   replyToName: string | null;
+  /** 帖子附图（dataURL 或 http URL，最多 4 张；发布界面相册/GIF 上传） */
+  media?: string[];
+  /** 投票（发布界面发起） */
+  poll?: PostPoll;
+  /** 位置名（发布界面添加，帖子卡展示 📍） */
+  location?: string;
+  /** 定时发布：到该时刻才出现在列表（undefined = 立即可见；createdAt 同步取该值） */
+  visibleAt?: number;
+}
+
+/** 帖子投票：选项文本 + 每项票数 + 我投的选项 index（null = 未投） */
+export interface PostPoll {
+  options: string[];
+  votes: number[];
+  voted?: number | null;
 }
 
 export interface ForumCommunity {
@@ -104,6 +119,8 @@ export interface ForumData {
   likesByMe: Record<string, true>;
   /** 主页顶部分类标签（版块 id 列表，显示为「为你推荐|关注」后的附加 tab） */
   pinnedTags?: string[];
+  /** 「不感兴趣 / 举报」后从列表隐藏的帖子 id（数据保留，仅列表不展示） */
+  hiddenPosts?: string[];
   /** 论坛内自定义资料（编辑资料后生效；未编辑字段跟随全局机主资料） */
   profile?: ForumProfile;
   seeded: boolean;
@@ -645,6 +662,38 @@ export function postsOf(d: ForumData, key: AuthorKey): ForumPost[] {
 /** 帖子的直接回复（按时间正序，thread 页用） */
 export function repliesOf(d: ForumData, postId: string): ForumPost[] {
   return d.posts.filter((p) => p.replyTo === postId).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/** 列表可见性：被「不感兴趣/举报」隐藏 或 定时未到时间 → 不在 feed/主页/版块列表展示。
+ *  thread 详情页不受影响（帖子数据仍保留）。 */
+export function isPostVisible(p: ForumPost, now = Date.now()): boolean {
+  if ((forumData().hiddenPosts ?? []).includes(p.id)) return false;
+  if (typeof p.visibleAt === 'number' && p.visibleAt > now) return false;
+  return true;
+}
+
+/** 把帖子加入隐藏名单（不感兴趣/举报）；幂等 */
+export function hidePost(postId: string): void {
+  const d = forumData();
+  d.hiddenPosts = d.hiddenPosts ?? [];
+  if (!d.hiddenPosts.includes(postId)) d.hiddenPosts.push(postId);
+  saveForum({ ...d });
+}
+
+/** 投票：user 点选某选项（重复点同一项不叠加；换选项则迁移计数） */
+export function castVote(postId: string, optionIndex: number): void {
+  const d = forumData();
+  const p = d.posts.find((x) => x.id === postId);
+  if (!p?.poll) return;
+  const poll = p.poll;
+  while (poll.votes.length < poll.options.length) poll.votes.push(0);
+  if (poll.voted === optionIndex) return; // 已投同项，忽略
+  if (typeof poll.voted === 'number' && poll.voted >= 0) {
+    poll.votes[poll.voted] = Math.max(0, poll.votes[poll.voted] - 1);
+  }
+  poll.votes[optionIndex] = (poll.votes[optionIndex] ?? 0) + 1;
+  poll.voted = optionIndex;
+  saveForum({ ...d });
 }
 
 /** 热门话题（#话题# 统计 + 兜底；X 搜索页风格） */

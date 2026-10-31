@@ -19,6 +19,7 @@ import {
   followersOf,
   forumData,
   forumSnapshot,
+  isPostVisible,
   myFollowingCount,
   postsOf,
   resolveAuthor,
@@ -53,17 +54,22 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
   /** 页内搜索：激活后顶栏变输入胶囊，过滤当前 tab 内容 */
   const [searching, setSearching] = useState(false);
   const [q, setQ] = useState('');
-  // 直算不 memo：数据对象会被引擎原位变更，memo 依赖不可靠（react-hooks 规则）
-  const all = postsOf(d, authorKey);
+  // 直算不 memo：数据对象会被引擎原位变更，memo 依赖不可靠（react-hooks 规则）。
+  // 列表统一走 isPostVisible：被「不感兴趣/举报」隐藏与未到时间的定时帖不在主页展示。
+  const all = postsOf(d, authorKey).filter((p) => isPostVisible(p));
   const ownPosts = all.filter((p) => p.replyTo === null);
   const replyPosts = all.filter((p) => p.replyTo !== null);
   // 「回复」tab（自己的主页）：别人回复我的（回复我任何帖/评论的），非我评论别人的
   const myPostIdSet = new Set(d.posts.filter((p) => p.authorKey === 'user').map((p) => p.id));
   const repliesToMe = d.posts
-    .filter((p) => p.authorKey !== 'user' && p.replyTo !== null && myPostIdSet.has(p.replyTo))
+    .filter(
+      (p) => p.authorKey !== 'user' && p.replyTo !== null && myPostIdSet.has(p.replyTo) && isPostVisible(p),
+    )
     .sort((x, y) => y.createdAt - x.createdAt);
   // 「转推」tab（自己的主页）：我转推过的帖子
-  const myReposts = d.posts.filter((p) => p.reposted === true).sort((x, y) => y.createdAt - x.createdAt);
+  const myReposts = d.posts.filter((p) => p.reposted === true && isPostVisible(p)).sort((x, y) => y.createdAt - x.createdAt);
+  // 「媒体」tab：带附图的帖子 → 3 列方图网格（X 官方媒体墙）
+  const mediaPosts = all.filter((p) => (p.media ?? []).length > 0);
   const joined = new Date(d.joinedAt);
   const joinedLabel = `${joined.getFullYear()}年${joined.getMonth() + 1}月加入`;
   const myBanner = isMe ? d.profile?.banner : undefined;
@@ -189,10 +195,11 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
         >
           {myBanner && <img src={myBanner} alt="主页背景图" className="h-full w-full object-cover" />}
         </div>
-        {/* 头像 + 操作排（X：80px 半嵌横幅，4px 底色描边） */}
+        {/* 头像 + 操作排（X：80px 半嵌横幅，4px 底色描边）。
+            描边 span 必须显式 inline-block：inline 无法约束尺寸，头像会被内容撑破变形。 */}
         <div className="px-4">
           <div className="-mt-[40px] flex items-end justify-between">
-            <span className="rounded-full" style={{ boxShadow: `0 0 0 4px ${t.bg}`, borderRadius: 999 }}>
+            <span className="inline-block shrink-0 rounded-full" style={{ boxShadow: `0 0 0 4px ${t.bg}`, borderRadius: 999 }}>
               <XAvatar authorKey={authorKey} size={80} />
             </span>
             <div className="mb-[24px] flex items-center gap-2">
@@ -255,22 +262,6 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
             <p className="text-[14px]" style={{ color: t.secondary }}>
               @{a.handle}
             </p>
-            {/* 获得认证胶囊（X 官方「Get verified」样式，未认证账号展示） */}
-            {!a.verified && (
-              <button
-                type="button"
-                aria-label="获得认证"
-                onClick={() => f.toast('认证功能即将开放，敬请期待')}
-                className="mt-2 flex h-[28px] items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold transition-opacity active:opacity-60"
-                style={{ background: 'rgba(29,155,240,0.12)', color: t.blue }}
-              >
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                获得认证
-              </button>
-            )}
             {a.bio && <p className="mt-2 text-[15px] leading-snug">{a.bio}</p>}
             <p className="mt-2 flex items-center gap-1 text-[14px]" style={{ color: t.secondary }}>
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -324,7 +315,7 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
                   ? hit(isMe ? repliesToMe : replyPosts).length
                   : pTab === 'reposts'
                     ? hit(myReposts).length
-                    : 0}{' '}
+                    : hit(mediaPosts).length}{' '}
               条与「{q.trim()}」相关的内容
             </p>
           )}
@@ -362,7 +353,35 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
             ) : (
               <EmptyState text="TA 还没有转推" />
             ))}
-          {pTab === 'media' && <EmptyState text={kw ? searchEmpty('媒体') : isMe ? '帖子附带的图片会出现在这里' : 'TA 还没有媒体内容'} />}
+          {pTab === 'media' &&
+            (mediaPosts.length ? (
+              /* X 官方媒体墙：3 列方图网格（搜索关键词过滤），点开对应帖子 */
+              <div className="grid grid-cols-3 gap-[3px] pt-[3px]">
+                {hit(mediaPosts).flatMap((p) =>
+                  (p.media ?? []).map((m, i) => (
+                    <button
+                      key={`${p.id}-${i}`}
+                      type="button"
+                      onClick={() => f.openThread(p.id)}
+                      className="relative aspect-square overflow-hidden"
+                      aria-label={`查看${resolveAuthor(p.authorKey).name}的媒体帖子`}
+                    >
+                      <img src={m} alt="媒体帖子" className="h-full w-full select-none object-cover transition-transform active:scale-95" loading="lazy" />
+                      {(p.media ?? []).length > 1 && i === 0 && (
+                        <span
+                          className="absolute right-1.5 top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-[4px] bg-black/55 text-[11px] font-bold text-white"
+                          aria-hidden="true"
+                        >
+                          {p.media!.length}
+                        </span>
+                      )}
+                    </button>
+                  )),
+                )}
+              </div>
+            ) : (
+              <EmptyState text={kw ? searchEmpty('媒体') : isMe ? '帖子附带的图片会出现在这里，发布时添加图片试试' : 'TA 还没有媒体内容'} />
+            ))}
           <p className="py-6 text-center text-[13px]" style={{ color: t.secondary }}>
             已经到底啦
           </p>
