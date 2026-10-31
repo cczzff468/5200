@@ -24,12 +24,17 @@ import {
 import { CommunityTag, VerifiedBadge, XAvatar, XIcons, useXTheme } from './shared';
 import { useForum } from './ctx';
 
-/** 正文渲染：#话题# 染品牌蓝（X hashtag 观感） */
-function PostText({ text }: { text: string }) {
+/** 正文渲染：#话题# 染品牌蓝（X hashtag 观感）。
+ *  字数不限后长帖在时间线截断到 10 行 + 底部渐变（X 官方 Show more 观感；
+ *  点击卡片仍打开详情页看全文），详情页不截断。 */
+function PostText({ text, clamp = false }: { text: string; clamp?: boolean }) {
   const t = useXTheme();
   const parts = text.split(/(#[^#\s]{1,12}#)/g);
-  return (
-    <p className="whitespace-pre-wrap break-words text-[17px] leading-[1.42]" style={{ color: t.text }}>
+  const body = (
+    <p
+      className={`whitespace-pre-wrap break-words text-[17px] leading-[1.42] ${clamp ? 'line-clamp-[10]' : ''}`}
+      style={{ color: t.text }}
+    >
       {parts.map((p, i) =>
         /^#[^#\s]{1,12}#$/.test(p) ? (
           <span key={i} style={{ color: t.blue }}>
@@ -40,6 +45,18 @@ function PostText({ text }: { text: string }) {
         ),
       )}
     </p>
+  );
+  if (!clamp) return body;
+  return (
+    <div className="relative">
+      {body}
+      {/* 底部渐变提示还有更多内容（点击卡片展开全文） */}
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-7"
+        style={{ background: `linear-gradient(to top, ${t.bg}, transparent)` }}
+        aria-hidden="true"
+      />
+    </div>
   );
 }
 
@@ -291,7 +308,7 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
               />
             </div>
           )}
-          <PostText text={post.content} />
+          <PostText text={post.content} clamp={post.content.length > 240} />
           {media.length > 0 && <PostMedia media={media} />}
           {post.poll && <PollBlock post={post} />}
           {post.location && <LocationLine name={post.location} />}

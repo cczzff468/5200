@@ -31,6 +31,7 @@ import {
   POST_MAX,
   REPLY_MAX,
   STALE_MS,
+  createDynNpc,
   type AuthorKey,
   type ForumData,
   type ForumPost,
@@ -204,7 +205,8 @@ function communityOfPoolText(npcId: string, text: string): string | null {
 
 let seeding = false;
 
-/** 首次打开：池子同步落盘（立即有内容），LLM 精修异步追加。幂等。 */
+/** 首次打开：池子同步落盘（立即有内容），LLM 精修异步追加。幂等。
+ *  播种作者 60% 动态真实感网友 + 40% 内置主题 NPC——首屏就不是重名大军。 */
 export async function ensureSeed(): Promise<void> {
   const d = forumData();
   if (d.seeded || seeding) return;
@@ -219,7 +221,9 @@ export async function ensureSeed(): Promise<void> {
         const idx = Math.floor(Math.random() * pool.length);
         const text = pool.splice(idx, 1)[0];
         const at = now - Math.floor(Math.random() * 26 * 3600_000) - 600_000;
-        seedPosts.push(basePost(`npc:${npc.id}`, text, communityOfPoolText(npc.id, text), at));
+        // 60% 概率换成动态真实感网友发（文案口吻通用，成立；网名不重复的关键）
+        const author: AuthorKey = Math.random() < 0.6 ? createDynNpc() : `npc:${npc.id}`;
+        seedPosts.push(basePost(author, text, communityOfPoolText(npc.id, text), at));
       }
     }
     const next: ForumData = {
@@ -345,64 +349,121 @@ export async function ensureFresh(): Promise<void> {
 let feedGenerating = false;
 
 /** 通用评论池（LLM 失败时的兜底扩充：与 NPC 池合计保证任何帖子都能补满 10~30 条不重样评论；
- *  去重只在本帖内——不同帖子评论区出现相似短评很正常） */
-const GENERIC_COMMENTS = [
-  '哈哈哈哈太真实了',
-  '这条必须顶上去，说得太对了',
-  '同感同感，深有体会',
-  '前排围观，楼主说得好',
-  '看完沉默了，想想还真是这样',
-  '每天刷论坛就为了等这种帖子',
-  '理性讨论，这条我站楼主',
-  '泪目了，突然想家了',
-  '有点东西，已经收藏了',
-  '这波总结到位，一个字都没多说',
-  '蹲一个后续，别断更啊',
-  '评论区比帖子还精彩，哈哈',
-  '楼主是懂生活的',
-  '说实话，看饿了',
-  '半夜看到这条，直接破防',
-  '人间清醒，就是这么回事',
-  '这就是生活啊，平平常常的才是真',
-  '太治愈了，谢谢分享',
-  '有用，马克一下回头细看',
-  '好家伙，直接说进心坎里了',
-  '有点意思，已关注',
-  '笑死，段子手果然在民间',
-  '支持支持，让更多人看到',
-  '路过留个爪，明天再来看',
-  '这就是普通人的浪漫吧',
-  '确实，没毛病',
-  '看得出来很用心，赞一个',
-  '学到了学到了，受教',
-  '突然被这句话安慰到了',
-  '已转给我朋友看，她说太像了',
-  '一整个共鸣住了',
-  '楼主文笔可以啊，多写点',
-  '认真看完，值得细品',
-  '这么好的帖子不能沉',
-  '是本人了，别念了别念了',
-  '哈哈哈评论区都是人才',
-  '说出了我不敢说的',
-  '这个观点我保留，但尊重',
-  '细想还真是这个理',
-  '先赞后看，习惯了',
-  '前排吃瓜，瓜子已备好',
-  '这瓜太大了，先马后看',
-  '蹲一个后续，别断更',
-  '车主路过，确实是这样',
-  '这剧我也在追，上头了',
-  '反转了反转了，快看最新',
-  '让子弹再飞一会儿',
-  '课代表什么时候来总结',
-  '追星女孩路过，理智看待',
-  '这瓜保熟吗',
-  '老司机看不下去了，说两句',
-  '省流：就是那么回事',
-  '已经开始二刷了，别拦我',
-  '这车我也试驾过，感觉还行',
-  '热搜挂一整天了，看疲劳了',
+ *  去重只在本帖内——不同帖子评论区出现相似短评很正常）。
+ *  用户要求评论也可多语言（英语/韩语/日语/繁体）：外语短评由外语网友发出，
+ *  兜底时按评论者语言匹配对应语言的池子。 */
+const GENERIC_COMMENTS: { text: string; lang: string }[] = [
+  { text: '哈哈哈哈太真实了', lang: 'zh-Hans' },
+  { text: '这条必须顶上去，说得太对了', lang: 'zh-Hans' },
+  { text: '同感同感，深有体会', lang: 'zh-Hans' },
+  { text: '前排围观，楼主说得好', lang: 'zh-Hans' },
+  { text: '看完沉默了，想想还真是这样', lang: 'zh-Hans' },
+  { text: '每天刷论坛就为了等这种帖子', lang: 'zh-Hans' },
+  { text: '理性讨论，这条我站楼主', lang: 'zh-Hans' },
+  { text: '泪目了，突然想家了', lang: 'zh-Hans' },
+  { text: '有点东西，已经收藏了', lang: 'zh-Hans' },
+  { text: '这波总结到位，一个字都没多说', lang: 'zh-Hans' },
+  { text: '蹲一个后续，别断更啊', lang: 'zh-Hans' },
+  { text: '评论区比帖子还精彩，哈哈', lang: 'zh-Hans' },
+  { text: '楼主是懂生活的', lang: 'zh-Hans' },
+  { text: '说实话，看饿了', lang: 'zh-Hans' },
+  { text: '半夜看到这条，直接破防', lang: 'zh-Hans' },
+  { text: '人间清醒，就是这么回事', lang: 'zh-Hans' },
+  { text: '这就是生活啊，平平常常的才是真', lang: 'zh-Hans' },
+  { text: '太治愈了，谢谢分享', lang: 'zh-Hans' },
+  { text: '有用，马克一下回头细看', lang: 'zh-Hans' },
+  { text: '好家伙，直接说进心坎里了', lang: 'zh-Hans' },
+  { text: '有点意思，已关注', lang: 'zh-Hans' },
+  { text: '笑死，段子手果然在民间', lang: 'zh-Hans' },
+  { text: '支持支持，让更多人看到', lang: 'zh-Hans' },
+  { text: '路过留个爪，明天再来看', lang: 'zh-Hans' },
+  { text: '这就是普通人的浪漫吧', lang: 'zh-Hans' },
+  { text: '确实，没毛病', lang: 'zh-Hans' },
+  { text: '看得出来很用心，赞一个', lang: 'zh-Hans' },
+  { text: '学到了学到了，受教', lang: 'zh-Hans' },
+  { text: '突然被这句话安慰到了', lang: 'zh-Hans' },
+  { text: '已转给我朋友看，她说太像了', lang: 'zh-Hans' },
+  { text: '一整个共鸣住了', lang: 'zh-Hans' },
+  { text: '楼主文笔可以啊，多写点', lang: 'zh-Hans' },
+  { text: '认真看完，值得细品', lang: 'zh-Hans' },
+  { text: '这么好的帖子不能沉', lang: 'zh-Hans' },
+  { text: '是本人了，别念了别念了', lang: 'zh-Hans' },
+  { text: '哈哈哈评论区都是人才', lang: 'zh-Hans' },
+  { text: '说出了我不敢说的', lang: 'zh-Hans' },
+  { text: '这个观点我保留，但尊重', lang: 'zh-Hans' },
+  { text: '细想还真是这个理', lang: 'zh-Hans' },
+  { text: '先赞后看，习惯了', lang: 'zh-Hans' },
+  { text: '前排吃瓜，瓜子已备好', lang: 'zh-Hans' },
+  { text: '这瓜太大了，先马后看', lang: 'zh-Hans' },
+  { text: '车主路过，确实是这样', lang: 'zh-Hans' },
+  { text: '这剧我也在追，上头了', lang: 'zh-Hans' },
+  { text: '反转了反转了，快看最新', lang: 'zh-Hans' },
+  { text: '让子弹再飞一会儿', lang: 'zh-Hans' },
+  { text: '课代表什么时候来总结', lang: 'zh-Hans' },
+  { text: '追星女孩路过，理智看待', lang: 'zh-Hans' },
+  { text: '这瓜保熟吗', lang: 'zh-Hans' },
+  { text: '老司机看不下去了，说两句', lang: 'zh-Hans' },
+  { text: '省流：就是那么回事', lang: 'zh-Hans' },
+  { text: '已经开始二刷了，别拦我', lang: 'zh-Hans' },
+  { text: '这车我也试驾过，感觉还行', lang: 'zh-Hans' },
+  { text: '热搜挂一整天了，看疲劳了', lang: 'zh-Hans' },
+  { text: '天哪这也太好磕了', lang: 'zh-Hans' },
+  { text: '姐妹你是我的互联网嘴替', lang: 'zh-Hans' },
+  // 繁体中文（港台网友）
+  { text: '笑死，超真實', lang: 'zh-Hant' },
+  { text: '太懂了吧，完全講中我', lang: 'zh-Hant' },
+  { text: '蹲後續，别斷更', lang: 'zh-Hant' },
+  { text: '這瓜也太大了，先吃為敬', lang: 'zh-Hant' },
+  { text: '台北路過，推一個', lang: 'zh-Hant' },
+  { text: '真的假的啦，長知識了', lang: 'zh-Hant' },
+  { text: '編劇出來面對！', lang: 'zh-Hant' },
+  { text: '這部我也在看，超上頭', lang: 'zh-Hant' },
+  // 英语
+  { text: 'omg so true', lang: 'en' },
+  { text: 'this is so real lol', lang: 'en' },
+  { text: 'why is this so accurate', lang: 'en' },
+  { text: 'nah this is wild', lang: 'en' },
+  { text: 'first time commenting but wow', lang: 'en' },
+  { text: 'the way I screamed reading this', lang: 'en' },
+  { text: 'wait is this actually happening??', lang: 'en' },
+  { text: 'he is SO handsome in person, trust me', lang: 'en' },
+  { text: 'the drama never ends here lol', lang: 'en' },
+  { text: 'saving this thread for later', lang: 'en' },
+  // 日语
+  { text: 'わかる', lang: 'ja' },
+  { text: 'それな', lang: 'ja' },
+  { text: '草', lang: 'ja' },
+  { text: '尊い', lang: 'ja' },
+  { text: 'あるあるすぎる', lang: 'ja' },
+  { text: 'え、まじで？', lang: 'ja' },
+  { text: 'この続きが気になる', lang: 'ja' },
+  { text: '実際に会った人いるんだ、羨ましい', lang: 'ja' },
+  { text: '情報ありがとう、保存しました', lang: 'ja' },
+  // 韩语
+  { text: 'ㄹㅇㅋㅋ', lang: 'ko' },
+  { text: '실화냐', lang: 'ko' },
+  { text: '인정', lang: 'ko' },
+  { text: '정보 감사합니다', lang: 'ko' },
+  { text: '이거 진짜 웃기네', lang: 'ko' },
+  { text: '후속 기다립니다', lang: 'ko' },
+  { text: '완전 공감', lang: 'ko' },
+  { text: '직접 본 사람도 있다니 부럽다', lang: 'ko' },
 ];
+
+/** 按评论者语言从通用池抽取未用短评（语言池尽 → 落中文池：外国网友用翻译器发中文也很真实） */
+function pickGenericComment(lang: string, usedCt: Set<string>): string | null {
+  for (let i = 0; i < 60; i++) {
+    const pool = GENERIC_COMMENTS.filter((c) => c.lang === lang);
+    const usePool = pool.length && Math.random() < 0.8 ? pool : GENERIC_COMMENTS;
+    const cand = usePool[Math.floor(Math.random() * usePool.length)].text;
+    const k = cand.slice(0, 16);
+    if (!usedCt.has(k)) {
+      usedCt.add(k);
+      return cand;
+    }
+  }
+  return null;
+}
 
 /** 生成主题池（用户指定内容方向：八卦/明星/吐槽/车/影视/娱乐/吃瓜）——
  *  LLM 按主题方向生成；兜底组合池同主题，保证无 LLM 也是对味内容 */
@@ -439,8 +500,72 @@ const GEN_BODIES = [
 ];
 const GEN_TAILS = ['评论区蹲一个真相。', '有懂哥出来讲讲吗？', '理性讨论，别吵架。', '先吃瓜，后负责。', '就问还有谁。', '懂的都懂。', '让我看看谁的DNA动了。', ''];
 
-/** 从组合池里抽一条不重复的帖子文案（used = 已用内容前缀指纹；80 次抽不到就放弃） */
-function comboPostText(used: Set<string>): string | null {
+/** 外语整帖兑底（LLM 失败时外语网友的帖子：每个语言一组真实感短帖，
+ *  与中文组合池互补——多语言不只依赖 LLM） */
+const GEN_FOREIGN: { lang: string; texts: string[] }[] = [
+  {
+    lang: 'zh-Hant',
+    texts: [
+      '今天在百貨公司碰到某頂流本人，真人比螢幕帥太多了，直接看呆，一句話都說不出來。',
+      '那對cp的戀情官宣了，一點都不意外，早就看出來了，恭喜恭喜。',
+      '這部劇的結局爛到我說不出話，編劇出來面對，我投入的感情可以退貨嗎。',
+      '今天熱搜太精彩了，前十有三條都是瓜，吃不完，根本吃不完。',
+      '新車發佈會看完，大家又開始吵價格了，每次都這樣，累不累啊。',
+      '演唱會現場那個安可環節，全場大合唱，我在人群裡直接哭出來，值得。',
+      '同事今天又在那邊炫耀她的新包，我就靜靜看她表演，內心毫無波瀾（有一點）。',
+    ],
+  },
+  {
+    lang: 'en',
+    texts: [
+      'Just ran into that A-list actor at the mall today. He is SO much more handsome in person, I literally froze and forgot how to speak.',
+      'The celebrity couple news dropped and honestly? Not even surprised. We all saw it coming months ago.',
+      'That drama finale ruined my entire week. I want a refund for my emotions. Writer, come out and face us.',
+      'Hot search is wild today. Three gossip trends in the top ten. What is going on this week.',
+      'New car launch watched, and everyone is fighting about the price again. It is ALWAYS about the price.',
+      'The fandom drama today is more entertaining than any show I have watched this year. Popcorn ready, staying tuned.',
+      'Waiting outside the venue for six hours was worth it. The moment he waved at our section, I stopped functioning.',
+    ],
+  },
+  {
+    lang: 'ja',
+    texts: [
+      '今日デパートであの俳優さんを目撃。画面より断然かっこよくて、マジで固まった。手を振ればよかった。',
+      'あのカップルの熱愛報道、やっと出たね。前からそうだと思ってた。おめでとう。',
+      'ドラマの最終回が酷すぎて一週間引きずってる。感情の返金を要求したい。',
+      '今日のトレンド、お祭り騒ぎすぎて追いつかない。瓜（お祭り）を食べるのも一苦労。',
+      '新車の発表見たけど、また値段の議論ばっかり。毎回そう。',
+      'ライブのアンコールで会場全体が大合唱して、私だけ泣いてた。行ってよかった。',
+    ],
+  },
+  {
+    lang: 'ko',
+    texts: [
+      '오늘 백화점에서 그 배우 봤는데 진짜 미모가 실화냐. 눈 못 떼었음. 인증샷은 못 찍지만 진짜임.',
+      '그 커플 열애설 드디어 인정했네. 뜨악하지도 않았음. 다들 알고 있었어.',
+      '드라마 결말 실화냐… 일주일째 못 벗어나고 있음. 감정 환불 요청합니다.',
+      '오늘 실시간 검색어 개쩜. 연예 뉴스가 셋이나 상위권. 이번 주는 뭐가 다 그렇다.',
+      '새차 출시 봤는데 또 가격 논쟁 시작. 늘 그 패턴.',
+      '공장 앞 6시간 기다린 보람 있었음. 우리 쪽 손 흔들어줄 때 심장 멎는 줄.',
+    ],
+  },
+];
+
+/** 从组合池里抽一条不重复的帖子文案（used = 已用内容前缀指纹；80 次抽不到就放弃）。
+ *  lang 指定语言：外语走整帖兑底池（外语池尽 → 落中文组合池）。 */
+function comboPostText(used: Set<string>, lang = 'zh-Hans'): string | null {
+  if (lang !== 'zh-Hans') {
+    const g = GEN_FOREIGN.find((x) => x.lang === lang);
+    if (g) {
+      const cand = g.texts.filter((x) => !used.has(x.slice(0, 20)));
+      if (cand.length) {
+        const s = cand[Math.floor(Math.random() * cand.length)].slice(0, POST_MAX);
+        used.add(s.slice(0, 20));
+        return s;
+      }
+    }
+    // 外语池尽：落中文组合池（外语网友用翻译器发中文帖，也真实）
+  }
   for (let i = 0; i < 80; i++) {
     const t = GEN_TOPICS[Math.floor(Math.random() * GEN_TOPICS.length)];
     const m = GEN_MOODS[Math.floor(Math.random() * GEN_MOODS.length)].replace('{t}', t);
@@ -456,7 +581,8 @@ function comboPostText(used: Set<string>): string | null {
   return null;
 }
 
-/** 批量生成一批 feed 帖子（作者池 = 主题 NPC 轮换 + 偶尔 char 好友 15%；每人带主题方向）。
+/** 批量生成一批 feed 帖子（作者池 = 动态真实感网友为主 ~75% + 主题 NPC 15% + char 好友 10%，
+ *  每人带主题方向 + 惯用语言——网名永不重复、帖子多语言）。
  *  LLM 批量（设置›API 模型）→ NPC 文案池补齐 → 组合式兜底，任何情况下都有内容。
  *  used = 全局内容前缀指纹（跨调用累积去重）。 */
 async function buildFeedBatch(
@@ -467,21 +593,30 @@ async function buildFeedBatch(
   const chars = forumContactsSnap().filter((c) => c.kind === 'char' && (c.persona || c.background));
   const shuffledNpcs = NPC_DEFS.slice().sort(() => Math.random() - 0.5);
   const topics = FEED_TOPICS.slice().sort(() => Math.random() - 0.5);
-  const specs: { key: AuthorKey; name: string; persona: string; community: string | null; topic: string }[] = [];
+  const specs: { key: AuthorKey; name: string; persona: string; community: string | null; topic: string; lang: string }[] = [];
+  let npcCursor = 0;
   for (let i = 0; i < n; i++) {
-    const ch = chars.length && Math.random() < 0.15 ? chars[Math.floor(Math.random() * chars.length)] : null;
     const topic = topics[i % topics.length];
-    if (ch) {
+    const r = Math.random();
+    if (chars.length && r < 0.1) {
+      const ch = chars[Math.floor(Math.random() * chars.length)];
       specs.push({
         key: `char:${ch.id}`,
         name: ch.nickname || ch.name,
         persona: [ch.persona, ch.background, ch.expressStyle].filter(Boolean).join('；'),
         community: null,
         topic,
+        lang: 'zh-Hans',
       });
+    } else if (r < 0.25) {
+      // 内置主题 NPC（大 V，自带版块）
+      const nd = shuffledNpcs[npcCursor++ % shuffledNpcs.length];
+      specs.push({ key: `npc:${nd.id}`, name: nd.name, persona: nd.persona, community: defaultCommunityFor(nd.id), topic, lang: 'zh-Hans' });
     } else {
-      const nd = shuffledNpcs[i % shuffledNpcs.length];
-      specs.push({ key: `npc:${nd.id}`, name: nd.name, persona: nd.persona, community: defaultCommunityFor(nd.id), topic });
+      // 动态真实感网友（主力：每批几乎全新面孔，网名不重复）
+      const key = createDynNpc();
+      const a = resolveAuthor(key);
+      specs.push({ key, name: a.name, persona: a.persona ?? '', community: null, topic, lang: a.lang ?? 'zh-Hans' });
     }
   }
 
@@ -490,11 +625,11 @@ async function buildFeedBatch(
   try {
     const r = (await callApi({
       kind: 'posts',
-      items: specs.map(({ name, persona, community, topic }) => ({ name, persona, community: community ?? '今日热议', topic })),
+      items: specs.map(({ name, persona, community, topic, lang }) => ({ name, persona, community: community ?? '今日热议', topic, lang })),
       avoid,
       userName: resolveAuthor('user').name,
     })) as { items?: string[] };
-    const texts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length > 5) : [];
+    const texts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length > 3) : [];
     texts.forEach((t, i) => {
       if (used.has(t.slice(0, 20))) return;
       used.add(t.slice(0, 20));
@@ -515,12 +650,14 @@ async function buildFeedBatch(
       }
     }
   }
-  // NPC 池也耗尽 → 组合式生成兜底（话题×开头×正文×结尾，近乎无限，下滑永远有新帖）
+  // NPC 池也耗尽 → 组合式生成兜底（话题×开头×正文×结尾 + 外语整帖，近乎无限，下滑永远有新帖）
   while (results.length < n) {
-    const t = comboPostText(used);
+    const spec = specs[results.length] ?? specs[specs.length - 1];
+    const lang = spec?.key.startsWith('dyn:') ? resolveAuthor(spec.key).lang ?? 'zh-Hans' : 'zh-Hans';
+    const t = comboPostText(used, lang);
     if (!t) break;
-    const npc = NPC_DEFS[Math.floor(Math.random() * NPC_DEFS.length)];
-    results.push({ key: `npc:${npc.id}`, text: t });
+    const author: AuthorKey = spec?.key ?? `npc:${NPC_DEFS[Math.floor(Math.random() * NPC_DEFS.length)].id}`;
+    results.push({ key: author, text: t });
   }
   return results;
 }
@@ -630,16 +767,28 @@ function countThreadComments(d: ForumData, postId: string): number {
   return n;
 }
 
-/** 随机挑评论者（NPC 轮换 + char 好友穿插），count 个 */
-function pickCommenters(count: number): AuthorKey[] {
+/** 随机挑评论者（用户要求评论区网名也要真实不重复）：
+ *  ~60% 动态真实感新网友（每条帖子评论区大量新面孔）+ ~25% 已有动态网友回访
+ *  + ~10% 内置 NPC + char 好友穿插。postLang = 主帖语言（外语帖评论区外语网友更多）。 */
+function pickCommenters(count: number, postLang?: string): AuthorKey[] {
+  const d = forumData();
   const chars = forumContactsSnap().filter((c) => c.kind === 'char' && (c.persona || c.background));
   const npcs = NPC_DEFS.slice().sort(() => Math.random() - 0.5);
+  const dynKeys = Object.keys(d.dynNpcs ?? {});
+  const bias = postLang && postLang !== 'zh-Hans' ? postLang : undefined;
   const out: AuthorKey[] = [];
   for (let i = 0; i < count; i++) {
-    if (chars.length && Math.random() < 0.12) {
+    const r = Math.random();
+    if (chars.length && r < 0.08) {
       out.push(`char:${chars[Math.floor(Math.random() * chars.length)].id}`);
-    } else {
+    } else if (r < 0.16) {
       out.push(`npc:${npcs[i % npcs.length].id}`);
+    } else if (r < 0.38 && dynKeys.length) {
+      // 已有动态网友回访（同一人出现在不同帖子评论区，真实论坛常态）
+      out.push(`dyn:${dynKeys[Math.floor(Math.random() * dynKeys.length)]}`);
+    } else {
+      // 新面孔（外语帖偏置外语网友）
+      out.push(createDynNpc(bias));
     }
   }
   return out;
@@ -674,7 +823,9 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
     );
     // 识图模型：帖子带图先「看图」，AI 评论才有画面感
     const mediaDesc = await describePostMedia(post.media);
-    const commenterKeys = pickCommenters(want);
+    // 主帖语言（外语帖评论区外语网友更多）
+    const postLang = resolveAuthor(post.authorKey).lang ?? 'zh-Hans';
+    const commenterKeys = pickCommenters(want, postLang);
     const avoid = threadReplies.slice(-10).map((p) => p.content.slice(0, 40));
 
     // ---- 顶层评论（LLM 批量，池子兜底） ----
@@ -686,17 +837,17 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
         count: want,
         personas: commenterKeys.map((k) => {
           const a = resolveAuthor(k);
-          return { name: a.name, persona: a.persona || '普通论坛网友' };
+          return { name: a.name, persona: a.persona || '普通论坛网友', lang: a.lang ?? 'zh-Hans' };
         }),
         avoid,
         userName: resolveAuthor('user').name,
       })) as { items?: string[] };
-      texts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length >= 4) : [];
+      texts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length >= 2) : [];
     } catch {
       texts = [];
     }
     if (texts.length < want) {
-      // 池子兜底：NPC replies 池 + 通用评论池轮换（去重仅限本帖，保证任何帖子都能补满）
+      // 池子兜底：NPC replies 池 + 按评论者语言的通用池轮换（去重仅限本帖，保证任何帖子都能补满）
       const usedCt = new Set<string>([
         ...texts.map((t) => t.slice(0, 16)),
         ...threadReplies.map((p) => p.content.slice(0, 16)),
@@ -704,17 +855,34 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
       const npcRing = NPC_DEFS.slice().sort(() => Math.random() - 0.5);
       let ni = 0;
       while (texts.length < want && ni < 400) {
+        const idx = texts.length;
+        const commenterLang = resolveAuthor(commenterKeys[idx] ?? 'user').lang ?? 'zh-Hans';
         const npc = npcRing[ni % npcRing.length];
-        // NPC 池扫过几轮后切通用池，两个池子交替抽
-        const useGeneric = ni >= 36 || Math.random() < 0.35;
-        const cand = useGeneric
-          ? GENERIC_COMMENTS[Math.floor(Math.random() * GENERIC_COMMENTS.length)]
-          : npc.replies[Math.floor(Math.random() * npc.replies.length)];
-        const k = cand.slice(0, 16);
-        if (!usedCt.has(k)) {
-          usedCt.add(k);
+        // 外语评论者 → 外语通用池；中文评论者 → NPC 池 + 中文通用池交替
+        // 注意：pickGenericComment 命中时已自行写入 usedCt，这里不再双重检查
+        //（双重检查会因「已加入」而永远拒收，历史上导致每帖只出 2 条兜底评论）
+        let cand: string | null;
+        if (commenterLang !== 'zh-Hans') {
+          cand = pickGenericComment(commenterLang, usedCt);
+          if (!cand) cand = pickGenericComment('zh-Hans', usedCt);
+        } else {
+          const useGeneric = ni >= 36 || Math.random() < 0.35;
+          if (useGeneric) {
+            cand = pickGenericComment('zh-Hans', usedCt);
+          } else {
+            const raw = npc.replies[Math.floor(Math.random() * npc.replies.length)];
+            if (raw && !usedCt.has(raw.slice(0, 16))) {
+              cand = raw;
+              // NPC 池文案 → 评论者换成该 NPC（口吻一致）
+              commenterKeys[idx] = `npc:${npc.id}`;
+            } else {
+              cand = pickGenericComment('zh-Hans', usedCt);
+            }
+          }
+        }
+        if (cand) {
+          usedCt.add(cand.slice(0, 16));
           texts.push(cand);
-          commenterKeys[texts.length - 1] = `npc:${npc.id}`;
         }
         ni += 1;
       }
@@ -745,10 +913,10 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
         .sort(() => Math.random() - 0.5)
         .slice(0, Math.max(1, Math.floor(newComments.length / 3)));
       if (subTargets.length) {
-        // 子回复作者：其他 NPC（偶尔楼主本人回评，很 X）
+        // 子回复作者：其他网友（动态+内置混合，偶尔楼主本人回评，很 X）
         const subKeys = subTargets.map((c) => {
           if (post.authorKey !== 'user' && Math.random() < 0.3) return post.authorKey;
-          return pickCommenters(1)[0];
+          return pickCommenters(1, postLang)[0];
         });
         let subTexts: string[] = [];
         try {
@@ -758,24 +926,22 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
             threads: subTargets.map((c) => ({ authorName: resolveAuthor(c.authorKey).name, content: c.content })),
             personas: subKeys.map((k) => {
               const a = resolveAuthor(k);
-              return { name: a.name, persona: a.persona || '普通论坛网友' };
+              return { name: a.name, persona: a.persona || '普通论坛网友', lang: a.lang ?? 'zh-Hans' };
             }),
             userName: resolveAuthor('user').name,
           })) as { items?: string[] };
-          subTexts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length >= 4) : [];
+          subTexts = Array.isArray(r.items) ? r.items.filter((x) => typeof x === 'string' && x.trim().length >= 2) : [];
         } catch {
           subTexts = [];
         }
+        // 兜底子回复共享去重集（同一帖的楼中楼不重复用同一条兜底文案）
+        const usedSub = new Set<string>();
         subTargets.forEach((c, i) => {
           let text = subTexts[i];
           if (!text) {
-            // 池子兜底：NPC replies + 通用评论各半
-            const npc = NPC_DEFS[Math.floor(Math.random() * NPC_DEFS.length)];
-            text =
-              Math.random() < 0.5
-                ? npc.replies[Math.floor(Math.random() * npc.replies.length)]
-                : GENERIC_COMMENTS[Math.floor(Math.random() * GENERIC_COMMENTS.length)];
-            subKeys[i] = `npc:${npc.id}`;
+            // 池子兜底：按子回复者语言取通用池（外语网友外语接话）
+            const subLang = resolveAuthor(subKeys[i]).lang ?? 'zh-Hans';
+            text = pickGenericComment(subLang, usedSub) ?? pickGenericComment('zh-Hans', usedSub) ?? '哈哈哈哈';
           }
           const subAt = Math.min(Date.now() - Math.floor(Math.random() * 60_000), c.createdAt + (2 + Math.random() * 30) * 60_000);
           const sub = basePost(subKeys[i], text.slice(0, REPLY_MAX), post.community, Math.max(subAt, c.createdAt + 60_000), c.id, resolveAuthor(c.authorKey).name);
@@ -827,10 +993,18 @@ export async function generateMoreComments(postId: string): Promise<number> {
 
 // ---------------- 用户发帖 → NPC/char 互动 ----------------
 
-/** 用户发布帖子后调用：延迟点赞 + 0~2 条 AI 回复（持久 pending） */
+/** 用户发布帖子后调用：延迟点赞 + 0~2 条 AI 回复（持久 pending）。
+ *  互动者也以动态真实感网友为主（点赞/回帖名单不重复）。 */
 export function queueUserPostInteractions(post: ForumPost): void {
   const next0 = forumData();
-  const likers = NPC_DEFS.slice().sort(() => Math.random() - 0.5).slice(0, 1 + Math.floor(Math.random() * 3));
+  // 点赞名单：动态网友 + 内置 NPC 混合（3~5 位，不再全是老面孔）
+  const likers: AuthorKey[] = [];
+  const npcCount = 1 + Math.floor(Math.random() * 2);
+  NPC_DEFS.slice()
+    .sort(() => Math.random() - 0.5)
+    .slice(0, npcCount)
+    .forEach((l) => likers.push(`npc:${l.id}`));
+  while (likers.length < 3 + Math.floor(Math.random() * 3)) likers.push(createDynNpc());
   // char 好友优先来点赞
   const charLiker = next0.posts
     .filter((p) => p.authorKey.startsWith('char:'))
@@ -840,14 +1014,13 @@ export function queueUserPostInteractions(post: ForumPost): void {
       const next = { ...forumData() };
       const p = next.posts.find((x) => x.id === post.id);
       if (!p) return;
-      const likers2 = likers.map((l) => `npc:${l.id}` as AuthorKey);
-      p.likes = [...new Set([...p.likes, ...likers2, ...(charLiker ? [charLiker] : [])])];
+      p.likes = [...new Set([...p.likes, ...likers, ...(charLiker ? [charLiker] : [])])];
       // 点赞也发通知（X：有人赞了你的帖子）
       next.notifications = [
         {
           id: uid('n'),
           type: 'like' as const,
-          fromKey: likers2[0] ?? (charLiker ?? 'npc:wang'),
+          fromKey: likers[0] ?? (charLiker ?? 'npc:wang'),
           postId: post.id,
           createdAt: Date.now(),
           read: false,
@@ -861,15 +1034,17 @@ export function queueUserPostInteractions(post: ForumPost): void {
   }, 3000 + Math.random() * 6000);
   const replyCount = Math.random() < 0.75 ? 1 + (Math.random() < 0.35 ? 1 : 0) : 0;
   for (let i = 0; i < replyCount; i++) {
-    const npc = likers[i % likers.length];
     addPending({
       id: uid('j'),
       due: Date.now() + 8000 + Math.random() * 12000 + i * (5000 + Math.random() * 8000),
       kind: 'replyToUserPost',
       postKey: post.id,
-      meta: { authorKey: `npc:${npc.id}`, parentContent: post.content },
+      // 回帖者优先动态网友（新面孔来搭讪）
+      meta: { authorKey: likers[npcCount + i] ?? likers[0], parentContent: post.content },
     });
   }
+  // 立即落盘新建的动态网友（点赞名单先持久化，不等延时任务）
+  saveForum({ ...forumData() });
   runPending();
 }
 
@@ -982,7 +1157,7 @@ async function execJob(job: PendingJob): Promise<void> {
       try {
         const r = (await callApi({
           kind: 'reply',
-          author: { name: author.name, persona: author.persona || '' },
+          author: { name: author.name, persona: author.persona || '', lang: author.lang ?? 'zh-Hans' },
           parent: { authorName: replyName, content: parentContent },
           postContent,
           mediaDesc,
@@ -995,7 +1170,12 @@ async function execJob(job: PendingJob): Promise<void> {
       }
       if (!text) {
         const npc = NPC_DEFS.find((n) => `npc:${n.id}` === authorKey);
-        const pool = npc ? npc.replies : ['有意思，蹲一个后续。', '这条我认可。', '顶上去让更多人看到。', '哈哈你这么一说我竟无法反驳。', '有道理，学到了。'];
+        const lang = author.lang ?? 'zh-Hans';
+        const pool = npc
+          ? npc.replies
+          : lang !== 'zh-Hans'
+            ? [pickGenericComment(lang, new Set()) ?? '哈哈哈哈']
+            : ['有意思，蹲一个后续。', '这条我认可。', '顶上去让更多人看到。', '哈哈你这么一说我竟无法反驳。', '有道理，学到了。'];
         text = pool[Math.floor(Math.random() * pool.length)];
       }
       const next = { ...forumData() };

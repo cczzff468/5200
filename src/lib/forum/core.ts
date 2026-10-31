@@ -20,10 +20,11 @@ export const FORUM_KEY = 'forum-data-v1';
 export const SEED_POST_TARGET = 14;
 /** 补新帖：feed 最新帖子超过该毫秒数视为「凉了」，打开时补 2~4 条 */
 export const STALE_MS = 2 * 60 * 60 * 1000;
-/** 单帖正文上限（X 长帖风格，超出截断） */
-export const POST_MAX = 280;
-/** 回复上限 */
-export const REPLY_MAX = 140;
+/** 单帖正文字数上限（用户要求「生成的字数不限」：从一句话短吐到几百字长帖叙事都可以，
+ *  仅保留一个宽松的安全上限防失控） */
+export const POST_MAX = 2000;
+/** 回复字数上限（同上，宽松上限） */
+export const REPLY_MAX = 1000;
 
 // ---------------- 数据模型 ----------------
 
@@ -44,6 +45,8 @@ export interface ForumAuthor {
   baseFollowers?: number;
   /** 生成用人设（NPC 发帖/回复的 LLM prompt；char 用联系人 persona） */
   persona?: string;
+  /** 惯用发帖语言（动态虚拟用户：zh-Hans/zh-Hant/en/ja/ko；缺省 = 简体中文） */
+  lang?: string;
 }
 
 export interface ForumPost {
@@ -113,6 +116,26 @@ export interface ForumDm {
   messages: { id: string; from: AuthorKey; text: string; at: number }[];
 }
 
+/** 动态虚拟网友（用户要求：网名不要重复、要像真实网友昵称——
+ *  内置 14 个 NPC 之外，生成帖子/评论时动态创建新网友，名字从真实感网名池取，
+ *  全局防重；池子耗尽后生成真实感变体名（momo → momo_0321），无限不重名） */
+export interface ForumDynNpc {
+  /** 真实感网名 */
+  name: string;
+  /** 一句话简介 */
+  bio: string;
+  /** 彩底头像底色 */
+  bg: string;
+  /** 惯用发帖语言（zh-Hans / zh-Hant / en / ja / ko） */
+  lang: string;
+  /** 少数大 V 带蓝 V */
+  verified?: boolean;
+  /** 粉丝基础值 */
+  followers: number;
+  /** 生成用人设 */
+  persona: string;
+}
+
 export interface ForumData {
   v: 1;
   posts: ForumPost[];
@@ -127,6 +150,10 @@ export interface ForumData {
   hiddenPosts?: string[];
   /** 论坛内自定义资料（编辑资料后生效；未编辑字段跟随全局机主资料） */
   profile?: ForumProfile;
+  /** 动态虚拟网友池（key = dynNpcs 内部 id，authorKey = `dyn:<id>`） */
+  dynNpcs?: Record<string, ForumDynNpc>;
+  /** 已用网名（全局防重；初始化时合并内置 NPC 名） */
+  usedNames?: string[];
   seeded: boolean;
   lastGenAt: number;
   joinedAt: number;
@@ -518,6 +545,168 @@ export const COMMUNITY_DEFS: { id: string; name: string; desc: string; coverBg: 
   { id: 'night', name: '深夜树洞', desc: '睡不着的人，进来坐坐', coverBg: '#3a4a5f', members: 267200 },
 ];
 
+// ---------------- 动态虚拟网友（真实感网名池 + 语言 + 防重） ----------------
+
+/** 真实感网名池（用户要求：网名不要「理财XX/读书人XX」这类人机模板名，要像真实网友昵称；
+ *  覆盖中文互联网真实取名风格：小名系/状态系/食物系/动物系/文艺系/玩梗系/字母系/日系/韩系/繁体风） */
+export const REAL_NAME_POOL: string[] = [
+  // 小名 / 阿X 系
+  '阿茶', '阿蛮爱吃鱼', '小鹿乱撞', '小张有话说', '小王今天不加班', '小李飞叨', '小陈碎碎念', '小赵想吃火锅',
+  '阿呆不呆', '阿泽的日常', '小满不发疯', '小北看世界', '小柔不吃辣', '阿杰在冲浪',
+  // 状态 / 情绪系
+  '在逃打工人', '已退役熬夜选手', '今天也想退休', '精神状态领先', '正在加载中', '冒个泡就跑',
+  '在线但不想理人', '退网失败者', '已读乱回', '间歇性努力', '持续性摆烂', '今天也没瘦',
+  '疯感很稳定', '情绪稳定大人', '早八幸存者', '加班到天明', '周一综合征本人', '不想上班第108天',
+  '干饭第一名', '早睡失败冠军', '起床困难户', '拖延症晚期', '选择困难本难', '在人间凑数的日子',
+  '正在装大人', '今天也是废物的一天', '假装在努力', '随时想下班', '人生低谷观光团',
+  // 食物系
+  '芋泥啵啵', '脆皮烤鸭腿', '半糖去冰', '椰果少糖', '麻辣香锅不放香菜', '蛋黄酥刺客',
+  '冰美式续命', '奶茶三分甜', '炸鸡不吃皮', '薯条蘸冰淇淋', '柠檬味气泡水', '草莓大福今天吃了吗',
+  '螺蛳粉狂热分子', '火锅底料本料', '不吃香菜星人', '奶茶戒断失败', '深夜食堂干饭人',
+  '碳水快乐星人', '西瓜最中间一口', '溏心蛋爱好者', '可乐要加冰', '饺子蘸醋不蘸酱油',
+  // 动物系
+  '一只废柴猫', '卡皮巴拉本人', '水豚本豚', '不想上班的仓鼠', '巷口的橘猫', '柯基屁股圆',
+  '会飞的企鹅', '公园鸽子护卫队', '楼下小狗粉丝会会长', '动物园园长', '柴犬笑容收藏家',
+  '猫毛过敏但养猫', '流浪猫投喂员', '熊猫眼本人', '夜猫子成精', '早起的鸟儿起不来',
+  // 文艺系
+  '北纬三十度', '晚风电台', '山雾邮局', '月亮执行官', '银河修理员', '落日收藏家',
+  '云朵搬运工', '深海打字员', '夏夜晚风', '口袋里的星星', '便利店之光', '末班车站台',
+  '凌晨四点的海', '二手玫瑰花园', '废片摄影师', '光圈开最大', '十八度灰', '未命名文件夹',
+  '春天储备粮', '风的形状', '路灯下的小诗人', '晚霞样品间', '海盐味晚风', '收集日落的人',
+  // 玩梗 / 网感系
+  '互联网嘴替', '发疯文学部部长', '已老实求放过', '主打一个陪伴', '格局打开', '纯路人围观',
+  '蹲后续专业户', '前排出售瓜子', '让子弹再飞会儿', '课代表候补', '省流助手', '退退退大王',
+  '拴Q了家人们', '尊嘟假嘟', '那咋了', '包的兄弟', '听劝改造中', '已黑化但没完全',
+  '摆烂大师兄', '躺平任嘲', '脆皮大学生', '脆皮打工人', '大厂女孩日记', '乙方嘴替',
+  '甲方劝退师', 'PPT纺织工', '会议绝缘体', '周报编不下去', '工位植物人', '精神离职中',
+  '低电量人类', '充电五分钟通话两小时', '重启人生失败', '已加入干饭豪华套餐',
+  // 字母 / 中英混合系
+  'momo', 'momo酱', 'Kiko不睡觉', 'Luna在摸鱼', 'Rita今天不上班', 'Doris的日常',
+  'Vivi要暴富', 'YoYo不是悠悠球', 'Nana想吃火锅', 'Coco不想上班', 'Kiwi很酸',
+  '一只momo', 'Amy不想努力', 'Sam的深夜食堂', '大鹏DayDay', 'Leo慢慢来',
+  'Tina的碎碎念', 'Vera在放空', 'Mia随便记记', 'JoJo的奇妙日常', 'Yuki还没睡', 'Momo是也',
+  // 日系（中文平台上的日语 ID 网友）
+  '桜ちやん', 'たまご', '抹茶大福', '深夜三点の猫', '雨の日好き', 'ごはんlover',
+  '本日の気分', 'カフェオレ', '夏の終わり', '読書中', '猫のかたまり', '月見うどん',
+  // 韩系
+  '하늘별', '치즈볼', '서울야행', '오늘도수고', '달빛러버', '泡菜加满',
+  '首尔在逃实习生', '汉江公园常客', '便利店三角饭团',
+  // 繁体风（港台网友）
+  '不吃香菜的傑森', '台北小美', '在香港的Amy', '高雄看海人', '台南吃透透', '澳門夜遊人',
+  '東區逛街狂', '基隆雨都人',
+];
+
+/** 真实感简介池（随机分配给动态网友） */
+const BIO_POOL: string[] = [
+  '日常碎碎念，想到什么说什么', '在人间凑数的日子', '退网了但没完全退', '网络冲浪十级选手',
+  '只看不发星人（偶尔发）', '深夜emo，白天装正常人', '吃瓜第一名，发言看心情', '我的主页我做主',
+  '碎碎念专用号', '今天也是热爱生活的一天', '评论区常驻，主页常年荒芜', '生活不易，猫猫叹气',
+  '攒钱买小岛计划进行中', '打工是不可能打工的（在打工）', '追星理智粉，偶尔失控', '已读不回专业户',
+  '点赞之交也欢迎', '随手记录，欢迎围观', '间歇性崩溃，习惯性自愈', '不吵架，只吃瓜',
+  '转发这只锦鲤', '白天搞笑，晚上emo', '随便看看，随便聊聊', '干饭睡觉打豆豆',
+  '碎嘴但心善', '略', '这个人很懒，什么都没留下', '永远十七岁', '在逃迪士尼公主',
+  '宇宙无敌可爱（自封）', '瓜田里的普通猹', '蹲一个后续', '今日份快乐已送达',
+  '在线冲浪，慢回勿念', '本人比文案有趣', '主页是精神状况展示区', '记录美好生活（偶尔）',
+];
+
+/** 彩底头像底色板（动态网友随机） */
+const AVATAR_BGS: string[] = [
+  '#e0528f', '#f0729a', '#d18700', '#e8930c', '#2f855a', '#0f9c6e', '#3a5f9c', '#0f7d9c',
+  '#7b4fe0', '#8c3aa8', '#c4396b', '#b35c00', '#8b4513', '#6b8e23', '#5f4b8b', '#2f6d4f',
+  '#c4392f', '#536471', '#a0522d', '#483d8b', '#2e8b57', '#cd853f', '#db7093', '#556b2f',
+];
+
+/** 动态网友上限（防数据无限膨胀：超限后不再新建，复用已有网友——真实论坛也是老面孔发新帖） */
+export const DYN_NPC_CAP = 2600;
+
+/** 语言代码 → 中文名（生成 prompt 用） */
+export const FORUM_LANG_LABELS: Record<string, string> = {
+  'zh-Hans': '简体中文',
+  'zh-Hant': '繁体中文',
+  en: '英语',
+  ja: '日语',
+  ko: '韩语',
+};
+
+/** 随机惯用语言（用户要求：帖子/评论可以生成英语、韩语、日语、繁体字等——
+ *  多数简体中文（中文平台），自然混入繁体/英/日/韩网友，像真实的国际化评论区） */
+function rollLang(): string {
+  const r = Math.random();
+  if (r < 0.68) return 'zh-Hans';
+  if (r < 0.78) return 'zh-Hant';
+  if (r < 0.86) return 'en';
+  if (r < 0.93) return 'ja';
+  return 'ko';
+}
+
+/** 池子耗尽后的真实感变体名（像真实平台的重名用户：momo → momo_0321 / momo本人 / 不是momo） */
+function makeNameVariant(base: string, used: Set<string>): string {
+  for (let i = 0; i < 60; i++) {
+    const n = Math.floor(Math.random() * 9000 + 1000);
+    const styles = [
+      `${base}_${n}`,
+      `${base}${Math.floor(Math.random() * 90 + 10)}`,
+      `${base}本人`,
+      `不是${base}`,
+      `${base}分身`,
+      `${base}的日常`,
+      `今天${base}上线`,
+      `${base}二号机`,
+    ];
+    const cand = styles[Math.floor(Math.random() * styles.length)];
+    if (!used.has(cand)) return cand;
+  }
+  return `${base}_${Date.now().toString(36).slice(-4)}`;
+}
+
+/** 初始化已用名集合（首次使用时合并内置 NPC 名，防动态网友撞内置名） */
+function ensureUsedNames(d: ForumData): string[] {
+  if (!Array.isArray(d.usedNames)) d.usedNames = [];
+  if (!d.usedNames.length) {
+    d.usedNames = NPC_DEFS.map((n) => n.name);
+    d.usedNames.push(OFFICIAL_AUTHOR.name);
+  }
+  return d.usedNames;
+}
+
+/** 动态创建一个虚拟网友（同步、原位写入 forumData，由调用方随后 saveForum 落盘广播）。
+ *  - 网名从真实感池取未用名；池尽后生成变体名 → 永不重名；
+ *  - lang：惯用发帖语言（外语帖子/评论由这类网友发出）；langBias 传入时大概率跟随偏置
+ *    （如英语帖子评论区英语网友更多）；
+ *  - 池满（> DYN_NPC_CAP）返回已有随机网友 key（不再新建）。
+ *  返回 authorKey（`dyn:<id>`）。 */
+export function createDynNpc(langBias?: string): AuthorKey {
+  const d = forumData();
+  if (!d.dynNpcs) d.dynNpcs = {};
+  const ids = Object.keys(d.dynNpcs);
+  if (ids.length >= DYN_NPC_CAP) {
+    return `dyn:${ids[Math.floor(Math.random() * ids.length)]}`;
+  }
+  const used = new Set(ensureUsedNames(d));
+  const avail = REAL_NAME_POOL.filter((n) => !used.has(n));
+  const name = avail.length
+    ? avail[Math.floor(Math.random() * avail.length)]
+    : makeNameVariant(REAL_NAME_POOL[Math.floor(Math.random() * REAL_NAME_POOL.length)], used);
+  d.usedNames!.push(name);
+  const lang = langBias && Math.random() < 0.55 ? langBias : rollLang();
+  const bio = BIO_POOL[Math.floor(Math.random() * BIO_POOL.length)];
+  const bg = AVATAR_BGS[Math.floor(Math.random() * AVATAR_BGS.length)];
+  const followers = Math.random() < 0.06
+    ? 80_000 + Math.floor(Math.random() * 900_000) // 少数大 V
+    : 20 + Math.floor(Math.random() * 90_000);
+  const id = uid('d');
+  d.dynNpcs[id] = {
+    name,
+    bio,
+    bg,
+    lang,
+    verified: Math.random() < 0.07,
+    followers,
+    persona: `论坛网友「${name}」，简介：${bio}。说话像真实网友，有自己的语气习惯，偶尔跑题，偶尔玩梗。`,
+  };
+  return `dyn:${id}`;
+}
+
 // ---------------- 存取 + 订阅 ----------------
 
 const CHANGED_EVENT = 'forum-data-changed';
@@ -687,6 +876,24 @@ export function resolveAuthor(key: AuthorKey): ForumAuthor {
         bio: def.bio,
         baseFollowers: def.followers,
         persona: def.persona,
+      };
+    }
+  }
+  if (key.startsWith('dyn:')) {
+    // 动态虚拟网友（真实感网名池生成；resolveAuthor 直读数据层，无需缓存）
+    const def = forumData().dynNpcs?.[key.slice(4)];
+    if (def) {
+      return {
+        key,
+        name: def.name,
+        handle: randomHandle(key),
+        avatar: null,
+        npcAvatar: { bg: def.bg, ch: def.name.slice(0, 1) },
+        verified: def.verified,
+        bio: def.bio,
+        baseFollowers: def.followers,
+        persona: def.persona,
+        lang: def.lang,
       };
     }
   }

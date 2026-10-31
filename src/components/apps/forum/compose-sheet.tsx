@@ -30,11 +30,12 @@ import {
   Type,
   X,
 } from 'lucide-react';
-import { trendingTopics, forumData } from '@/lib/forum/core';
+import { trendingTopics, forumData, POST_MAX } from '@/lib/forum/core';
 import { XAvatar, XIcons, useXTheme } from './shared';
 import { useForum } from './ctx';
 
-const LIMIT = 280;
+/** 发布字数上限（用户要求「生成的字数不限」：与数据层 POST_MAX 同步 = 2000） */
+const LIMIT = POST_MAX;
 const SW = 1.9;
 const MAX_MEDIA = 4;
 
@@ -158,14 +159,14 @@ function fileToPostMedia(file: File): Promise<string> {
   });
 }
 
-/** X 字数圆环（剩余量；<20 转橙，<0 变红） */
+/** X 字数圆环（剩余量；≤200 转橙，<0 变红；长上限下按剩余百分比计） */
 function Ring({ left }: { left: number }) {
   const t = useXTheme();
   if (left >= LIMIT) return null;
   const r = 9;
   const c = 2 * Math.PI * r;
   const ratio = Math.max(0, Math.min(1, left / LIMIT));
-  const stroke = left < 0 ? '#f4212e' : left <= 20 ? '#ffa500' : t.blue;
+  const stroke = left < 0 ? '#f4212e' : left <= 200 ? '#ffa500' : t.blue;
   return (
     <svg width={24} height={24} viewBox="0 0 24 24" aria-hidden="true">
       <circle cx="12" cy="12" r={r} fill="none" stroke={t.border} strokeWidth="2" />
@@ -182,7 +183,7 @@ function Ring({ left }: { left: number }) {
           strokeLinecap="round"
         />
       )}
-      {left <= 20 && (
+      {left <= 200 && (
         <text x="12" y="16" textAnchor="middle" fontSize="11" fontWeight="700" fill={left < 0 ? '#f4212e' : stroke}>
           {left < 0 ? '' : left}
         </text>

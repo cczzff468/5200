@@ -40,6 +40,25 @@ import { XAvatar, XIcons, VerifiedBadge } from './shared';
 import { useForum } from './ctx';
 import { CommunityIcon, PostMedia, PollBlock, LocationLine } from './feed';
 
+/** 论坛翻译请求 + 超时保护：翻译兑底链路（代理 → 浏览器直连 → 内置模型）最长可挂
+ *  数分钟（直连超时 120s×2），论坛场景 25s 未出结果即按失败处理快速提示；
+ *  底层若稍后成功会写入译文缓存，重点一次直接命中。 */
+function translateForum(text: string): Promise<string> {
+  const target = detectMessageLang(text) === 'zh-Hans' ? 'en' : 'zh-Hans';
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('翻译超时')), 25_000);
+    requestTranslation({ text, lang: target, apiConfig: useSettings.getState().apiConfig })
+      .then((out) => {
+        clearTimeout(timer);
+        resolve(out);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 /** 详情页互动栏单个图标钮（X 官方：带数字，悬停浅色圆底 + 图标/数字同步变色） */
 function ThreadAction({
   icon,
@@ -186,6 +205,69 @@ function CommentActions({
   );
 }
 
+/** 评论翻译行（用户要求：评论区添加翻译按钮）。外语评论 → 简体中文，
+ *  简体中文评论 → 英语；译文附加显示在原文之后（不替换原文），
+ *  带「由 AI 翻译」标注，可在 查看译文/收起译文 间切换。 */
+function CommentTranslateLine({ text }: { text: string }) {
+  const f = useForum();
+  const t = f.t;
+  const [st, setSt] = useState<{ loading: boolean; out: string | null; shown: boolean }>({
+    loading: false,
+    out: null,
+    shown: false,
+  });
+
+  const run = () => {
+    if (st.loading) return;
+    // 已有译文：切换展示/收起
+    if (st.out !== null) {
+      setSt((s) => ({ ...s, shown: !s.shown }));
+      return;
+    }
+    const src = text.trim();
+    if (!src) return;
+    setSt({ loading: true, out: null, shown: false });
+    translateForum(src)
+      .then((out) => setSt({ loading: false, out, shown: true }))
+      .catch(() => {
+        setSt({ loading: false, out: null, shown: false });
+        f.toast('翻译失败，稍后再试');
+      });
+  };
+
+  const label = st.loading ? '翻译中…' : st.out !== null ? (st.shown ? '收起译文' : '查看译文') : '翻译';
+
+  return (
+    <div className="mt-[3px]">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          run();
+        }}
+        disabled={st.loading}
+        className="text-[13px] font-bold transition-opacity active:opacity-50 disabled:opacity-60"
+        style={{ color: t.blue }}
+        aria-label={label}
+      >
+        {label}
+      </button>
+      {st.out !== null && st.shown && (
+        <p
+          className="mt-[3px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]"
+          style={{ color: t.text }}
+        >
+          {st.out}
+          <span className="ml-1.5 inline-flex items-center gap-1 text-[12px] font-normal" style={{ color: t.secondary }}>
+            <Languages width={11} height={11} strokeWidth={1.9} aria-hidden="true" />
+            由 AI 翻译
+          </span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** 评论名行（参考图规格）：名字(bold 黑) + 认证 + @账号 · 时间(灰) + 最右「···」 */
 function CommentNameRow({
   authorKey,
@@ -280,6 +362,8 @@ function CommentRow({
           <p className="mt-[2px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]" style={{ color: t.text }}>
             {comment.content}
           </p>
+          {/* 翻译按钮（用户要求：评论区添加翻译；译文附加在原文之后） */}
+          <CommentTranslateLine text={comment.content} />
           {/* 操作行：回复/转推/爱心/浏览/书签/分享（空心线性图标 + 数字） */}
           <CommentActions
             post={comment}
@@ -331,6 +415,8 @@ function CommentRow({
                         >
                           {s.content}
                         </p>
+                        {/* 子回复翻译按钮（评论区翻译能力覆盖楼中楼） */}
+                        <CommentTranslateLine text={s.content} />
                         {/* 小操作行（与顶层一致的六图标，小一号） */}
                         <CommentActions
                           post={s}
@@ -443,7 +529,7 @@ export function ThreadView({ postId }: { postId: string }) {
     inputRef.current?.focus();
   };
 
-  /** AI 翻译正文：中文 → 英语，外语 → 中文（带缓存与内置模型兜底） */
+  /** AI 翻译正文：中文 → 英语，外语 → 中文（带缓存与内置模型兜底；25s 超时保护） */
   const runTranslate = () => {
     // 已有译文：切换展示/收起
     if (tr.text) {
@@ -453,8 +539,7 @@ export function ThreadView({ postId }: { postId: string }) {
     const text = post.content.trim();
     if (!text || tr.loading) return;
     setTr({ loading: true, text: null, shown: false });
-    const target = detectMessageLang(text) === 'zh-Hans' ? 'en' : 'zh-Hans';
-    requestTranslation({ text, lang: target, apiConfig: useSettings.getState().apiConfig })
+    translateForum(text)
       .then((out) => setTr({ loading: false, text: out, shown: true }))
       .catch(() => {
         setTr({ loading: false, text: null, shown: false });
