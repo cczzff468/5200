@@ -59,7 +59,7 @@ export function DmsView() {
           </button>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {rows.length === 0 && (
           <p className="px-10 pt-20 text-center text-[15px]" style={{ color: t.secondary }}>
             还没有私信。去别人的主页点信封图标开聊吧
@@ -162,7 +162,7 @@ export function DmThread({ peerKey }: { peerKey: AuthorKey }) {
       </div>
 
       {/* 消息流 */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
         {messages.length === 0 && (
           <p className="pt-16 text-center text-[15px]" style={{ color: t.secondary }}>
             和 {peer.name} 的对话才开始，说点什么吧

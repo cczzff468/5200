@@ -191,7 +191,7 @@ export function EditProfileSheet({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="forum-hide-scrollbar min-h-0 flex-1 overflow-y-auto pb-10">
+        <div className="forum-hide-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-10">
           {/* 背景图（从手机上传，3:1 裁剪） */}
           <div
             className="relative h-[130px] w-full shrink-0 overflow-hidden"

@@ -20,8 +20,11 @@ export const FORUM_KEY = 'forum-data-v1';
  *  用户自己发的帖子与回复保留）。v3 = 真实网民口吻 + 防刷屏 + 热度分级 + 首刷连带评论
  *  + 评论主题匹配（版块定领域）+ 评论时间戳自然铺开；
  *  v4 = 网名改为 LLM 生成（不再用内置池子名，用户要求）+ 动态网友占比提升
- *  + 点赞/浏览数字缩写改为 w/k 风格 */
-export const GEN_VERSION = 4;
+ *  + 点赞/浏览数字缩写改为 w/k 风格；
+ *  v5 = 网名与帖子领域彻底解绑（用户反馈：不要按帖子分类自动匹配网名前缀——
+ *  删除全部人设原型网名池，改为 LLM 名字库随取随用）+ 内置 NPC 也由 LLM 起名
+ *  （「电影院常驻嘉宾」「是小柔本人呀」这类内置描述型网名全部下岗） */
+export const GEN_VERSION = 5;
 /** 首次播种的 NPC 帖子目标条数（feed 一屏半左右） */
 export const SEED_POST_TARGET = 14;
 /** 补新帖：feed 最新帖子超过该毫秒数视为「凉了」，打开时补 2~4 条 */
@@ -154,8 +157,8 @@ export interface ForumDynNpc {
    *  如上一条抱怨试驾没车、下一条晒提车；只保留最近 3 条） */
   recent?: string[];
   /** 网名是否已由 LLM 生成（用户要求：网名不要内置池子，让 AI 起）：
-   *  createDynNpc 先用池子名同步占位，renameDynNpc 换成 LLM 名后置 true；
-   *  false/undefined = 还是占位名（限流期创建的网友），后续批次继续尝试回填 */
+   *  createDynNpc 从 LLM 名字库（nameBank）取名时直接置 true；
+   *  名字库空时用通用真实感池占位置 false（限流期创建的网友），后续批次回填换名 */
   named?: boolean;
 }
 
@@ -177,6 +180,12 @@ export interface ForumData {
   dynNpcs?: Record<string, ForumDynNpc>;
   /** 已用网名（全局防重；初始化时合并内置 NPC 名） */
   usedNames?: string[];
+  /** 内置 NPC 的 LLM 网名覆盖（id → AI 起的名；v5：内置 NPC 不再永久用内置描述型网名） */
+  npcNames?: Record<string, string>;
+  /** 内置 NPC 是否已换上 LLM 名（false/缺省 = 还在用同步池子覆盖名，待 LLM 回填换名） */
+  npcLlmNamed?: Record<string, boolean>;
+  /** LLM 网名库（预生成的备用名，与帖子领域无关；createDynNpc 优先从这里取） */
+  nameBank?: string[];
   /** 生成引擎版本（升级内容风格时 bump：旧 AI 帖子清除重播种，用户自己的帖子保留） */
   genVersion?: number;
   seeded: boolean;
@@ -661,8 +670,6 @@ export interface PersonaArchetype {
   persona: string;
   /** 常聊话题方向（喂给 LLM 的 topic） */
   topics: string[];
-  /** 该人设的候选网名（真实网友风格） */
-  names: string[];
 }
 
 export const PERSONA_ARCHETYPES: PersonaArchetype[] = [
@@ -670,193 +677,161 @@ export const PERSONA_ARCHETYPES: PersonaArchetype[] = [
     id: 'dagong', label: '打工人',
     persona: '互联网公司打工人，天天嘴上辞职月月满勤，聊通勤、老板画饼、摸鱼技巧、工资和房租。语气疲惫带自嘲，爱说「谁懂啊」「真的会谢」「已老实」，偶尔爆发的怨气很真实。',
     topics: ['打工日常', '通勤挤地铁', '老板画饼', '工位摸鱼'],
-    names: ['今天也不想上班', '上班如上坟本坟', '周一受害者', '早八幸存者', '工资三分钟热度', '老板画的饼真香', '工位摸鱼冠军', '带薪如厕大师', '通勤两小时选手', '已老实求放过', '辞职口号月更', '这个月又不月光', '班味洗不掉', '精神离职中', '周报编不下去'],
   },
   {
     id: 'fanquan', label: '饭圈女孩',
     persona: '追星女孩，前线消息快人一步，聊爱豆行程、演唱会、代拍乱象、塌房预警。语气活泼波浪号打不停，理智追星但偶尔上头，见到「某某真人比屏幕帅」这类帖子必回。',
     topics: ['追星日常', '演唱会现场', '内娱八卦', '塌房预警'],
-    names: ['纯路人拔萝卜', '吃瓜不吐籽_', '内娱判官', '别惹我_会发疯', '本命只有我知道', '嗑到了就是真的', '代拍劝退大使', '顶流观察员', '站姐背后的女人', '应援色收藏家', '数据女工今天下班了吗', '白嫖演唱会门票', '追星不花钱联盟', '今天内娱塌房了吗'],
   },
   {
     id: 'shuma', label: '数码极客',
     persona: '数码极客，新机发布会必看直播，聊芯片跑分、屏幕素质、性价比。等等党代言人，爱说「一步到位」「再战三年」「买新不买旧」，对厂商刀法精准程度如数家珍。',
     topics: ['数码新机', '发布会看点', '性价比', '等等党'],
-    names: ['等等党永不为奴', '跑分不代表体验', '安兔兔爱好者', '刷机砖头收藏家', '显卡终于到了', '装机预算超了', '参数党本党', '骁龙还是天玑', '屏幕素质敏感肌', '充电五分钟党'],
   },
   {
     id: 'baoma', label: '宝妈',
     persona: '二胎宝妈，日常聊娃的辅食、学区房、辅导作业崩溃瞬间和婆媳过招。琐碎但真实，偶尔崩溃大多温暖，爱用省略号和叹气。',
     topics: ['育儿日常', '辅食大战', '学区房', '辅导作业'],
-    names: ['辅食做得想哭', '娃睡了我才活', '学区房焦虑中', '作业辅导到心梗', '二胎老母亲', '婆婆又来了怎么办', '幼儿园手工艺大赛', '哄睡两小时选手', '妈妈的电量1%', '吞金兽饲养员'],
   },
   {
     id: 'gaoxiao', label: '搞笑女',
     persona: '搞笑女，万物皆可整活，自嘲式幽默，讲自己的社死现场比谁都起劲，评论区永远哈哈哈。语气夸张，善用「救命」「笑死」「家人们谁懂」。',
     topics: ['社死现场', '整活日常', '搞笑段子'],
-    names: ['社死现场当事人', '今天也很搞笑', '本人比段子好笑', '哈哈哈哈就是我', '整活一整天', '乌鸦坐飞机', '显眼包本包', '笑点低到地心', '喜剧人设不崩', '抽象话十级'],
   },
   {
     id: 'chigua', label: '吃瓜群众',
     persona: '资深吃瓜群众，热搜常驻前排，瓜子花生矿泉水一应俱全。从不提前站队，信奉让子弹再飞一会儿，遇到爆料帖必问「有实锤吗」。',
     topics: ['内娱八卦', '热搜围观', '吃瓜现场'],
-    names: ['瓜田里上蹿下跳', '前排围观不发言', '瓜子已备好', '让子弹再飞会儿', '蹲后续专业户', '热搜挂钩钉子户', '吃瓜吃到撑', '这个瓜保熟吗', '瓜农直销不议价', '板凳已搬好'],
   },
   {
     id: 'gangjing', label: '杠精',
     persona: '论坛杠精，看什么都要杠一句，擅长「只有我觉得」「不是我说」「有一说一」开头，语气阴阳怪气但逻辑偶尔在线。回帖必唱反调，热度高的帖子他杠得越起劲。',
     topics: ['万物皆可杠'],
-    names: ['只有我觉得吗', '不是我说什么', '有一说一啊', '杠就是你对', '你先别急', '急了急了', '破防了兄弟', '就这也能上热搜', '我来泼个冷水', '理性讨论个头'],
   },
   {
     id: 'kebiao', label: '课代表',
     persona: '课代表体质，看帖必总结，条理清晰爱划重点，「课代表来了」「省流版」是口头禅，被网友催更是日常。',
     topics: ['热搜总结', '省流吃瓜'],
-    names: ['课代表本表', '省流助手在线', '总结怪本人', '划重点小能手', '今日热搜已总结', '抄作业的举手', '前排课代表', '省流版来了'],
   },
   {
     id: 'zhuiju', label: '追剧狂魔',
     persona: '追剧狂魔，一部剧一晚上刷完，烂尾预警员，发疯文学十级。被刀过的心比追过的剧还多，爱说「编剧出来挨打」「这剧有毒我不戒」。',
     topics: ['追剧吐槽', '烂尾预警', '新剧安利'],
-    names: ['一晚刷完一部剧', '烂尾预警员', '发疯文学十级', '编剧刀我请用剧情', '这剧有毒我不戒', '意难平患者', '倍速都嫌慢', '剧荒到啃老剧', '大结局我不敢看', '追剧追到天亮'],
   },
   {
     id: 'laosiji', label: '老司机',
     persona: '十年驾龄老司机，聊车讲实用，堵车讲心态，见惯马路众生相，句句都是路上悟出来的道理，爱说「安全到家才是老司机」。',
     topics: ['提车养车', '堵车日常', '开车见闻'],
-    names: ['十年老司机本机', '弯道慢就是快', '路上悟出的道理', '加油站常客', '保养不被坑指南', '开了十年才悟了', '高速巡航选手', '冬天热车一分钟'],
   },
   {
     id: 'xinshou', label: '新手司机',
     persona: '刚拿本的新手司机，侧方停车要来三把，被滴滴就手心冒汗，攒钱看车蹭试驾，销售都认识他了。语气又菜又爱问。',
     topics: ['新手开车', '攒钱买车', '蹭试驾'],
-    names: ['侧方停车三把进', '刚拿本别滴滴我', '科目二阴影患者', '实习贴纸还没撕', '蹭试驾专业户', '倒车影像依赖者', '驾照到手车没有', '攒钱提车中'],
   },
   {
     id: 'daxuesheng', label: '大学生',
     persona: '普通大学生，早八靠闹钟续命，期末靠图书馆通宵，宿舍夜谈、食堂测评、恋爱脑一个不少。语气年轻，爱用缩写和梗。',
     topics: ['校园日常', '期末周', '食堂测评'],
-    names: ['早八人早八魂', '期末周活不下去了', '图书馆钉子户', '宿舍夜谈会会长', '食堂三楼测评员', '恋爱脑但没对象', '选修课必逃', '学分绩点焦虑中', '抢课失败选手', '军训黑了三度'],
   },
   {
     id: 'kaoyan', label: '考研党',
     persona: '考研人，图书馆-食堂-出租屋三点一线，政治英语专业课轮着背，焦虑但嘴硬，爱说「一战成硕」「求求了」。',
     topics: ['考研日常', '图书馆占座', '背书崩溃'],
-    names: ['政治背到麻木', '英语阅读全错', '专业课背了三遍', '考研倒计时中', '图书馆三楼常客', '一战上岸求求了', '肖四肖八抱佛脚', '自习室包年用户'],
   },
   {
     id: 'chanshou', label: '铲屎官',
     persona: '铲屎官，猫毛沾满全身也开心，聊猫粮测评、疫苗、拆家现场，相册全是宠物照，爱说「主子」「毛孩子」。',
     topics: ['猫猫狗狗', '宠物日常', '拆家现场'],
-    names: ['猫毛过敏但养猫', '铲屎官日记', '狗子今天拆家了', '猫粮测评员', '疫苗本收藏家', '吸猫续命中', '遛狗社交达人', '主子的铲屎官', '宠物医院VIP', '猫窝比床贵'],
   },
   {
     id: 'jianshen', label: '健身咖',
     persona: '健身咖，三分化训练雷打不动，鸡胸肉西兰花就是命，爱聊体脂率和补剂，对「三天打鱼式健身」选手恨铁不成钢。',
     topics: ['健身打卡', '减脂日常', '体脂率'],
-    names: ['三分化从不缺席', '鸡胸肉吃到吐', '体脂率观察员', '深蹲到底了吗', '蛋白粉搅拌杯', '健身房年卡用户', '今天练腿了吗', '跑步机上的人生', '镜子前拍照狂'],
   },
   {
     id: 'youxi', label: '游戏宅',
     persona: '游戏宅，新游必买首发，开黑上分两不误，聊版本更新、装备掉率、外挂骂战。凌晨排位是日常，语气冲但讲道理。',
     topics: ['游戏开黑', '新游测评', '上分日常'],
-    names: ['新游必买首发', '开黑吗我亚索', '版本之子本人', '上分失败选手', '凌晨排位中', '装备毕业了吗', '肝到天亮', '这游戏还能玩吗', '小学生别坑我'],
   },
   {
     id: 'shengqian', label: '省钱达人',
     persona: '省钱达人，优惠券之王，羊毛见就薅，钱包和快乐都省出来。对一切营销套路免疫，爱说「这钱不花就是赚」。',
     topics: ['省钱薅羊毛', '优惠券', '平替好物'],
-    names: ['优惠券收藏家', '羊毛见就薅', '平替研究员', '比价一小时选手', '红包覆盖一切', '拼单大师', '省钱省出快乐', '不吃这套营销', '购物车观望半年'],
   },
   {
     id: 'chihuo', label: '吃货',
     persona: '干饭人，美食雷达全开，新店必打卡，聊探店、外卖测评、深夜放毒。爱说「看饿了」「这也太香了」。',
     topics: ['美食探店', '外卖测评', '深夜放毒'],
-    names: ['干饭第一名', '新店必打卡', '美食雷达全开', '深夜放毒选手', '这家店我熟', '吃遍这条街', '碳水快乐星人', '奶茶三分甜', '火锅底料本料'],
   },
   {
     id: 'lvxing', label: '旅行者',
     persona: '旅行特种兵，周末也要闪现外地，穷游攻略大师，聊踩坑、机酒比价、出片机位。爱说「来都来了」。',
     topics: ['旅行踩坑', '穷游攻略', '特种兵旅游'],
-    names: ['周末闪现外地', '穷游攻略大师', '出片机位侦察兵', '机酒比价两小时', '特种兵行程表', '青旅常驻嘉宾', '旅行踩坑实录', '说走就走选手', '景区避雷指南', '行李箱永远不够装'],
   },
   {
     id: 'sheying', label: '摄影党',
     persona: '摄影党，器材吃灰，废片一堆，聊出片返图、构图玄学、修图两小时。爱说「直出是不可能直出的」。',
     topics: ['摄影日常', '器材吃灰', '废片收藏'],
-    names: ['废片收藏家', '器材吃灰中', '构图玄学信徒', '修图两小时起步', '直出是不可能直出的', '镜头盖永远在丢', '光圈开最大', '扫街十连拍', '返图比出片慢'],
   },
   {
     id: 'yemao', label: '夜猫子',
     persona: '夜猫子，凌晨三点精神最好，深夜 emo 与快乐交替，聊失眠、夜宵、凌晨的世界。凌晨发的帖子情绪浓度最高。',
     topics: ['深夜emo', '失眠互助', '夜宵时间'],
-    names: ['凌晨三点最清醒', '又是一个通宵', '失眠患者本人', '夜宵时间到了', '月亮不睡我不睡', '凌晨的世界很安静', '白天起不来晚上睡不着', '数羊数到一万', '褪黑素依赖中'],
   },
   {
     id: 'kafei', label: '咖啡控',
     persona: '咖啡续命，一天三杯起步，瑞幸库迪测评员，聊豆子、拉花、打工人的咖啡因。爱说「不喝咖啡等于没醒」。',
     topics: ['咖啡日常', '打工人续命水'],
-    names: ['咖啡因续命中', '一天三杯起步', '瑞幸测评员', '拉花失败选手', '豆子研磨中', '美式不加糖', '拿铁要去冰', '咖啡因耐受体质', '工位咖啡自由'],
   },
   {
     id: 'qiumi', label: '球迷',
     persona: '球迷，足球篮球都看，凌晨的球赛一场不落，聊转会、战术、VAR争议。主队输球当天不发帖心里堵得慌。',
     topics: ['看球日常', '转会窗', '比赛复盘'],
-    names: ['凌晨看球不困', '转会窗观察员', 'VAR又抢戏了', '主队又输了', '战术板画满', '季后赛不留念', '越位判罚争议中', '主场门票求转让'],
   },
   {
     id: 'yinyue', label: '音乐节常客',
     persona: 'livehouse 钉子户，音乐节全勤，聊阵容、抢票、现场偶遇。爱说「现场的震撼是耳机给不了的」。',
     topics: ['音乐节', 'livehouse', '抢票大战'],
-    names: ['livehouse钉子户', '音乐节全勤选手', '抢票手速王', '前排蹦到腿软', '阵容一出就冲', '单曲循环中', '巡演求加场', '黄牛加价不买'],
   },
   {
     id: 'erciyuan', label: '二次元',
     persona: '二次元，追番补番两不误，聊新番、谷子、漫展，偶尔痛包出门。爱说「这就是青春」「补番补到天亮」。',
     topics: ['追番日常', '漫展', '吃谷日常'],
-    names: ['新番追更中', '补番补到天亮', '漫展全勤选手', '谷子吃土中', '痛包出门日', '声优控晚期', '漫画等更新等哭', '手办一面墙', '二次元浓度超标'],
   },
   {
     id: 'hanfu', label: '汉服lo娘',
     persona: '汉服 lo 娘，出片返图，聊工期、形制、马面裙搭配。为了一件工期半年的袄裙愿意吃土三个月。',
     topics: ['汉服日常', '出片返图', '马面裙'],
-    names: ['工期漫长等待中', '马面裙搭配中', '形制党路过', '出片返图慢十拍', '汉服日常通勤', '簪子插满头', 'lo裙吃土中', '油菜花田拍摄中'],
   },
   {
     id: 'xiaozhen', label: '小镇青年',
     persona: '县城生活观察家，聊小城的慢节奏、人情世故、返乡见闻。语气平和带点幽默，爱说「镇上就这么大点事」。',
     topics: ['县城生活', '返乡见闻', '小城日常'],
-    names: ['县城生活观察家', '小城慢节奏', '返乡见闻录', '镇上新鲜事', '十八线小城日常', '村里通网了', '回县城躺平中', '小城人情世故', '镇口修表大爷粉丝'],
   },
   {
     id: 'beipiao', label: '北漂',
     persona: '北漂青年，合租隔断间，通勤跨半城，聊房租、搬家、和这座城市若即若离的关系。语气疲惫但不服输。',
     topics: ['北漂日常', '合租隔断', '搬家血泪'],
-    names: ['五环外合租中', '通勤跨半城', '隔断间艺术家', '搬了三次家了', '房租涨了又涨', '北京留下不容易', '地铁尽头是我家', '早高峰人形立牌', '北漂第五年'],
   },
   {
     id: 'dongbei', label: '东北老铁',
     persona: '东北老铁，唠嗑式发言，自来熟，聊啥都像唠家常，爱说「咋地」「老铁」「整挺好」。看啥都想整两句。',
     topics: ['唠嗑日常', '东北生活'],
-    names: ['老铁没毛病', '整挺好本好', '唠嗑式发言', '咋地不服啊', '大碴子味发言', '东北唠嗑十级', '貂儿还没穿上', '酸菜缸守护者', '澡堂子常客'],
   },
   {
     id: 'yue', label: '粤圈靓仔',
     persona: '粤圈靓仔，煲汤叹茶，粤语口头禅「係咁先」「饮茶先啦」，聊早茶、糖水、广东天气。语气淡定看透一切。',
     topics: ['广东生活', '早茶', '煲汤'],
-    names: ['粤圈靓仔本仔', '饮茶先啦', '煲汤两小时', '糖水不能停', '早茶全点点心', '广东短袖过冬', '回南天墙流泪', '凉茶续命中', '肠粉不加辣'],
   },
   {
     id: 'liuxue', label: '海外留学生',
     persona: '海外留学生，时差党，半夜想家想外卖，聊 due、中超、汇率。爱说「国内的朋友请我吃一口」。',
     topics: ['留学生活', '时差党', '想家瞬间'],
-    names: ['时差党本人', 'due到天亮', '中超代购依赖', '汇率观察员', '半夜想家想外卖', '留学生做饭糊弄学', '论文延毕边缘', 'group work受害者'],
   },
   {
     id: 'ningmeng', label: '柠檬精',
     persona: '柠檬精，看啥都先酸一句，酸完不忘给自己打气，自嘲成瘾。爱说「酸了酸了」「我不配」。',
     topics: ['酸言酸语', '日常羡慕'],
-    names: ['酸完接着干', '柠檬树上柠檬果', '羡慕使我酸涩', '别人家的offer', '酸到话梅程度', '柠檬精的自我修养', '酸完继续搬砖', '甜是不可能的', '柠檬精本精'],
   },
 ];
 
@@ -940,14 +915,69 @@ function makeNameVariant(base: string, used: Set<string>): string {
   return `${base}_${Date.now().toString(36).slice(-4)}`;
 }
 
-/** 初始化已用名集合（首次使用时合并内置 NPC 名，防动态网友撞内置名） */
+/** 初始化已用名集合（首次使用时合并内置 NPC 名，防动态网友撞内置名；
+ *  v5：内置 NPC 的 LLM 覆盖名也一并占用） */
 function ensureUsedNames(d: ForumData): string[] {
   if (!Array.isArray(d.usedNames)) d.usedNames = [];
   if (!d.usedNames.length) {
     d.usedNames = NPC_DEFS.map((n) => n.name);
     d.usedNames.push(OFFICIAL_AUTHOR.name);
   }
+  for (const v of Object.values(d.npcNames ?? {})) {
+    if (!d.usedNames.includes(v)) d.usedNames.push(v);
+  }
   return d.usedNames;
+}
+
+/** 还没换上 LLM 网名的内置 NPC id（起名回填目标；v5：内置 NPC 也由 LLM 起名）。
+ *  同步池子覆盖名（限流期保底）不算完成——只有 npcLlmNamed 标记过的才算。 */
+export function unnamedNpcIds(): string[] {
+  const d = forumData();
+  return NPC_DEFS.map((n) => n.id).filter((id) => !d.npcLlmNamed?.[id]);
+}
+
+/** 播种时同步给内置 NPC 分配真实感池子覆盖名（不依赖 LLM：限流期也不露出
+ *  「电影院常驻嘉宾」「是小柔本人呀」这类内置描述型网名；后续 LLM 回填再换 AI 名）。
+ *  只处理还没覆盖名的；防重（usedNames）；池子耗尽用变体名。返回分配数。 */
+export function seedBuiltinNpcFallbackNames(): number {
+  const d = forumData();
+  const used = new Set(ensureUsedNames(d));
+  let n = 0;
+  for (const def of NPC_DEFS) {
+    if (d.npcNames?.[def.id]) continue;
+    const avail = REAL_NAME_POOL.filter((x) => !used.has(x));
+    const name = avail.length
+      ? avail[Math.floor(Math.random() * avail.length)]
+      : makeNameVariant(REAL_NAME_POOL[Math.floor(Math.random() * REAL_NAME_POOL.length)], used);
+    d.npcNames = d.npcNames ?? {};
+    d.npcNames[def.id] = name;
+    d.npcLlmNamed = d.npcLlmNamed ?? {};
+    d.npcLlmNamed[def.id] = false; // 池子覆盖名：LLM 回填目标
+    used.add(name);
+    d.usedNames!.push(name);
+    n += 1;
+  }
+  return n;
+}
+
+/** 给内置 NPC 换 LLM 起的网名（v5：内置 NPC 不再永久用内置描述型名。
+ *  名字存 npcNames 覆盖表并标记 npcLlmNamed；resolveAuthor 动态读取；不动帖子数据。
+ *  不触发 save——由调用方统一落盘广播。返回是否实际改名。 */
+export function renameBuiltinNpc(id: string, newName: string): boolean {
+  const def = NPC_DEFS.find((n) => n.id === id);
+  const next = newName.trim().slice(0, 20);
+  if (!def || !next) return false;
+  const d = forumData();
+  d.npcNames = d.npcNames ?? {};
+  d.npcLlmNamed = d.npcLlmNamed ?? {};
+  // 与内置名相同也标记完成（避免无限重试）；已挂同一个名也直接标记
+  if (next !== def.name && d.npcNames[id] !== next) {
+    d.npcNames[id] = next;
+    const names = ensureUsedNames(d);
+    if (!names.includes(next)) names.push(next);
+  }
+  if (!d.npcLlmNamed[id]) d.npcLlmNamed[id] = true;
+  return true;
 }
 
 /** 重命名动态网友（LLM 生成网名落地：用户要求网名由 AI 生成、不走内置池子；
@@ -1007,11 +1037,19 @@ export function createDynNpc(opts?: { archetypeId?: string; langBias?: string })
   const arch = opts?.archetypeId
     ? PERSONA_ARCHETYPES.find((x) => x.id === opts.archetypeId)
     : PERSONA_ARCHETYPES[Math.floor(Math.random() * PERSONA_ARCHETYPES.length)];
-  // 网名：原型候选（未用）→ 通用池 → 变体
+  // 网名（v5）：LLM 名字库优先（与帖子领域无关——原型只决定口吻，不决定网名）；
+  // 库空（LLM 一直没连上/限流）时才用通用真实感池占位，后续批次回填换名。
+  // 用户要求：不要按帖子分类自动匹配网名前缀，叫 momo 的人照样聊车。
   let name = '';
-  if (arch) {
-    const cand = arch.names.filter((n) => !used.has(n));
-    if (cand.length) name = cand[Math.floor(Math.random() * cand.length)];
+  let named = false;
+  const bank = Array.isArray(d.nameBank) ? d.nameBank : (d.nameBank = []);
+  while (bank.length) {
+    const cand = bank.pop() as string;
+    if (!used.has(cand)) {
+      name = cand;
+      named = true; // 名字库里的都是 LLM 起的名
+      break;
+    }
   }
   if (!name) {
     const avail = REAL_NAME_POOL.filter((n) => !used.has(n));
@@ -1041,6 +1079,7 @@ export function createDynNpc(opts?: { archetypeId?: string; langBias?: string })
     followers,
     persona,
     recent: [],
+    named,
   };
   return `dyn:${id}`;
 }
@@ -1203,17 +1242,25 @@ export function resolveAuthor(key: AuthorKey): ForumAuthor {
   if (key.startsWith('npc:')) {
     const def = NPC_DEFS.find((n) => `npc:${n.id}` === key);
     if (def) {
+      // v5：LLM 起的覆盖名优先（内置描述型名「电影院常驻嘉宾」等不再直接露出）；
+      // persona 里的旧名同步替换，LLM 生成口吻跟着新身份走
+      const ov = forumData().npcNames?.[def.id];
+      const name = ov ?? def.name;
       return {
         key,
-        name: def.name,
+        name,
         // 随机字母+数字账号（用户要求；不再用固定英文 handle）
         handle: randomHandle(key),
         avatar: null,
-        npcAvatar: { bg: def.bg, ch: def.name.slice(0, 1) },
+        npcAvatar: { bg: def.bg, ch: name.slice(0, 1) },
         verified: def.verified,
         bio: def.bio,
         baseFollowers: def.followers,
-        persona: def.persona,
+        persona: ov
+          ? def.persona.includes(def.name)
+            ? def.persona.replaceAll(def.name, ov)
+            : `${def.persona}你的网名叫「${ov}」，说话保持这个人的口吻和用语习惯。`
+          : def.persona,
         ip: NPC_IPS[key.slice(4)],
       };
     }

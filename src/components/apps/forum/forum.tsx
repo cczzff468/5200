@@ -4,8 +4,8 @@
  * X论坛 App · 主框架。
  *
  * - 主页顶栏（X 官方规格）：左 32px 头像（开侧边抽屉）/ 中 𝕏 Logo / 右「订阅」描边胶囊；
- *   下方独立 tab 行「为你推荐|关注|分类标签…」（左对齐 + 蓝色圆头下划线，可横滑）+
- *   右侧 + 号（添加/管理分类标签，勾选后作为附加 tab 筛选版块帖子）；
+ *   下方独立 tab 行「为你推荐|关注|分类标签…」（左对齐 + 蓝色圆头下划线，标签多时换行铺开——
+ *   用户要求：所有界面禁止左右滑动）+ 右侧 + 号（添加/管理分类标签，勾选后作为附加 tab 筛选版块帖子）；
  *   sticky backdrop-blur 半透明（X header 观感）。
  * - 底部 5 tab（X 图标底栏，无文字标签）：主页/搜索/社区/通知/私信，
  *   选中黑实心（深色模式白，X 官方行为）、未选灰。
@@ -442,7 +442,7 @@ export default function ForumApp() {
                 }}
                 onTouchEnd={() => gestureEnd(true)}
                 onTouchCancel={() => gestureEnd(false)}
-                className="forum-hide-scrollbar relative h-full overflow-y-auto overscroll-none"
+                className="forum-hide-scrollbar relative h-full overflow-y-auto overflow-x-hidden overscroll-none"
               >
                 {/* 顶部下拉生成指示器（仅 scrollTop=0 下拉时可见；覆盖内容、不拦截点击） */}
                 <div className="pointer-events-none absolute inset-x-0 top-0 z-20" aria-live="polite">
@@ -507,9 +507,10 @@ export default function ForumApp() {
                       订阅
                     </button>
                   </div>
-                  {/* tab 行：为你推荐 | 关注 | 分类标签… + ＋（添加分类标签），可横滑 */}
-                  <div className="flex items-center border-b" style={{ borderColor: t.border, height: 46 }}>
-                    <div className="forum-hide-scrollbar flex h-full min-w-0 flex-1 items-center overflow-x-auto">
+                  {/* tab 行：为你推荐 | 关注 | 分类标签… + ＋（添加分类标签）；
+                      用户要求：所有界面禁止左右滑动——标签多时换行铺开，不再横滑 */}
+                  <div className="flex items-center border-b" style={{ borderColor: t.border, minHeight: 46 }}>
+                    <div className="forum-hide-scrollbar flex min-w-0 flex-1 flex-wrap items-center">
                       {homeTabs.map(({ key: k, label }) => {
                         const active = homeTab === k;
                         return (
@@ -517,7 +518,7 @@ export default function ForumApp() {
                             key={k}
                             type="button"
                             onClick={() => setHomeTab(k)}
-                            className="relative flex h-full shrink-0 items-center px-5 text-[15px]"
+                            className="relative flex h-[46px] shrink-0 items-center px-5 text-[15px]"
                             style={{ color: active ? t.text : t.secondary, fontWeight: active ? 700 : 500 }}
                           >
                             {label}
@@ -610,7 +611,7 @@ export default function ForumApp() {
             <div
               key={views.length}
               className="absolute inset-0 z-30 animate-[forum-in_.26s_ease-out]"
-              style={{ background: t.bg, overflowY: 'auto' }}
+              style={{ background: t.bg, overflowY: 'auto', overflowX: 'hidden' }}
             >
               {topView.kind === 'thread' && <ThreadView postId={topView.postId} />}
               {topView.kind === 'profile' && <ProfileView authorKey={topView.key} />}
@@ -700,7 +701,7 @@ export default function ForumApp() {
               onClick={() => setDrawer(false)}
             />
             <div
-              className="absolute inset-y-0 left-0 w-[78%] max-w-[320px] animate-[forum-drawer_.24s_ease-out] overflow-y-auto"
+              className="absolute inset-y-0 left-0 w-[78%] max-w-[320px] animate-[forum-drawer_.24s_ease-out] overflow-y-auto overflow-x-hidden"
               style={{ background: t.bg, color: t.text }}
             >
               <div className="px-5 pt-[64px]">
@@ -898,7 +899,7 @@ export default function ForumApp() {
               onClick={() => setTagPicker(false)}
             />
             <div
-              className="forum-hide-scrollbar absolute inset-x-0 bottom-0 max-h-[72%] animate-[forum-sheet_.24s_ease-out] overflow-y-auto rounded-t-2xl pb-[24px]"
+              className="forum-hide-scrollbar absolute inset-x-0 bottom-0 max-h-[72%] animate-[forum-sheet_.24s_ease-out] overflow-y-auto overflow-x-hidden rounded-t-2xl pb-[24px]"
               style={{ background: t.bg, color: t.text }}
             >
               <div className="sticky top-0 z-10 pb-1 pt-4" style={{ background: t.bg }}>

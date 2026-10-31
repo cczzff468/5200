@@ -146,23 +146,30 @@ function isPrivateHost(hostname: string): boolean {
  * 429/限流时指数退避重试（1.5s→3s→6s→12s→20s→30s，共 7 次尝试）：SDK 被朋友圈/论坛等模块并发占用时频繁限流，
  * 是「翻译一直失败」的主要根源——实测限流窗口最长几十秒，重试预算拉到 ~73s 后
  * 绝大多数能在窗口打开时拿到结果（客户端 90s 超时内完成）。
- * 实际 create 走 server-llm 的全局串行队列（并发=1）：论坛生成与翻译不再互相挤兑 429。
+ * 实际 create 走 server-llm 的全局串行队列（并发=1）+ 高优先级通道：
+ * 翻译是用户手点的交互请求，排在论坛/朋友圈后台批量生成任务前面插队执行，
+ * 不再被生成队列饿死几分钟（并发仍恒为 1，429 防护不变）。
  */
 async function sdkTranslate(messages: UpstreamMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
-  const zai = await ZAI.create();
+  let zai: Awaited<ReturnType<typeof ZAI.create>> | null = null;
   let lastErr: unknown = null;
   const waits = [1500, 3000, 6000, 12000, 20000, 30000];
   for (let attempt = 0; attempt <= waits.length; attempt++) {
     try {
-      const completion = await runInSdkQueue(() =>
-        zai.chat.completions.create({
-          messages: messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          thinking: { type: 'disabled' },
-        }),
+      // ZAI.create() 放进 try：限流高峰期 create() 本身也会 429（此前在 try 外，
+      // 一被限流就直接抛错退出——完全绕过退避重试，是「翻译一直失败」的直接原因之一）
+      if (!zai) zai = await ZAI.create();
+      const completion = await runInSdkQueue(
+        () =>
+          zai!.chat.completions.create({
+            messages: messages.map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
+            thinking: { type: 'disabled' },
+          }),
+        { priority: 'high' }, // 交互请求插队：排到后台批量生成任务之前
       );
       const choice = (completion as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0];
       const content = choice?.message?.content;

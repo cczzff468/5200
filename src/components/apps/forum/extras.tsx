@@ -159,7 +159,7 @@ export function SearchView() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {q.trim() ? (
           results.length ? (
             <>
@@ -243,7 +243,7 @@ export function CommunitiesView() {
           </button>
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         <p className="px-4 pb-1 pt-3 text-[17px] font-extrabold">我的社区</p>
         {mine.length === 0 && <EmptyState text="还没有加入任何版块" />}
         {mine.map((c) => (
@@ -367,7 +367,7 @@ export function CommunityPage({ id }: { id: string }) {
           </span>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {posts.length ? (
           posts.map((p) => <PostCard key={p.id} post={p} onOpen={() => f.openThread(p.id)} />)
         ) : (
@@ -406,7 +406,7 @@ export function NotificationsView() {
   return (
     <div className="flex h-full flex-col" style={{ background: t.bg, color: t.text }}>
       <PageHead title="通知" />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {items.length === 0 && <EmptyState text="暂无通知，发条帖子让大家认识你" />}
         {items.map((n) => {
           const a = resolveAuthor(n.fromKey);

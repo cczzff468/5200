@@ -122,13 +122,15 @@ async function upstreamComplete(config: UpstreamConfig, messages: LLMMessage[]):
  *  并发打 SDK 是 429 的最大来源，串行后限流大幅下降。 */
 async function sdkComplete(messages: LLMMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
-  const zai = await ZAI.create();
+  // ZAI.create() 放进重试循环：限流高峰期 create() 也会 429（放 try 外会绕过退避直接抛）
+  let zai: Awaited<ReturnType<typeof ZAI.create>> | null = null;
   let lastErr: unknown = null;
   const waits = [1500, 3000, 6000, 12000, 20000];
   for (let attempt = 0; attempt <= waits.length; attempt++) {
     try {
+      if (!zai) zai = await ZAI.create();
       const completion = await runInSdkQueue(() =>
-        zai.chat.completions.create({
+        zai!.chat.completions.create({
           messages: messages.map((m) => ({ role: m.role, content: m.content })),
           thinking: { type: 'disabled' },
         }),
@@ -156,15 +158,43 @@ async function sdkComplete(messages: LLMMessage[]): Promise<string> {
 /** z-ai SDK 的 chat.completions.create 在并发调用时几乎必 429（论坛生成 +
  *  翻译 + 朋友圈等模块同时打 SDK 时互相挤兑——日志里「翻译一直失败」的主因）。
  *  把所有 SDK 调用排成一条队（并发 = 1）：后面的请求等前面的完成再发；
- *  队头失败不阻塞后续（fn 照常执行）。导出给 /api/translate 等共用。 */
-let sdkQueueTail: Promise<void> = Promise.resolve();
-export function runInSdkQueue<T>(fn: () => Promise<T>): Promise<T> {
-  const job = sdkQueueTail.then(fn, fn);
-  sdkQueueTail = job.then(
-    () => undefined,
-    () => undefined,
-  );
-  return job;
+ *  队头失败不阻塞后续（fn 照常执行）。导出给 /api/translate 等共用。
+ *
+ *  双优先级（修复「翻译一直失败/排队饿死」）：论坛/朋友圈生成是后台批量任务，
+ *  一次串一长队；用户手点「翻译」是交互请求，排在批量任务后面等几分钟必然超时。
+ *  high = 交互请求（翻译），发车前先看高优队；normal = 后台生成——并发仍恒为 1
+ *  （429 防护不变），只是取任务时高优先出队。 */
+interface SdkQJob {
+  fn: () => Promise<unknown>;
+  resolve: (v: unknown) => void;
+  reject: (e: unknown) => void;
+}
+const sdkHiQueue: SdkQJob[] = [];
+const sdkLoQueue: SdkQJob[] = [];
+let sdkQRunning = false;
+
+function sdkQPump(): void {
+  if (sdkQRunning) return;
+  const job = sdkHiQueue.shift() ?? sdkLoQueue.shift();
+  if (!job) return;
+  sdkQRunning = true;
+  void job
+    .fn()
+    .then(job.resolve, job.reject)
+    .finally(() => {
+      sdkQRunning = false;
+      sdkQPump();
+    });
+}
+
+/** 入队执行（priority='high' 时插到后台生成任务前面；默认 normal） */
+export function runInSdkQueue<T>(fn: () => Promise<T>, opts?: { priority?: 'high' | 'normal' }): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const job: SdkQJob = { fn: fn as () => Promise<unknown>, resolve: resolve as (v: unknown) => void, reject };
+    if (opts?.priority === 'high') sdkHiQueue.push(job);
+    else sdkLoQueue.push(job);
+    sdkQPump();
+  });
 }
 
 /**

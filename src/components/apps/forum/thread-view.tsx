@@ -20,7 +20,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Languages } from 'lucide-react';
 import {
-  communityName,
   countShort,
   forumData,
   forumSnapshot,
@@ -39,7 +38,7 @@ import { detectMessageLang, requestTranslation } from '@/lib/chat-translate';
 import { useSettings } from '@/lib/ios/store';
 import { XAvatar, XIcons, VerifiedBadge } from './shared';
 import { useForum } from './ctx';
-import { CommunityIcon, PostMedia, PollBlock, LocationLine } from './feed';
+import { PostMedia, PollBlock, LocationLine } from './feed';
 
 /** 论坛翻译请求 + 超时保护：翻译兜底链路（代理 → 浏览器直连 → 内置模型）最长可挂
  *  数分钟（直连超时 120s×2）；服务端内置模型走全局串行队列 + 429 退避重试，
@@ -503,7 +502,6 @@ export function ThreadView({ postId }: { postId: string }) {
   const followed = d.following.includes(post.authorKey);
   const dt = new Date(post.createdAt);
   const dateStr = `${dt.getFullYear()}年${dt.getMonth() + 1}月${dt.getDate()}日`;
-  const communityLabel = post.community && post.community !== 'hot' ? communityName(post.community) : '';
 
   /** 发送回复：挂主帖（无目标）或顶层评论（微信式嵌套）；
    *  被回复对象作者是 AI 时，排一条 AI 再回复（带主帖+用户评论上下文，无限多轮）。 */
@@ -586,7 +584,7 @@ export function ThreadView({ postId }: { postId: string }) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {/* 原帖（X 放大规格） */}
         <div className="px-4 pt-3 pb-3">
           <div className="flex gap-3">
@@ -655,27 +653,7 @@ export function ThreadView({ postId }: { postId: string }) {
           {(post.media ?? []).length > 0 && <PostMedia media={post.media!} />}
           {post.poll && <PollBlock post={post} />}
           {post.location && <div className="mt-1"><LocationLine name={post.location} /></div>}
-          {/* 社区来源引用卡（X 引用块观感：圆角容器 + 版块入口） */}
-          {communityLabel && post.community && (
-            <button
-              type="button"
-              onClick={() => f.openCommunity(post.community!)}
-              className="mt-2.5 flex w-full items-center gap-3 rounded-2xl p-3 text-left transition-colors active:opacity-70"
-              style={{ background: t.dark ? '#202327' : '#f7f9f9' }}
-              aria-label={`进入${communityLabel}版块`}
-            >
-              <CommunityIcon id={post.community} size={38} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[15px] font-bold" style={{ color: t.text }}>
-                  {communityLabel}
-                </span>
-                <span className="block text-[13px]" style={{ color: t.secondary }}>
-                  来自版块 · 点击进入逛逛
-                </span>
-              </span>
-              <span style={{ color: t.secondary }}>{XIcons.back(14)}</span>
-            </button>
-          )}
+          {/* 版块来源引用卡已按用户要求删除（不再显示「来自版块 · 点击进入逛逛」） */}
           {/* 官方元数据行：H:mm · 年月日 · N 次浏览 + 蓝色「翻译」按钮 */}
           <p className="mt-2.5 flex flex-wrap items-center gap-x-1.5 text-[14px]" style={{ color: t.secondary }}>
             <span>

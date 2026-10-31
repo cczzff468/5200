@@ -468,9 +468,10 @@ export function ComposeSheet({
         )}
 
         {/* 工具行（相册/投票/表情/定时/位置/话题，灰色线条；相册含手机上传与文字搜图两种方式）+ 字数圆环
-            （隐私行「所有人都可以回复」与「今日热议」版块胶囊已按用户要求删除） */}
+            （隐私行「所有人都可以回复」与「今日热议」版块胶囊已按用户要求删除；
+            用户要求：所有界面禁止左右滑动——改换行铺开，不再横滑） */}
         <div
-          className="forum-hide-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-t px-3 py-1"
+          className="forum-hide-scrollbar flex shrink-0 flex-wrap items-center gap-1 border-t px-3 py-1"
           style={{ borderColor: t.border }}
         >
           {/* 相册：弹层选择「手机相册上传」或「文字搜图」 */}
@@ -512,7 +513,7 @@ export function ComposeSheet({
             >
               <Maximize2 width={19} height={19} strokeWidth={2} aria-hidden="true" />
             </button>
-            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto forum-hide-scrollbar">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               {visibleAt !== null && (
                 <button
                   type="button"
@@ -570,7 +571,7 @@ export function ComposeSheet({
             onClick={() => setSheet(null)}
           />
           <div
-            className="absolute inset-x-0 bottom-0 max-h-[66%] animate-[forum-sheet_.24s_ease-out] overflow-y-auto rounded-t-2xl pb-[24px]"
+            className="forum-hide-scrollbar absolute inset-x-0 bottom-0 max-h-[66%] animate-[forum-sheet_.24s_ease-out] overflow-y-auto overflow-x-hidden rounded-t-2xl pb-[24px]"
             style={{ background: t.bg, color: t.text }}
           >
             {/* --- 相册选择（手机上传 / 文字搜图） --- */}

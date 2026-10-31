@@ -35,9 +35,12 @@ import {
   STALE_MS,
   createDynNpc,
   recordDynNpcRecent,
+  renameBuiltinNpc,
   renameDynNpc,
   rollEngagement,
+  seedBuiltinNpcFallbackNames,
   unnamedDynKeys,
+  unnamedNpcIds,
   type AuthorKey,
   type ForumData,
   type ForumPost,
@@ -246,39 +249,48 @@ function naturalGapMs(depth: number): number {
   return (40 + Math.random() * 170) * 60_000; // 40分钟~3.5小时
 }
 
-// ---------------- LLM 起名（用户要求：网名不要内置池子，让 AI 生成） ----------------
+// ---------------- LLM 起名（用户要求：网名不要内置池子，让 AI 生成；
+// v5：网名与帖子领域彻底解绑 + 内置 NPC 也由 LLM 起名） ----------------
 
-/** 用 LLM 给本批新建的动态网友重新起网名（createDynNpc 先用池子名同步占位保底，
- *  LLM 起好名后换掉——正常路径下用户看到的都是 AI 起的名；起名失败静默保留池子名）。
- *  顺带回填：还挂着池子占位名的老网友（限流期创建、上次起名失败落下的）
- *  一起打包换名，每次最多 30 个（API 上限），几批内全部换成 LLM 名。
- *  旧名从未随帖子落盘展示，或已被后续广播更新——直接换，不动帖子内容。 */
+/** 用 LLM 批量起网名并落地（三路目标，一次 API 调用全搞定）：
+ *  1. 本批新建的动态网友（keys）：换掉通用池占位名；
+ *  2. 回填还挂着占位名的老网友（限流期创建、上次起名失败落下的）；
+ *  3. v5 新增：内置 NPC 也挨个换成 LLM 名（「电影院常驻嘉宾」「是小柔本人呀」
+ *     这类内置描述型网名全部下岗）。
+ *  顺手多要一批存进 nameBank 名字库——createDynNpc 随取随用，
+ *  之后新建网友不再等本次 LLM 成功（限流期也有 AI 名可用）。
+ *  起名失败静默保留占位名（论坛永不因起名失败断内容）。 */
 async function renameDynNpcsViaLlm(keys: AuthorKey[]): Promise<number> {
   const seen = new Set<string>();
   const d0 = forumData();
-  const targets: { id: string; old: string }[] = [];
+  const dynTargets: { id: string; old: string }[] = [];
   for (const k of keys) {
     if (!k.startsWith('dyn:') || seen.has(k)) continue;
     seen.add(k);
     const npc = d0.dynNpcs?.[k.slice(4)];
-    if (npc && npc.name) targets.push({ id: k.slice(4), old: npc.name });
+    if (npc && npc.name) dynTargets.push({ id: k.slice(4), old: npc.name });
   }
-  // 回填：占位名老网友补进同一批（去重后总量 ≤ 30，与 API 上限对齐）
-  if (targets.length < 30) {
+  // 回填：占位名动态网友补进同一批（去重后总量 ≤ 30，与 API 上限对齐）
+  if (dynTargets.length < 30) {
     for (const k of unnamedDynKeys(30)) {
       if (seen.has(k)) continue;
       const npc = d0.dynNpcs?.[k.slice(4)];
       if (npc && npc.name) {
         seen.add(k);
-        targets.push({ id: k.slice(4), old: npc.name });
+        dynTargets.push({ id: k.slice(4), old: npc.name });
       }
-      if (targets.length >= 30) break;
+      if (dynTargets.length >= 30) break;
     }
   }
-  if (!targets.length) return 0;
+  // v5 回填：还没换上 LLM 名的内置 NPC（总量同样封顶 30）
+  const npcTargets = unnamedNpcIds().slice(0, Math.max(0, 30 - dynTargets.length));
+  const total = dynTargets.length + npcTargets.length;
+  // 没有目标且名字库充足时不白跑一趟；库见底时也补一批发（createDynNpc 备用）
+  if (!total && (d0.nameBank?.length ?? 0) >= 10) return 0;
   try {
     const avoidNames = [...(d0.usedNames ?? [])].slice(-80);
-    const r = (await callApi({ kind: 'names', count: Math.min(targets.length, 30), avoid: avoidNames })) as { items?: string[] };
+    const want = Math.min(30, Math.max(total, 1) + 12); // 目标数 + 名字库补充额度
+    const r = (await callApi({ kind: 'names', count: want, avoid: avoidNames })) as { items?: string[] };
     const raw = Array.isArray(r.items) ? r.items : [];
     const usedNow = new Set(d0.usedNames ?? []);
     const cands: string[] = [];
@@ -289,15 +301,25 @@ async function renameDynNpcsViaLlm(keys: AuthorKey[]): Promise<number> {
     }
     if (!cands.length) return 0;
     let changed = 0;
-    for (const t of targets) {
+    for (const t of dynTargets) {
       const nn = cands.shift();
       if (!nn) break;
       if (renameDynNpc(`dyn:${t.id}`, nn)) changed += 1;
     }
-    if (changed) saveForum({ ...forumData() });
+    for (const id of npcTargets) {
+      const nn = cands.shift();
+      if (!nn) break;
+      if (renameBuiltinNpc(id, nn)) changed += 1;
+    }
+    // 剩余名入库存着（下批 createDynNpc 直接取，不再依赖本次 LLM 成功）
+    if (cands.length) {
+      const d1 = forumData();
+      d1.nameBank = [...(d1.nameBank ?? []), ...cands].slice(-60);
+    }
+    if (changed || cands.length) saveForum({ ...forumData() });
     return changed;
   } catch {
-    return 0; // 起名失败：静默保留池子名（论坛永不因起名失败断内容）
+    return 0; // 起名失败：静默保留占位名（论坛永不因起名失败断内容）
   }
 }
 
@@ -306,13 +328,17 @@ async function renameDynNpcsViaLlm(keys: AuthorKey[]): Promise<number> {
 let seeding = false;
 
 /** 内容风格版本升级：清除旧 AI 帖（用户自己的帖子/回复保留），重新播种。
- *  v4 = 网名 LLM 生成 + 动态网友占比提升（用户反馈网名像内置池子）。 */
+ *  v4 = 网名 LLM 生成 + 动态网友占比提升；
+ *  v5 = 网名与帖子领域解绑（删原型网名池 + 名字库）+ 内置 NPC 也 LLM 起名。 */
 function resetAiContent(d: ForumData): void {
   const keepPosts = d.posts.filter((p) => p.authorKey === 'user');
   const keepIds = new Set(keepPosts.map((p) => p.id));
   d.posts = keepPosts;
   d.dynNpcs = {};
   d.usedNames = [];
+  d.npcNames = {}; // v5：内置 NPC 覆盖名一并清零，重新播种时由 LLM 起新名
+  d.npcLlmNamed = {};
+  d.nameBank = []; // 名字库也清零（旧库可能已被用过一轮）
   d.hiddenPosts = (d.hiddenPosts ?? []).filter((id) => keepIds.has(id));
   // 通知里指向已删帖的丢掉（system 通知 postId 为空，保留）
   d.notifications = d.notifications.filter((n) => !n.postId || keepIds.has(n.postId));
@@ -387,6 +413,9 @@ export async function ensureSeed(): Promise<void> {
   seeding = true;
   try {
     const now = Date.now();
+    // v5：内置 NPC 同步挂真实感池子覆盖名（不依赖 LLM：限流期也不露出
+    // 「电影院常驻嘉宾」「是小柔本人呀」这类内置描述型网名；LLM 回填后再换 AI 名）
+    seedBuiltinNpcFallbackNames();
     const specs: { key: AuthorKey; text: string; community: string | null; npcId: string }[] = [];
     for (const npc of NPC_DEFS) {
       const n = 1 + Math.floor(Math.random() * 2);
@@ -477,7 +506,11 @@ async function llmPolish(): Promise<void> {
         return { name, persona: [c.persona, c.background, c.expressStyle].filter(Boolean).join('；'), isChar: true, id: c.id };
       });
     const items = [
-      ...npcPicks.map((n) => ({ name: n.name, persona: n.persona, community: defaultCommunityFor(n.id) ?? '今日热议', isChar: false, id: n.id })),
+      ...npcPicks.map((n) => {
+        // v5：名字/人设都走 resolveAuthor（内置 NPC 已换成 LLM 名，口吻跟新身份走）
+        const a = resolveAuthor(`npc:${n.id}` as AuthorKey);
+        return { name: a.name, persona: a.persona ?? n.persona, community: defaultCommunityFor(n.id) ?? '今日热议', isChar: false, id: n.id };
+      }),
       ...charPicks.map((c) => ({ name: c.name, persona: c.persona, community: '今日热议', isChar: true, id: c.id })),
     ].slice(0, 5);
     if (!items.length) return;
@@ -539,6 +572,8 @@ export async function ensureFresh(): Promise<void> {
     next.lastGenAt = now;
     saveForum(next);
     void llmPolish();
+    // v5：起名回填（限流期没换上名的网友/内置 NPC，趁这次打开补齐；静默）
+    void renameDynNpcsViaLlm([]);
   } finally {
     refreshing = false;
   }
@@ -1023,9 +1058,11 @@ async function buildFeedBatch(
         lang: 'zh-Hans',
       });
     } else if (r < 0.16) {
-      // 内置主题 NPC（v4 缩减到 ~8%，只作保底大 V；轮换环保证一环内不重复）
+      // 内置主题 NPC（v4 缩减到 ~8%，只作保底大 V；轮换环保证一环内不重复；
+      // v5 名字/persona 走 resolveAuthor——内置 NPC 也挂着 LLM 名）
       const nd = shuffledNpcs[npcCursor++ % shuffledNpcs.length];
-      specs.push({ key: `npc:${nd.id}`, name: nd.name, persona: nd.persona, community: defaultCommunityFor(nd.id), topic, lang: 'zh-Hans' });
+      const a = resolveAuthor(`npc:${nd.id}` as AuthorKey);
+      specs.push({ key: `npc:${nd.id}`, name: a.name, persona: a.persona ?? nd.persona, community: defaultCommunityFor(nd.id), topic, lang: 'zh-Hans' });
     } else if (r < 0.4) {
       // 老网友回访（带 recent 记忆：上一个帖子里聊过的事，这次能接上话疸）
       const d = forumData();
@@ -1753,6 +1790,9 @@ export async function bootForum(): Promise<void> {
     await ensureSeed();
     await ensureFresh();
     syncCommunities();
+    // v5 兜底迁移：限流期播种/中间版本数据没挂上内置 NPC 覆盖名的，现在补上
+    //（幂等：已有覆盖名/LLM 名的跳过；保证任何情况下都不露出内置描述型网名）
+    if (seedBuiltinNpcFallbackNames()) saveForum({ ...forumData() });
     runPending();
   } catch {
     /* 引擎失败不拦 UI */

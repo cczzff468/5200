@@ -191,7 +191,7 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {/* 横幅（150px，X 官方比例；背景图在「编辑资料」里上传；未上传时真人主页用默认艺术横幅） */}
         <div
           className="relative h-[150px] w-full shrink-0 overflow-hidden"
