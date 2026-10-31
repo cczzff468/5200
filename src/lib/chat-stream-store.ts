@@ -36,6 +36,8 @@ import type { ApiConfig } from '@/lib/ios/store';
 import { useSettings } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { createReplySegmentScanner } from '@/lib/reply-count';
+// 深度思考：流式统一剥离 [思考]…[/思考] 块（正文/分段器只见纯正文，思考内容单独收集交 finalize）
+import { createThinkFilter } from '@/lib/deep-think';
 import { describeImagesAuto } from '@/lib/vision-client';
 import { clearDeliverBoundary, isAiDelivering, scheduleAiDelivery } from '@/lib/ios/ai-delivery';
 import { charRequestOnlyOf, loadBlock, type BlockApp } from '@/lib/ios/block-state';
@@ -119,6 +121,11 @@ export interface ChatStreamResult {
   aiMsgId: string;
   /** 流式接收的完整内容（可能为空串：由各 App 决定空回复兜底文案） */
   content: string;
+  /**
+   * 深度思考：本轮 [思考]…[/思考] 块收集到的思考过程（未开启/未输出时为 undefined）；
+   * 各端挂到本轮第一条 AI 文本消息的 thinking 字段（渲染为气泡上方可折叠的思维链卡片）
+   */
+  thinking?: string;
   /**
    * 未随 onSegment 放出的最后一段：回复条数 >1 时 = 第 N 条（分段器已按上限留出，
    * 可能包含溢出合并的后续句子；空串 = 流中分段已全部投递）；单条模式 = 完整 content。
@@ -518,6 +525,10 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
   // 不再有「先全文后消失」的流式气泡；分段与展示状态完全分离（流式和分条不改同一块状态）
   const multi = typeof opts.replyCount === 'number' && opts.replyCount > 1;
   let scanner = multi && opts.onSegment ? createReplySegmentScanner(opts.onSegment) : null;
+  // 深度思考剥离器：与分段器同源同生命周期（SDK 兜底重建时一并重建）；未输出 [思考] 块的
+  // 会话零行为变化（纯透传），输出过则正文/思考两侧永不合流
+  let thinkFilter = createThinkFilter();
+  let thinkText = '';
   // 条数多时消息总长更长：抬高 max_tokens 下限，防止多条连发被截断（代理与浏览器直连共用该配置）
   const effConfig =
     multi && opts.replyCount
@@ -529,8 +540,12 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     // 换号中止（abortStreamsByPrefix）：不再喂原文/分段器——流中分段就此截断，
     // 旧账号会话不再产生新的投递（finalize 挡板只拦最后一条，不拦流中分段，这里补齐）
     if (rt.aborted) return;
-    raw += delta;
-    scanner?.push(delta);
+    // 深度思考：[思考]…[/思考] 块在进正文/分段器之前剥走（思考内容不进气泡、不被切成分段）
+    const tk = thinkFilter.push(delta);
+    if (tk.thinking) thinkText += tk.thinking;
+    if (!tk.text) return;
+    raw += tk.text;
+    scanner?.push(tk.text);
   };
   /**
    * 发起一轮流式请求并读完整条流（增量统一交给 onDelta）。
@@ -736,7 +751,10 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     // 流中已凑齐的分段已经过 onSegment 逐条投递上屏，出错不影响它们（不丢已到手的正文）
     // 关键：进入 SDK 兜底前清空 raw 并重建分段器，避免「半截上游文本 + 完整 SDK 文本」拼接成乱文；
     // 旧分段器已放出的分段保留上屏、不计入新分段器的条数计数
+    // 深度思考：剥离器/思考收集同口径重建清零（半截思考随旧正文一并作废，不混入 SDK 回复）
     raw = '';
+    thinkFilter = createThinkFilter();
+    thinkText = '';
     if (multi && opts.onSegment) {
       scanner = createReplySegmentScanner(opts.onSegment);
     } else {
@@ -760,9 +778,18 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     if (!rt.finalized) {
       rt.finalized = true;
       try {
+        // 深度思考收尾：归位剥离器残量（未闭合的思考整段归入思考；正文侧半截标记按原文归还）
+        // 后再交 finalize——残量正文也过一遍分段器，不丢最后一句
+        const tkEnd = thinkFilter.finish();
+        if (tkEnd.text) {
+          raw += tkEnd.text;
+          scanner?.push(tkEnd.text);
+        }
+        if (tkEnd.thinking) thinkText += tkEnd.thinking;
         opts.finalize({
           aiMsgId: rt.state.aiMsgId,
           content: raw,
+          thinking: thinkText || undefined,
           // 多条模式：tail = 分段器剩余的最后一条（第 N 条，可能含溢出合并的句子）；
           // 单条模式：tail = 完整内容（finalize 按旧管线处理，行为与旧版一致）
           tail: scanner ? scanner.finish() : raw,

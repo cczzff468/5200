@@ -165,6 +165,10 @@ export function ChatSettingsPage({
   onToggleStickers,
   actionDescOn,
   onToggleActionDesc,
+  /** 深度思考开关状态（开启后气泡上方显示思维链卡片；按联系人隔离，见 @/lib/deep-think） */
+  deepThinkOn,
+  /** 深度思考开关切换（宿主调 setDeepThinkOn 持久化到 IndexedDB，按联系人隔离） */
+  onToggleDeepThink,
   /** 「回车键发送消息」开关状态（App 级、按账号隔离，单聊+群聊共用；默认开启=回车发送） */
   enterSend,
   /** 回车键发送开关切换（宿主调 setEnterSend(app, v) 持久化+即时广播） */
@@ -216,6 +220,8 @@ export function ChatSettingsPage({
   stickersOn: boolean;
   /** 动作描写开关状态（开启后 AI 回复里的动作描写以灰色小字居中显示，关闭后自动过滤，见 @/lib/action-desc） */
   actionDescOn: boolean;
+  /** 深度思考开关状态（开启后气泡上方显示可展开的思维链卡片；思考指令始终注入，开关只控制展示） */
+  deepThinkOn: boolean;
   /** 挂载的世界书摘要（未挂载时「未选择」） */
   worldBooksSummary: string;
   /** 当前会话联系人 id（显示设置按联系人隔离：头像样式 / 已读未读回执 / 时间显示）；不传 = 隐藏该区块 */
@@ -236,6 +242,8 @@ export function ChatSettingsPage({
   onToggleStickers: (v: boolean) => void;
   /** 动作描写开关切换（宿主负责持久化，见 @/lib/action-desc） */
   onToggleActionDesc: (v: boolean) => void;
+  /** 深度思考开关切换（宿主调 setDeepThinkOn(contactId, v)，IndexedDB 按联系人隔离） */
+  onToggleDeepThink: (v: boolean) => void;
   /** 「回车键发送消息」开关状态（App 级、按账号隔离；开启=回车/移动端「发送」键直接发送；关闭=回车换行） */
   enterSend: boolean;
   /** 回车键发送开关切换（即时生效，无需重启） */
@@ -557,6 +565,20 @@ export function ChatSettingsPage({
               accent={accent}
               testId={`${testPrefix}-settings-action-desc`}
               label="动作描写"
+            />
+          </div>
+        </div>
+
+        {/* 深度思考：AI 回复前先深度思考，气泡上方可展开查看思考过程（指令始终注入，开关只控制展示；按联系人隔离持久化） */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <div className={`flex items-center justify-between ${rowCls}`}>
+            <span>深度思考</span>
+            <ChatToggle
+              on={deepThinkOn}
+              onChange={onToggleDeepThink}
+              accent={accent}
+              testId={`${testPrefix}-settings-deep-think`}
+              label="深度思考"
             />
           </div>
         </div>
@@ -1496,6 +1518,10 @@ export function SmsChatSettingsPage({
   onToggleEnterSend,
   actionDescOn,
   onToggleActionDesc,
+  /** 深度思考开关状态（开启后气泡上方显示思维链卡片；按联系人隔离，见 @/lib/deep-think） */
+  deepThinkOn,
+  /** 深度思考开关切换（宿主调 setDeepThinkOn 持久化到 IndexedDB，按联系人隔离） */
+  onToggleDeepThink,
   onOpenWorldBooks,
   blockedByUser,
   blockReqCount,
@@ -1525,6 +1551,8 @@ export function SmsChatSettingsPage({
   timeAware: boolean;
   /** 动作描写开关状态（开启后 AI 回复里的动作描写以灰色小字居中显示，关闭后自动过滤，见 @/lib/action-desc） */
   actionDescOn: boolean;
+  /** 深度思考开关状态（开启后气泡上方显示可展开的思维链卡片；思考指令始终注入，开关只控制展示） */
+  deepThinkOn: boolean;
   /** 挂载的世界书摘要（未挂载时「未选择」） */
   worldBooksSummary: string;
   /** 主题入口行摘要（当前界面主题 + 气泡样式；不传/空 = 显示「默认」） */
@@ -1549,6 +1577,8 @@ export function SmsChatSettingsPage({
   onToggleEnterSend: (v: boolean) => void;
   /** 动作描写开关切换（宿主负责持久化，见 @/lib/action-desc） */
   onToggleActionDesc: (v: boolean) => void;
+  /** 深度思考开关切换（宿主调 setDeepThinkOn(contactId, v)，IndexedDB 按联系人隔离）；不传 = 隐藏开关行（AI 助手会话） */
+  onToggleDeepThink?: (v: boolean) => void;
   /** 打开世界书挂载页；AI 助手会话（无联系人角色）不传 → 隐藏该入口行 */
   onOpenWorldBooks?: () => void;
   /** 双向拉黑：当前是否已拉黑对方（不传 = 该会话不支持拉黑，隐藏开关） */
@@ -1779,6 +1809,22 @@ export function SmsChatSettingsPage({
             />
           </div>
         </div>
+
+        {/* 深度思考：AI 回复前先深度思考，气泡上方可展开查看思考过程（指令始终注入，开关只控制展示；按联系人隔离持久化；AI 助手会话不提供） */}
+        {onToggleDeepThink && (
+          <div className={`${t.cardCls} mt-3`}>
+            <div className={`flex items-center justify-between ${t.rowCls}`}>
+              <span>深度思考</span>
+              <ChatToggle
+                on={deepThinkOn}
+                onChange={onToggleDeepThink}
+                accent="#34C759"
+                testId="sms-settings-deep-think"
+                label="深度思考"
+              />
+            </div>
+          </div>
+        )}
 
         {/* 世界书：为联系人挂载设定库（命中触发词的条目注入提示词，独立二级页选择）；AI 助手会话无此入口 */}
         {onOpenWorldBooks && (

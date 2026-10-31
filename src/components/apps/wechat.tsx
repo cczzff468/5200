@@ -230,6 +230,9 @@ import { MtDraftBubble } from './mt-draft-card';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
+// 深度思考：指令注入 + [思考]块剥离 + 开关（IndexedDB 按联系人隔离，渲染订阅版随设置页切换即时刷新）
+import { DEEP_THINK_RULE, extractThinkBlocks, setDeepThinkOn, useDeepThinkOn } from '@/lib/deep-think';
+import { ThinkCard } from './think-card';
 import { ActionDescLine } from './action-desc-line';
 import { stripEmojiCodes, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
 import { InlineEmojiText } from './inline-emoji';
@@ -559,6 +562,10 @@ interface WxMsg {
    *  greet = AI 发起的验证消息（气泡下胶囊标注「以上是打招呼的内容」）；
    *  added = 加好友成功提示（kind='sys' 携带文案，落入普通 sys 胶囊分支与其他系统提示同款包裹；不进 AI 上下文走 sys 既有口径） */
   fr?: 'apply' | 'greet' | 'added';
+  /** 深度思考：本轮回复 [思考]…[/思考] 块剥离出的思考过程（挂在回合第一条 AI 文本消息上，
+   *  渲染为气泡上方可折叠的思维链卡片；深度思考开关关闭时渲染层直接丢弃不显示。
+   *  仅展示层字段：历史序列化/记忆/翻译/语音合成均不读它） */
+  thinking?: string;
   /** 美团找人代付卡片（kind='mtpay'）：pid = 代付请求（mt-proxy:<pid>），role req=请求卡/done=完成卡 */
   mtpay?: { pid: string; role: 'req' | 'done' };
   /** 美团订单分享动态卡片（kind='mtshare'）：sid = 分享快照（mt-share:<sid>），状态时间线实时跟订单走 */
@@ -739,6 +746,8 @@ function loadMsgs(contactId: string): WxMsg[] {
       // 引用/撤回/转发字段规范化（旧记录无这些字段时补默认值）
       .map((m) => ({
         ...m,
+        // 深度思考字段收窄（展示层字段；脏数据/空串清为 undefined，旧记录天然无此字段）
+        thinking: typeof m.thinking === 'string' && m.thinking.trim() ? m.thinking : undefined,
         quote:
           m.quote && typeof m.quote.name === 'string' && typeof m.quote.content === 'string'
             ? { name: m.quote.name, content: m.quote.content, id: typeof m.quote.id === 'string' ? m.quote.id : undefined }
@@ -5372,6 +5381,11 @@ function ChatPage({
   }, [sessionKey]);
   // 动作描写开关（渲染订阅版）：设置页切换后经事件即时刷新，历史消息显示同步生效
   const actionDescOn = useActionDescOn(sessionKey);
+  // 深度思考开关（渲染订阅版，IndexedDB 按联系人隔离）：关闭时思维链卡片整体丢弃不渲染（思考指令仍注入）
+  const deepThinkOn = useDeepThinkOn(peer.id);
+  /** 深度思考本轮上下文（runAiTurn 开头重置）：firstMsgId = 本回合第一条 AI 文本消息 id（投递完回填思考用），
+   *  text = 流层剥离 + buildReplyMsgs 兜底剥离合并的思考过程 */
+  const turnThinkRef = useRef<{ firstMsgId: string | null; text: string }>({ firstMsgId: null, text: '' });
   // 「回车键发送消息」开关（微信 App 级、按账号隔离，单聊+群聊共用；默认开启=回车发送，关闭=回车换行）
   const enterSend = useEnterSend('wx');
   /** 世界书挂载页（设置页「世界书」进入）：为联系人勾选挂载的书籍（见 @/lib/ios/worldbook） */
@@ -6285,6 +6299,13 @@ function ChatPage({
       ctx.musicActed = true; // 本轮执行过播控：正文被剔空时 finalize 不落「暂无回复」兑底
     }
     rawText = mrRemote.text;
+    // 深度思考兜底剥离（bg 关页接力等绕过流总线的路径拿到整段原文时，[思考]块就地剥掉防泄漏进气泡；
+    // 流式路径正文早已在 chat-stream-store 剥过，这里天然为 no-op）：思考内容累积到本轮上下文，投递完回填
+    const tkParts = extractThinkBlocks(rawText);
+    if (tkParts.thinking) {
+      turnThinkRef.current.text = turnThinkRef.current.text ? `${turnThinkRef.current.text}\n${tkParts.thinking}` : tkParts.thinking;
+    }
+    rawText = tkParts.text;
     // 表情包清单/开关（本会话独立，投递时现场读取；关闭后 AI 发的表情包卡片丢弃、emoji 硬性剥除）
     const stickers = loadStickers('wx');
     const stickersOn = getStickersOn(sessionKey);
@@ -6760,6 +6781,12 @@ function ChatPage({
         }
       }
     }
+    // 深度思考：记录本回合第一条 AI 文本消息 id（??= 只记第一次——流中首个分段的产出即本轮第一条；
+    // 卡片/系统行等非文本消息不承载思维链卡片，跳过）
+    if (!turnThinkRef.current.firstMsgId) {
+      const firstText = out.find((x) => x.role === 'peer' && (!x.kind || x.kind === 'text') && !x.recalled);
+      if (firstText) turnThinkRef.current.firstMsgId = firstText.id;
+    }
     return { msgs: out, cur, dirty: cur !== latest };
   };
 
@@ -6952,7 +6979,10 @@ function ChatPage({
         role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
         // 行首 [M数字] = 消息编号（AI 用 [引用:编号] 引用它）；我的表情以 [发送了表情：意思] 进入历史（AI 理解含义）；
         // AI 自己发的表情回写成 [表情包:ID] 示范正确输出格式（意思靠 system 清单反查），避免它模仿我的记录格式导致发表情变文字
+        // 深度思考：AI 自己的历史回复带思考过程时还原 [思考]…[/思考] 前缀——模型看到自己一直按此格式输出
+        //（in-context 自我一致），新回复的思考块遵循度大幅提升；标签展示前已被流层剥离，不进任何气泡
         content:
+          (m.role === 'peer' && m.thinking ? `[思考]${m.thinking}[/思考]\n` : '') +
           (quoteIdOf.has(m.id) ? `[${quoteIdOf.get(m.id)}] ` : '') +
           pre +
           (m.kind === 'forward' && m.fwd?.merged
@@ -7051,6 +7081,8 @@ function ChatPage({
     // userMsg 为 null = 分句发送批次触发（消息早已入列，只发起 AI 回复）；
     // 组合发送（文字+图片一起发）时 userMsg 已随图片一并上屏——按 id 判重，不重复入列
     if (userMsg) setMsgs((prev) => (prev.some((m) => m.id === userMsg.id) ? prev : [...prev, userMsg]));
+    // 深度思考：重置本轮上下文（重试/新回合互不串台；firstMsgId 由 buildReplyMsgs 首次产出时记录）
+    turnThinkRef.current = { firstMsgId: null, text: '' };
 
     // 回复条数（本会话独立设置，发送时现场读取）：>1 时在人设后追加多条消息指令；
     // 特殊消息规则（红包/转账/亲属卡/位置/表情包标记 + 表情包 ID 清单）随表情包清单一起注入；
@@ -7221,7 +7253,7 @@ function ChatPage({
       .join('\n\n');
     const payloadMsgs: ChatPayloadMessage[] = applyWbUserBlocks(
       [
-        { role: 'system' as const, content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}` : systemFull },
+        { role: 'system' as const, content: replyCount > 1 ? `${systemFull}\n\n${buildReplyCountPrompt(replyCount)}\n\n${DEEP_THINK_RULE}` : `${systemFull}\n\n${DEEP_THINK_RULE}` },
         ...history,
       ],
       wbBlocks,
@@ -7309,7 +7341,12 @@ function ChatPage({
         : {}),
       // 边接收边逐条显示：分段器每凑齐一条完整消息立刻解析投递（多条模式）
       onSegment: deliverSegment,
-      finalize: ({ content, error, tail }) => {
+      finalize: ({ content, error, tail, thinking }) => {
+        // 深度思考：合并流层收集的思考过程（buildReplyMsgs 兜底剥离的已累积在 ref 里，流层的在此并入）
+        if (thinking && thinking.trim()) {
+          const prevTk = turnThinkRef.current.text;
+          turnThinkRef.current.text = prevTk ? `${prevTk}\n${thinking.trim()}` : thinking.trim();
+        }
         // F1 收尾：先把跨段 carry 取走并清空——流已结束，残留的半截照片标签不再投递
         //（拼回最后一段一起走管线，闭合则正常生图/降级，仍闭合不上则由 buildReplyMsgs 内兜底剥除）
         const carry = carryTextRef.current;
@@ -7383,6 +7420,19 @@ function ChatPage({
             delay: (i) => (i + 1 < finalBatch.length ? typingDelayOf(finalBatch[i + 1].content ?? '') : 0),
           },
         ).then(() => {
+          // 深度思考回填：本轮全部消息投递完落库后，把思考过程写到本回合第一条 AI 文本消息的
+          // thinking 字段（此刻 firstMsgId 对应消息必然已落盘；深度思考开关关闭时渲染层不显示，
+          // 字段照存——重开开关即可回看，思考内容不丢）
+          const tkCtx = turnThinkRef.current;
+          const thinkText = tkCtx.text.trim();
+          if (thinkText && tkCtx.firstMsgId) {
+            const targetId = tkCtx.firstMsgId;
+            const cur = loadMsgs(peer.id);
+            if (cur.some((x) => x.id === targetId)) {
+              saveMsgs(peer.id, cur.map((x) => (x.id === targetId ? { ...x, thinking: thinkText } : x)));
+              setMsgs((prev) => prev.map((x) => (x.id === targetId ? { ...x, thinking: thinkText } : x)));
+            }
+          }
           // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（全部消息投递完后执行；后台异步，失败静默不打断聊天）；
           // names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人 name，均非昵称——
           // 展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用（禁「对方/用户/我」混用）；
@@ -9107,6 +9157,13 @@ function ChatPage({
                 </span>
               </div>
             )}
+            {/* 深度思考思维链卡片：消息行级别（时间分隔下方、气泡行上方，左侧对齐头像列右缘）——
+                对方任意消息类型（文本/语音/卡片）都可携带思考过程；开关关闭时直接丢弃不渲染 */}
+            {m.role === 'peer' && deepThinkOn && m.thinking && !m.recalled ? (
+              <div className="px-1 pb-[2px] pl-[46px]">
+                <ThinkCard text={m.thinking} testId={`wx-think-${m.id}`} />
+              </div>
+            ) : null}
             {lineOnly ? (
               /* 整条只有动作描写（或关闭态过滤后无正文 / 空白脏数据）：渲染为居中灰字行；多选模式给勾选圈行保证可勾选 */
               selectMode && isSelectable(m) ? (
@@ -10359,6 +10416,9 @@ function ChatPage({
           timeAware={timeAware}
           stickersOn={stickersOn}
           actionDescOn={actionDescOn}
+          // 深度思考（IndexedDB 按联系人隔离）：开关只控制思维链卡片展示，思考指令始终注入
+          deepThinkOn={deepThinkOn}
+          onToggleDeepThink={(v) => setDeepThinkOn(peer.id, v)}
           enterSend={enterSend}
           onToggleEnterSend={(v) => setEnterSend('wx', v)}
           onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}

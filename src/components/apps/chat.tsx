@@ -68,6 +68,9 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 // 注：表情包开关已按需求从信息端设置页移除（信息端无表情包面板）——AI emoji 回到默认行为（始终允许，按人设自然使用）；
 // 历史 localStorage 键 chat-sticker-on 对 sms 会话的残留值不再被读取
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
+// 深度思考：指令注入 + [思考]块剥离 + 开关（IndexedDB 按联系人隔离，渲染订阅版随设置页切换即时刷新）
+import { DEEP_THINK_RULE, extractThinkBlocks, setDeepThinkOn, useDeepThinkOn } from '@/lib/deep-think';
+import { ThinkCard } from './think-card';
 import { ActionDescLine } from './action-desc-line';
 import { buildVisionRules, cleanBubbleText, extractRichActionParts } from '@/lib/chat-rich';
 import { splitVisionDesc } from '@/lib/vision-client';
@@ -179,6 +182,10 @@ interface ChatMsg {
   /** 申请解除拉黑卡片：40-a 起双向——from 缺省视为 'char'（角色发起，用户点同意/拒绝）；
    *  from='user'（用户发起，角色用 [同意/拒绝解除拉黑] 标记决策） */
   blkreq?: { reason: string; status: 'pending' | 'accepted' | 'rejected'; from?: 'char' | 'user' };
+  /** 深度思考：本轮回复 [思考]…[/思考] 块剥离出的思考过程（挂在回合第一条 AI 文本消息上，
+   *  渲染为气泡上方可折叠的思维链卡片；深度思考开关关闭时渲染层直接丢弃不显示。
+   *  仅展示层字段：历史序列化/记忆/翻译/语音合成均不读它） */
+  thinking?: string;
   /** 历史数据兼容：wx/qq 端好友添加标记（fr）。信息端不显示加好友过程，
    *  本端不再写入也不渲染 fr 消息；旧数据若残留该字段按普通消息处理 */
 }
@@ -1180,6 +1187,12 @@ function ChatView({
   const [quote, setQuote] = useState<null | { name: string; content: string }>(null);
   /** 世界书挂载（仅联系人会话参与；AI 助手会话无人设不注入，见 @/lib/ios/worldbook） */
   const wbContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
+  // 深度思考开关（渲染订阅版，IndexedDB 按联系人隔离；AI 助手会话无联系人恒为关）：关闭时思维链卡片
+  // 整体丢弃不渲染（思考指令仍注入，AI 后台照常思考）
+  const deepThinkOn = useDeepThinkOn(wbContactId ?? '');
+  /** 深度思考本轮上下文（startAiTurn 开头重置）：firstMsgId = 本回合第一条 AI 文本消息 id（投递完回填思考用），
+   *  text = 流层剥离 + buildReplyMsgs 兜底剥离合并的思考过程 */
+  const turnThinkRef = useRef<{ firstMsgId: string | null; text: string }>({ firstMsgId: null, text: '' });
   /** 联系人 id（记忆库/拉黑/语音合成用；AI 助手会话为 null）——原在 startAiTurn 内定义，
    *  提升 bg 接线后与组件级 deliverAiMsg 共用 */
   const memContactId = storageKey.startsWith('c:') ? storageKey.slice(2) : null;
@@ -1560,7 +1573,13 @@ function ChatView({
       // 正文在下方被整段丢弃，来电若照常弹出会绕过拉黑语义；bg-turn 接力投递共用本管线同守卫
       const wantCall = hasVoiceCallMark(rawText);
       if (wantCall && wbContactId && !loadBlock('sms', wbContactId).byUser) wantCallSeenRef.current = true;
-      const text = wantCall ? stripVoiceCallMark(rawText) : rawText;
+      // 深度思考兜底剥离（bg 关页接力等绕过流总线的路径拿到整段原文时，[思考]块就地剥掉防泄漏进气泡；
+      // 流式路径正文早已在 chat-stream-store 剥过，这里天然为 no-op）：思考内容累积到本轮上下文，投递完回填
+      const tkParts = extractThinkBlocks(rawText);
+      if (tkParts.thinking) {
+        turnThinkRef.current.text = turnThinkRef.current.text ? `${turnThinkRef.current.text}\n${tkParts.thinking}` : tkParts.thinking;
+      }
+      const text = wantCall ? stripVoiceCallMark(tkParts.text) : tkParts.text;
       const out: ChatMsg[] = [];
       let t = baseTime;
       let msgIdx = idStart;
@@ -1682,6 +1701,12 @@ function ChatView({
           msgIdx += 1;
         }
       }
+      // 深度思考：记录本回合第一条 AI 文本消息 id（只记第一次——流中首个分段的产出即本轮第一条；
+      // 卡片/系统行等非文本消息不承载思维链卡片，跳过）
+      if (!turnThinkRef.current.firstMsgId) {
+        const firstText = out.find((x) => x.role === 'assistant' && (!x.kind || x.kind === 'text') && !x.recalled);
+        if (firstText) turnThinkRef.current.firstMsgId = firstText.id;
+      }
       return { msgs: out, nextIdx: msgIdx };
     },
     [peerLabel, settleUserBlockReq, wbContactId, setAvatarOverride, onContactChanged, storageKey],
@@ -1705,6 +1730,8 @@ function ChatView({
     // 此处入列的 userMsg 只来自这两条文字路，无双入列）。入列后经 msgs 持久化 effect 自动落盘。
     // 红色 ! 徽标重试（retryReply）也会带已入列的消息进来：按 id 判重，不重复入列（对齐微信/QQ 同款守卫）
     if (userMsg) setMsgs((prev) => (prev.some((m) => m.id === userMsg.id) ? prev : [...prev, userMsg]));
+    // 深度思考：重置本轮上下文（重试/新回合互不串台；firstMsgId 由 buildReplyMsgs 首次产出时记录）
+    turnThinkRef.current = { firstMsgId: null, text: '' };
     // 40-a 拉黑拦截（第一层）：用户拉黑角色（byUser）后，本 App 内 AI 不能发任何消息——回合静默取消。
     // 唯一例外=「解除拉黑申请卡片」仍可发起（charRequestOnlyOf 放行模式：回合照常请求，但回复中
     // 除申请卡片/系统行外的正文由 buildReplyMsgs 丢弃）；申请同意后的回应回合因 byUser 已清自然放行。
@@ -1765,7 +1792,11 @@ function ChatView({
       .slice(-20)
       .map((m) => ({
         role: m.role,
-        content: `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
+        // 深度思考：AI 自己的历史回复带思考过程时还原 [思考]…[/思考] 前缀——模型看到自己一直按此格式
+        // 输出（in-context 自我一致），新回复的思考块遵循度大幅提升；标签展示前已被流层剥离，不进任何气泡
+        content: `${m.role === 'assistant' && m.thinking ? `[思考]${m.thinking}[/思考]\n` : ''}${
+          m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''
+        }${
           m.kind === 'voice'
             ? m.voice?.transcript || m.voice?.localText || '[语音]'
             : m.kind === 'image'
@@ -1882,10 +1913,12 @@ function ChatView({
     ]
       .filter(Boolean)
       .join('\n\n');
+    // 深度思考指令（无论开关开还是关都注入，开关只控制前端是否展示思维链卡片）；
+    // 拼在 system 真正的最末尾（条数指令之后）：最新指令最受模型关注，短回复场景也不跳过思考块
     const sysContent = baseSys
       ? replyCount > 1
-        ? `${baseSys}\n\n${buildReplyCountPrompt(replyCount)}`
-        : baseSys
+        ? `${baseSys}\n\n${buildReplyCountPrompt(replyCount)}\n\n${DEEP_THINK_RULE}`
+        : `${baseSys}\n\n${DEEP_THINK_RULE}`
       : null;
     const payload: ChatPayloadMessage[] = applyWbUserBlocks(
       sysContent ? [{ role: 'system' as const, content: sysContent }, ...history] : history,
@@ -1958,7 +1991,12 @@ function ChatView({
         : {}),
       // 边接收边逐条显示：分段器每凑齐一条完整消息立刻排队投递（多条模式）
       onSegment: deliverSegment,
-      finalize: ({ content, error, tail }) => {
+      finalize: ({ content, error, tail, thinking }) => {
+        // 深度思考：合并流层收集的思考过程（buildReplyMsgs 兜底剥离的已累积在 ref 里，流层的在此并入）
+        if (thinking && thinking.trim()) {
+          const prevTk = turnThinkRef.current.text;
+          turnThinkRef.current.text = prevTk ? `${prevTk}\n${thinking.trim()}` : thinking.trim();
+        }
         // F1 流收尾：残留 carry 与收尾文本（多条 = 分段器剩余 tail；单条 = 完整 content）合并后再解析，
         // 跨段/收尾边界切开的照片标签在此闭合还原；流已结束，合并后尾部仍未闭合的标签起始直接丢弃
         //（不投递残留文本，防半截标签上屏），carry 清空不影响下一回合（流错误中断同样在此清空）
@@ -2028,6 +2066,18 @@ function ChatView({
             delay: (i) => (i + 1 < finalBatch.length ? typingDelayOf(finalBatch[i + 1].content ?? '') : 0),
           },
         ).then(() => {
+          // 深度思考回填：本轮全部消息投递完落库后，把思考过程写到本回合第一条 AI 文本消息的
+          // thinking 字段（深度思考开关关闭时渲染层不显示，字段照存——重开开关即可回看）
+          const tkCtx = turnThinkRef.current;
+          const thinkText = tkCtx.text.trim();
+          if (thinkText && tkCtx.firstMsgId) {
+            const targetId = tkCtx.firstMsgId;
+            const cur = loadMsgs(storageKey) ?? [];
+            if (cur.some((x) => x.id === targetId)) {
+              saveMsgs(storageKey, cur.map((x) => (x.id === targetId ? { ...x, thinking: thinkText } : x)));
+              setMsgs((prev) => prev.map((x) => (x.id === targetId ? { ...x, thinking: thinkText } : x)));
+            }
+          }
           // 记忆库：一轮对话结束 → 轮次计数与自动提取记忆碎片（全部消息投递完后执行；AI 助手会话不参与；
           // 后台异步，失败静默）。names：双方真实名字（与机主同源同规则：机主取 user 联系人 name，AI 取该联系人
           // name，均非昵称——展示层 withDisplayNames 会用昵称替换 name，不能进记忆），提取/总结 prompt 视角统一用
@@ -3207,6 +3257,13 @@ function ChatView({
               }
             >
               {newDay && <DaySeparator time={m.time} />}
+              {/* 深度思考思维链卡片：消息行级别（日期分隔下方、气泡行上方）——对方任意消息类型
+                  （文本/语音/卡片）都可携带思考过程；开关关闭时直接丢弃不渲染 */}
+              {!mine && deepThinkOn && m.thinking && !m.recalled ? (
+                <div className="px-1 pb-[2px]">
+                  <ThinkCard text={m.thinking} testId={`sms-think-${m.id}`} />
+                </div>
+              ) : null}
               {lineOnly ? (
                 /* 整条只有动作描写（或关闭态过滤后无正文 / 空白脏数据）：渲染为居中灰字行；多选模式给勾选圈行保证可勾选 */
                 selectMode && !m.recalled && !m.sys && !m.blkreq ? (
@@ -3926,6 +3983,9 @@ function ChatView({
           timeAware={timeAware}
           actionDescOn={actionDescOn}
           onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
+          // 深度思考（IndexedDB 按联系人隔离；AI 助手会话无联系人不提供开关）：开关只控制思维链卡片展示
+          deepThinkOn={deepThinkOn}
+          onToggleDeepThink={wbContactId ? (v) => setDeepThinkOn(wbContactId, v) : undefined}
           worldBooksSummary={
             wbContactId
               ? loadBooks()
