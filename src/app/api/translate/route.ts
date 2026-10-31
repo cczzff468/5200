@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { runInSdkQueue } from '@/lib/server-llm';
 
 export const runtime = 'nodejs';
 
@@ -84,6 +85,15 @@ function extractConfig(value: unknown): UpstreamConfig | null {
   const baseUrl = typeof raw.baseUrl === 'string' ? raw.baseUrl.trim() : '';
   if (!baseUrl) return null;
   const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '';
+  // 默认 OpenAI 地址 + 空 Key = 从未配置（撞 api.openai.com 必 401 白费一圈）：
+  // 当没有配置处理，直接走内置模型
+  let host = '';
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    host = '';
+  }
+  if (!apiKey && /(^|\.)api\.openai\.com$/i.test(host)) return null;
   return {
     baseUrl,
     apiKey,
@@ -133,22 +143,27 @@ function isPrivateHost(hostname: string): boolean {
 /**
  * 内置模型兜底（z-ai-web-dev-sdk）：上游故障 / 未配置时把翻译救回来，
  * 与 /api/chat、server-llm.ts 同策略；z-ai SDK 实际接受 system 角色，直接传翻译指令。
- * 429/限流时指数退避重试（1.5s→3s→6s→12s，共 5 次尝试）：SDK 被朋友圈/论坛等模块并发占用时频繁限流，
- * 是「翻译一直失败」的主要根源——重试后绝大多数能在限流窗口内成功。
+ * 429/限流时指数退避重试（1.5s→3s→6s→12s→20s→30s，共 7 次尝试）：SDK 被朋友圈/论坛等模块并发占用时频繁限流，
+ * 是「翻译一直失败」的主要根源——实测限流窗口最长几十秒，重试预算拉到 ~73s 后
+ * 绝大多数能在窗口打开时拿到结果（客户端 90s 超时内完成）。
+ * 实际 create 走 server-llm 的全局串行队列（并发=1）：论坛生成与翻译不再互相挤兑 429。
  */
 async function sdkTranslate(messages: UpstreamMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
   let lastErr: unknown = null;
-  for (let attempt = 0; attempt < 5; attempt++) {
+  const waits = [1500, 3000, 6000, 12000, 20000, 30000];
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
     try {
-      const completion = await zai.chat.completions.create({
-        messages: messages.map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
-        thinking: { type: 'disabled' },
-      });
+      const completion = await runInSdkQueue(() =>
+        zai.chat.completions.create({
+          messages: messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+          thinking: { type: 'disabled' },
+        }),
+      );
       const choice = (completion as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0];
       const content = choice?.message?.content;
       const text = typeof content === 'string' ? content.trim() : '';
@@ -158,8 +173,9 @@ async function sdkTranslate(messages: UpstreamMessage[]): Promise<string> {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
       const rateLimited = /429|too many requests|rate.?limit/i.test(msg);
-      if (rateLimited && attempt < 4) {
-        await new Promise((r) => setTimeout(r, Math.min(12000, 1500 * Math.pow(2, attempt))));
+      const wait = waits[attempt];
+      if (rateLimited && wait !== undefined) {
+        await new Promise((r) => setTimeout(r, wait));
         continue;
       }
       throw err;

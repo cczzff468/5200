@@ -5,15 +5,15 @@ import { NextResponse } from 'next/server';
  *
  * POST {
  *   config?: UpstreamConfig,             // 设置 App 的用户 API；缺省 SDK 兜底
- *   kind: 'posts' | 'reply' | 'dm' | 'comments' | 'subreplies',
+ *   kind: 'posts' | 'reply' | 'dm' | 'comments' | 'subreplies' | 'names',
  *   items?: { name, persona?, community?, topic?, lang? }[],  // posts：批量生成多位作者的帖子（一次最多 24 条；lang = 惯用语言）
+ *   count?: number,                     // names：生成几个网名（1~30）；comments：生成几条评论（10~30）
  *   author?: { name, persona?, lang? },  // reply/dm：说话人（lang = 惯用语言）
  *   parent?: { authorName, content },   // reply：被回复的帖子/评论
  *   postContent?: string,               // reply：所在主帖内容（多轮对话上下文）
  *   mediaDesc?: string,                 // reply/comments/subreplies：帖子配图的文字描述（识图模型产出）
  *   history?: { from: 'user' | 'peer', text }[],       // dm：对话上下文；reply：评论串最近几轮
  *   post?: { authorName, content, mediaDesc? },        // comments/subreplies：被评论的主帖
- *   count?: number,                     // comments：生成几条评论（10~30）
  *   threads?: { authorName, content }[],               // subreplies：被回复的评论列表（逐条对应输出）
  *   personas?: { name, persona?, lang? }[],  // comments/subreplies：每条对应的评论者（与输出行一一对应；lang = 该网友惯用语言）
  *   userName?: string,                  // 机主名（称呼/被回复者）
@@ -176,6 +176,44 @@ export async function POST(req: Request) {
       ];
       const raw = (await completeWithFallback(config, messages)).text;
       const list = await batchWithRetry(config, messages, raw, expect, 2000);
+      return NextResponse.json({ items: list });
+    }
+
+    if (kind === 'names') {
+      // LLM 生成真实感网名（用户要求：网名不要内置池子，让 AI 起名）。
+      // count = 需要几个；avoid = 已用网名（防撞）。
+      const count = Math.min(Math.max(Math.floor(Number(body.count) || 0), 1), 30);
+      const avoidNames = Array.isArray(body.avoid)
+        ? body.avoid.filter((x): x is string => typeof x === 'string').slice(-60)
+        : [];
+      const avoidLine = avoidNames.length
+        ? `\n\n这些网名已经有人用了，不要重复、也不要高度相似：\n${avoidNames.map((a) => a.slice(0, 20)).join('、')}`
+        : '';
+      const messages: LLMMessage[] = [
+        {
+          role: 'system',
+          content:
+            '你在为中文论坛批量生成新网友的网名（用户 ID）。' +
+            '【最重要】要像真实网友自己取的 ID，有强烈个人风格；禁止「xx用户」「xx网友」「XX爱好者」这类官方模板名，禁止真实明星名。' +
+            '\n风格多样混搭，每次换着来，参考这些真实味道的方向（每次随机侧重几种，别全是一种风格）：' +
+            '\n- 饭圈吃瓜型：纯路人拔萝卜 / 吃瓜不吐籽_ / 内娱判官 / 别惹我_会发疯' +
+            '\n- 日常吐槽型：今天也不想上班 / 睡不醒的猫 / 月底必吃土 / 上班如上坟本坟' +
+            '\n- 极简英文拼音型：Asdfgh / Zzzz_ / momo / 不瘦十斤不改名' +
+            '\n- 小名系：阿茶 / 小鹿乱撞 / 小王今天不加班' +
+            '\n- 玩梗网感系：互联网嘴替 / 已老实求放过 / 尊嘟假嘟 / 那咋了' +
+            '\n- 食物系：芋泥啵啵 / 半糖去冰 / 麻辣香锅不放香菜' +
+            '\n- 文艺系：晚风电台 / 落日收藏家 / 凌晨四点的海' +
+            '\n- 字母混合系：Kiko不睡觉 / Vivi要暴富 / Yuki还没睡' +
+            '\n- 日系：抹茶大福 / 深夜三点の猫；韩系：하늘별 / 치즈볼；繁体风：不吃香菜的傑森' +
+            '\n硬性要求：每个 2~16 个字符；可中英数下划线混合；可带下划线/数字但别全是数字；' +
+            '每行一个，只输出网名本身；禁止编号、引号、解释、空行；生成的网名互相不要相似（不要同一个模板改两个字）。',
+        },
+        { role: 'user', content: `请生成 ${count} 个网名，每行一个（输出 ${count} 行）。${avoidLine}` },
+      ];
+      const raw = (await completeWithFallback(config, messages)).text;
+      const list = splitItems(raw, count, 24)
+        .map((n) => n.replace(/^@/, '').trim())
+        .filter((n) => n.length >= 2 && n.length <= 16);
       return NextResponse.json({ items: list });
     }
 

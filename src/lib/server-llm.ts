@@ -19,19 +19,37 @@ export interface LLMMessage {
   content: string;
 }
 
-/** 从请求体提取上游配置：必须有 baseUrl（反代/中转接口可能无需 Key） */
+/** 从请求体提取上游配置：必须有 baseUrl（反代/中转接口可能无需 Key）。
+ *  优化：baseUrl 还是默认的 api.openai.com 且没填 Key——这是「从未配置」的状态，
+ *  直接当没有配置处理（null）：省掉每次注定 401 的无效往返，尽快落到 SDK 队列。 */
 export function extractUpstreamConfig(raw: unknown): UpstreamConfig | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   const baseUrl = typeof r.baseUrl === 'string' ? r.baseUrl.trim() : '';
   if (!baseUrl) return null;
+  const apiKey = typeof r.apiKey === 'string' ? r.apiKey.trim() : '';
+  // 默认 OpenAI 地址 + 空 Key = 未配置（撞 api.openai.com 必 401，纯粹浪费一圈）
+  if (!apiKey && /(^|\.)api\.openai\.com$/i.test(safeHost(baseUrl))) return null;
   return {
     baseUrl,
-    apiKey: typeof r.apiKey === 'string' ? r.apiKey.trim() : '',
+    apiKey,
     model: typeof r.model === 'string' && r.model.trim() ? r.model.trim() : 'gpt-4o-mini',
     temperature: typeof r.temperature === 'number' ? r.temperature : 0.7,
     maxTokens: typeof r.maxTokens === 'number' && Number.isFinite(r.maxTokens) && r.maxTokens > 0 ? Math.floor(r.maxTokens) : 2048,
   };
+}
+
+/** 从 baseUrl 提取 hostname（解析失败返回空串——当未配置处理） */
+function safeHost(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    try {
+      return new URL(/^https?:\/\//.test(baseUrl) ? baseUrl : `https://${baseUrl}`).hostname;
+    } catch {
+      return '';
+    }
+  }
 }
 
 /** baseUrl 候选端点（与 /api/chat 一致：自动补 /v1/chat/completions、修 /v1/v1） */
@@ -97,19 +115,24 @@ async function upstreamComplete(config: UpstreamConfig, messages: LLMMessage[]):
 }
 
 /** z-ai-web-dev-sdk 兜底（后端内置）。
- *  429/限流时指数退避重试（1.5s→3s→6s）：SDK 在多模块并发下（朋友圈自动发帖/
+ *  429/限流时指数退避重试（1.5s→3s→6s→12s）：SDK 在多模块并发下（朋友圈自动发帖/
  *  论坛生成/翻译）频繁限流，直接抛错会让论坛生成与翻译「一直失败」——
- *  重试后绝大多数能在几秒内拿到结果。 */
+ *  重试后绝大多数能在几秒内拿到结果。
+ *  所有实际 create 调用都走 runInSdkQueue 全局串行队列（见下）——
+ *  并发打 SDK 是 429 的最大来源，串行后限流大幅下降。 */
 async function sdkComplete(messages: LLMMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
   let lastErr: unknown = null;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  const waits = [1500, 3000, 6000, 12000, 20000];
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
     try {
-      const completion = await zai.chat.completions.create({
-        messages: messages.map((m) => ({ role: m.role, content: m.content })),
-        thinking: { type: 'disabled' },
-      });
+      const completion = await runInSdkQueue(() =>
+        zai.chat.completions.create({
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+          thinking: { type: 'disabled' },
+        }),
+      );
       const text = completion.choices[0]?.message?.content ?? '';
       if (!text.trim()) throw new Error('内置模型返回空内容');
       return text;
@@ -117,14 +140,31 @@ async function sdkComplete(messages: LLMMessage[]): Promise<string> {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
       const rateLimited = /429|too many requests|rate.?limit/i.test(msg);
-      if (rateLimited && attempt < 3) {
-        await new Promise((r) => setTimeout(r, 1500 * Math.pow(2, attempt)));
+      const wait = waits[attempt];
+      if (rateLimited && wait !== undefined) {
+        await new Promise((r) => setTimeout(r, wait));
         continue;
       }
       throw err;
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error('内置模型调用失败');
+}
+
+// ---------------- SDK 全局串行队列 ----------------
+
+/** z-ai SDK 的 chat.completions.create 在并发调用时几乎必 429（论坛生成 +
+ *  翻译 + 朋友圈等模块同时打 SDK 时互相挤兑——日志里「翻译一直失败」的主因）。
+ *  把所有 SDK 调用排成一条队（并发 = 1）：后面的请求等前面的完成再发；
+ *  队头失败不阻塞后续（fn 照常执行）。导出给 /api/translate 等共用。 */
+let sdkQueueTail: Promise<void> = Promise.resolve();
+export function runInSdkQueue<T>(fn: () => Promise<T>): Promise<T> {
+  const job = sdkQueueTail.then(fn, fn);
+  sdkQueueTail = job.then(
+    () => undefined,
+    () => undefined,
+  );
+  return job;
 }
 
 /**

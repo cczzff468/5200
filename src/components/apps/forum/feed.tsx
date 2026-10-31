@@ -105,7 +105,7 @@ function ActionBtn({
     >
       {icon}
       {typeof count === 'number' && count > 0 && (
-        <span className="pr-[3px] text-[13px] leading-none">{count < 10000 ? count : countShort(count)}</span>
+        <span className="pr-[3px] text-[13px] leading-none">{countShort(count)}</span>
       )}
     </button>
   );

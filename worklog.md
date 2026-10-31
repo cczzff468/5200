@@ -1825,3 +1825,33 @@ Stage Summary:
 - 网名全面真实化：14 位 NPC 真实网名风（存量帖作者 id 不变自动换新名），评论区同源
 - 手势语义修正：滑到最后一个帖子不再自动生成——继续上滑过界并松开才生成；顶部下拉松开生成新内容置顶；底部无限追加旧帖永不消失
 - 关键文件：core.ts（NPC_DEFS+COMMUNITY_DEFS）、engine.ts（FEED_TOPICS/buildFeedBatch/generateNewFeedPosts/syncCommunities）、api/forum/generate/route.ts（主题 prompt）、forum.tsx（过界手势+双指示器）
+
+---
+Task ID: 24
+Agent: 主控 Agent（Z.ai Code）
+Task: X论坛五项修复——评论区删书签 / 翻译一直失败根因修复 / NPC 网名改为 LLM 生成 / 评论贴合帖子内容 / 数字缩写万→w 千→k
+
+Work Log:
+- [评论区书签] thread-view.tsx CommentActions 删除书签 ThreadAction（用户要求：帖子界面评论区不要书签）；行序变为 回复/转推/爱心/浏览/分享 + 最右翻译；顺带清理 bookmarked state 与过时注释
+- [数字缩写 w/k] core.ts countShort 重写：3400 → 3.4k（千位 k）、12000 → 1.2w（万位 w）、<1000 原样、亿保留亿；feed.tsx ActionBtn 去掉「<10000 显示原数」特判改为始终 countShort——浏览器实测 1.6k / 56.2w / 383w / 2.8亿 / 1k 次浏览 全部上屏
+- [翻译一直失败·根因] dev.log 复盘：298 次 429。真因链=默认 apiConfig（api.openai.com+空Key）每次先撞 401 → 落 SDK → 论坛生成/翻译/朋友圈并发互踩 429 → 客户端 60s 失败冷却把重试也挡死（体验成「一直失败」）。四层修复：
+  1) server-llm.ts 新增 runInSdkQueue 全局串行队列（并发=1，队头失败不阻塞）；sdkComplete 与 /api/translate sdkTranslate 的实际 create 全部入队——自伤型 429 消除
+  2) 重试预算拉长：sdkComplete 5→6 次（1.5/3/6/12/20s，~42.5s）；sdkTranslate 5→7 次（1.5/3/6/12/20/30s，~73s）——覆盖实测最长限流窗口
+  3) extractUpstreamConfig/extractConfig（server-llm + translate route）：默认 OpenAI 地址+空 Key 视为「未配置」直接返 null——省掉注定 401 的无效往返，尽快入 SDK 队列（自定义无 Key 反代不受影响）
+  4) 客户端 chat-translate FAILED_TTL 60s→8s（点重试不再被冷却挡死）；thread-view translateForum 超时 40s→90s（队列排队容忍）
+- [NPC 网名 LLM 化]（用户要求：网名不要内置池子，让 AI 起）
+  - route.ts 新增 kind='names'：LLM 批量起网名（count 1~30 + avoid 已用名）；prompt 覆盖九大风格（饭圈吃瓜/日常吐槽/极简英文拼音/小名/玩梗网感/食物/文艺/字母混合/日韩繁体），2~16 字符、每行一个、禁模板名禁真名
+  - core.ts：ForumDynNpc 增 named 标记；新增 renameDynNpc（换名+换 usedNames+persona 同步替换）与 unnamedDynKeys（占位名网友回填查询）
+  - engine.ts renameDynNpcsViaLlm：createDynNpc 先用池子名同步占位（论坛永不因起名断内容），LLM 起好名后换掉；顺带回填占位名老网友（限流期创建的，每批 ≤30 与 API 上限对齐，几批内全部换 LLM 名）
+  - 集成点：ensureSeed（播种全量换名）/ buildFeedBatch（新面孔批内换名后再 return）/ genCommentBatch（评论者落盘前换名——楼中楼「回复 @xx」与作者名一并用新名；楼中楼阶段新建者落盘前再换一轮）/ queueUserPostInteractions（点赞新网友）
+- [动态网友占比提升] 内置 NPC 缩减：ensureSeed 60%→85% dyn；buildFeedBatch NPC 15%→8%（char 10%→8%、老网友回访 15%→24%、新面孔 60%）；pickCommenters NPC 10%→4%——信息流/评论区以 LLM 起名的动态网友为主，内置池子仅作保底
+- [评论贴内容] LLM 路径本就带主帖内容（kind='comments' prompt 首条硬性要求）；评论失败的主因同翻译（SDK 429→落兜底池）——队列+重试修复后 LLM 路径恢复；兜底池仍按主题正则+版块双层匹配（实测吃瓜帖吃到「救命这瓜也太大了吧？？？有没有课代表总结一下」主题评论）
+- [GEN_VERSION 3→4] 旧 AI 内容清除重播种（用户帖保留），v4 换新起名体系+比例
+- [E2E·Agent Browser] 解锁→开论坛→详情页全链路：书签 0 个（aria-label 扫描 bookmarkCount=0，翻译钮 16 个）；w/k 全格式生效；防刷屏 23 帖 adjacentDup=0；console 零错误；eslint 改动文件零输出
+- [已知·环境] 沙箱内置 SDK 账号级持续 429（本会话测试期全程未恢复；历史日志有 2.4s/5.4s/7.5s×5/13.1s/20.6s 多次成功窗口）——翻译/LLM 起名/LLM 评论在窗口打开时自动生效（队列+73s 重试保证命中）；关闭窗口期间全部走池子兜底，论坛功能不受阻；用户在设置›API 设置配置自己的模型后优先走用户上游
+
+Stage Summary:
+- 评论区书签删除；数字缩写 w/k 化（浏览器实测通过）
+- 翻译失败四层修复：SDK 串行队列（消除自伤 429）+ 重试预算 73s + 跳过默认配置无效 401 + 客户端冷却 8s/超时 90s
+- 网名全面 LLM 化：kind='names' 路由 + 占位→换名→回填三段式（池子名仅作同步保底），动态网友占比提升至主导
+- 关键文件：core.ts（countShort/renameDynNpc/named/unnamedDynKeys/GEN_VERSION=4）、engine.ts（renameDynNpcsViaLlm+回填+比例）、route.ts（kind='names'）、server-llm.ts（runInSdkQueue+跳默认401）、translate/route.ts（队列+7次重试）、chat-translate.ts（FAILED_TTL=8s）、thread-view.tsx（删书签/超时90s）

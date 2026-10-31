@@ -35,7 +35,9 @@ import {
   STALE_MS,
   createDynNpc,
   recordDynNpcRecent,
+  renameDynNpc,
   rollEngagement,
+  unnamedDynKeys,
   type AuthorKey,
   type ForumData,
   type ForumPost,
@@ -244,12 +246,67 @@ function naturalGapMs(depth: number): number {
   return (40 + Math.random() * 170) * 60_000; // 40分钟~3.5小时
 }
 
+// ---------------- LLM 起名（用户要求：网名不要内置池子，让 AI 生成） ----------------
+
+/** 用 LLM 给本批新建的动态网友重新起网名（createDynNpc 先用池子名同步占位保底，
+ *  LLM 起好名后换掉——正常路径下用户看到的都是 AI 起的名；起名失败静默保留池子名）。
+ *  顺带回填：还挂着池子占位名的老网友（限流期创建、上次起名失败落下的）
+ *  一起打包换名，每次最多 30 个（API 上限），几批内全部换成 LLM 名。
+ *  旧名从未随帖子落盘展示，或已被后续广播更新——直接换，不动帖子内容。 */
+async function renameDynNpcsViaLlm(keys: AuthorKey[]): Promise<number> {
+  const seen = new Set<string>();
+  const d0 = forumData();
+  const targets: { id: string; old: string }[] = [];
+  for (const k of keys) {
+    if (!k.startsWith('dyn:') || seen.has(k)) continue;
+    seen.add(k);
+    const npc = d0.dynNpcs?.[k.slice(4)];
+    if (npc && npc.name) targets.push({ id: k.slice(4), old: npc.name });
+  }
+  // 回填：占位名老网友补进同一批（去重后总量 ≤ 30，与 API 上限对齐）
+  if (targets.length < 30) {
+    for (const k of unnamedDynKeys(30)) {
+      if (seen.has(k)) continue;
+      const npc = d0.dynNpcs?.[k.slice(4)];
+      if (npc && npc.name) {
+        seen.add(k);
+        targets.push({ id: k.slice(4), old: npc.name });
+      }
+      if (targets.length >= 30) break;
+    }
+  }
+  if (!targets.length) return 0;
+  try {
+    const avoidNames = [...(d0.usedNames ?? [])].slice(-80);
+    const r = (await callApi({ kind: 'names', count: Math.min(targets.length, 30), avoid: avoidNames })) as { items?: string[] };
+    const raw = Array.isArray(r.items) ? r.items : [];
+    const usedNow = new Set(d0.usedNames ?? []);
+    const cands: string[] = [];
+    for (const x of raw) {
+      const n = String(x).trim().replace(/^@/, '').slice(0, 16);
+      if (n.length < 2 || usedNow.has(n) || cands.includes(n)) continue;
+      cands.push(n);
+    }
+    if (!cands.length) return 0;
+    let changed = 0;
+    for (const t of targets) {
+      const nn = cands.shift();
+      if (!nn) break;
+      if (renameDynNpc(`dyn:${t.id}`, nn)) changed += 1;
+    }
+    if (changed) saveForum({ ...forumData() });
+    return changed;
+  } catch {
+    return 0; // 起名失败：静默保留池子名（论坛永不因起名失败断内容）
+  }
+}
+
 // ---------------- 播种 ----------------
 
 let seeding = false;
 
 /** 内容风格版本升级：清除旧 AI 帖（用户自己的帖子/回复保留），重新播种。
- *  v2 = 真实网民口吻 + 防刷屏 + 热度分级 + 首刷连带评论（用户反馈旧内容太像 AI）。 */
+ *  v4 = 网名 LLM 生成 + 动态网友占比提升（用户反馈网名像内置池子）。 */
 function resetAiContent(d: ForumData): void {
   const keepPosts = d.posts.filter((p) => p.authorKey === 'user');
   const keepIds = new Set(keepPosts.map((p) => p.id));
@@ -315,7 +372,8 @@ const NPC_DOMAIN_ARCH: Record<string, string[]> = {
 };
 
 /** 首次打开：池子同步落盘（立即有内容 + 连带评论），LLM 精修异步追加。幂等。
- *  播种作者 60% 动态真实感网友 + 40% 内置主题 NPC——首屏就不是重名大军；
+ *  播种作者 85% 动态真实感网友 + 15% 内置主题 NPC（v4：动态网友为主，内置 NPC 只做保底大 V；
+ *  网名由 LLM 异步起名替换——池子名只是首屏临时占位）；
  *  防刷屏：落盘前重排（同一信息流绝不连续同一作者）；时间线自然衰减（刚刚→15分钟→1小时→昨天）。 */
 export async function ensureSeed(): Promise<void> {
   const d0 = forumData();
@@ -336,10 +394,11 @@ export async function ensureSeed(): Promise<void> {
       for (let i = 0; i < n && pool.length; i++) {
         const idx = Math.floor(Math.random() * pool.length);
         const text = pool.splice(idx, 1)[0];
-        // 60% 概率换成动态真实感网友发（人设原型与文案领域对上，口吻才真实）
+        // 85% 概率换成动态真实感网友发（人设原型与文案领域对上，口吻才真实）；
+        // 内置 NPC 只占 15%（v4：网名与内容都靠 LLM，内置池子仅作保底）
         const domainArch = NPC_DOMAIN_ARCH[npc.id] ?? [];
         const author: AuthorKey =
-          Math.random() < 0.6
+          Math.random() < 0.85
             ? createDynNpc({ archetypeId: domainArch.length ? domainArch[Math.floor(Math.random() * domainArch.length)] : undefined })
             : `npc:${npc.id}`;
         specs.push({ key: author, text, community: communityOfPoolText(npc.id, text), npcId: npc.id });
@@ -393,6 +452,10 @@ export async function ensureSeed(): Promise<void> {
       lastGenAt: now,
     };
     saveForum(next);
+    // LLM 起名：播种期新建的动态网友全部换 AI 生成的网名（池子名只是首屏临时占位）；
+    // 与 llmPolish 并行（服务端 SDK 串行队列会自然排队，不再互相挤兑 429）
+    const seedDynKeys = Object.keys(forumData().dynNpcs ?? {}).map((id) => `dyn:${id}` as AuthorKey);
+    if (seedDynKeys.length) void renameDynNpcsViaLlm(seedDynKeys);
     // 异步 LLM 精修（NPC 3 条新帖 + char 好友按人设发帖；失败静默跳过）
     void llmPolish();
   } finally {
@@ -924,7 +987,8 @@ function comboPostText(used: Set<string>, lang = 'zh-Hans'): string | null {
   return null;
 }
 
-/** 批量生成一批 feed 帖子（作者池 = 动态真实感网友为主 ~70% + 主题 NPC 15% + char 好友 10%，
+/** 批量生成一批 feed 帖子（作者池 = 动态真实感网友为主：新面孔 ~60% + 老网友回访 ~24%
+ *  + 内置主题 NPC 缩减到 ~8%（v4：网名与内容都靠 LLM，内置池子仅作保底）+ char 好友 ~8%，
  *  动态网友按原型轮换 → 信息流大杂烩，每隔几条就是完全不同领域和语气的人；
  *  复用的老网友带 recent 记忆 → 跨帖连通）。
  *  LLM 批量（设置›API 模型）→ NPC 文案池轮换补齐（每 NPC 一轮只出一条，绝不连发）
@@ -941,12 +1005,14 @@ async function buildFeedBatch(
   // 原型轮换环（打工人→饭圈女孩→数码极客→宝妈→搞笑女……保证大杂烩）
   const archRing = ARCHETYPE_IDS.slice().sort(() => Math.random() - 0.5);
   const specs: { key: AuthorKey; name: string; persona: string; community: string | null; topic: string; lang: string; recent?: string[] }[] = [];
+  // 本批新建的动态网友（LLM 起名目标；池子名只是占位）
+  const newDyn: AuthorKey[] = [];
   let npcCursor = 0;
   let archCursor = 0;
   for (let i = 0; i < n; i++) {
     const topic = topics[i % topics.length];
     const r = Math.random();
-    if (chars.length && r < 0.1) {
+    if (chars.length && r < 0.08) {
       const ch = chars[Math.floor(Math.random() * chars.length)];
       specs.push({
         key: `char:${ch.id}`,
@@ -956,8 +1022,8 @@ async function buildFeedBatch(
         topic,
         lang: 'zh-Hans',
       });
-    } else if (r < 0.25) {
-      // 内置主题 NPC（大 V，自带版块；轮换环保证一环内不重复）
+    } else if (r < 0.16) {
+      // 内置主题 NPC（v4 缩减到 ~8%，只作保底大 V；轮换环保证一环内不重复）
       const nd = shuffledNpcs[npcCursor++ % shuffledNpcs.length];
       specs.push({ key: `npc:${nd.id}`, name: nd.name, persona: nd.persona, community: defaultCommunityFor(nd.id), topic, lang: 'zh-Hans' });
     } else if (r < 0.4) {
@@ -973,11 +1039,13 @@ async function buildFeedBatch(
       }
       // 池子还空（首刷）：落新网友
       const key = createDynNpc({ archetypeId: archRing[archCursor++ % archRing.length] });
+      newDyn.push(key);
       const a = resolveAuthor(key);
       specs.push({ key, name: a.name, persona: a.persona ?? '', community: null, topic, lang: a.lang ?? 'zh-Hans' });
     } else {
-      // 新面孔（原型轮换：每隔几条就是完全不同领域的人）
+      // 新面孔（原型轮换：每隔几条就是完全不同领域的人）；网名随后由 LLM 起
       const key = createDynNpc({ archetypeId: archRing[archCursor++ % archRing.length] });
+      newDyn.push(key);
       const a = resolveAuthor(key);
       specs.push({ key, name: a.name, persona: a.persona ?? '', community: null, topic, lang: a.lang ?? 'zh-Hans' });
     }
@@ -1039,6 +1107,8 @@ async function buildFeedBatch(
       rr += 1;
     }
   }
+  // LLM 起名：本批新建的动态网友换 AI 生成的网名（在调用方落盘前完成；失败保留占位名）
+  if (newDyn.length) await renameDynNpcsViaLlm(newDyn);
   return results;
 }
 
@@ -1186,7 +1256,8 @@ function pickCommenters(count: number, postLang?: string, postContent?: string, 
     let k: AuthorKey;
     if (chars.length && r < 0.06) {
       k = `char:${chars[Math.floor(Math.random() * chars.length)].id}`;
-    } else if (r < 0.16) {
+    } else if (r < 0.1) {
+      // 内置 NPC 缩减到 ~4%（v4：评论区也以动态网友为主，网名靠 LLM）
       k = `npc:${npcs[out.length % npcs.length].id}`;
     } else if (r < 0.4 && dynKeys.length) {
       // 已有动态网友回访（同一人出现在不同帖子评论区，真实论坛常态）
@@ -1257,7 +1328,10 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
     const postLang = resolveAuthor(post.authorKey).lang ?? 'zh-Hans';
     // 评论者：新面孔 + 老网友回访；同帖去重（含已有评论者 + 楼主，绝不复读）
     const existingKeys = threadReplies.map((p) => p.authorKey);
+    const dynBefore = new Set(Object.keys(forumData().dynNpcs ?? {}));
     const commenterKeys = pickCommenters(want, postLang, post.content, post.authorKey, ...existingKeys);
+    // 本批新建的评论者（LLM 起名目标；池子名只是占位）
+    const newDynCommenters = commenterKeys.filter((k) => k.startsWith('dyn:') && !dynBefore.has(k.slice(4)));
     const avoid = threadReplies.slice(-10).map((p) => p.content.slice(0, 40));
 
     // ---- 顶层评论（LLM 批量，池子兜底） ----
@@ -1300,6 +1374,10 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
     }
     if (!texts.length) return 0;
 
+    // LLM 起名：本批新建的评论者换 AI 生成的网名（在落盘前完成——
+    // 评论作者名与楼中楼「回复 @xx」一并用新名；失败保留占位名）
+    if (newDynCommenters.length) await renameDynNpcsViaLlm(newDynCommenters);
+
     // 时间戳：在（发帖时间、现在］内升序铺开；已有评论则从最后一条之后接。
     // 修复：起点不再越过「现在」（旧逻辑全新帖会把起点排到未来，全部被钳到同一毫秒）
     const lastAt = threadReplies.reduce((m, p) => Math.max(m, p.createdAt), 0);
@@ -1329,6 +1407,7 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
         .slice(0, Math.max(1, Math.floor(newComments.length / 3)));
       if (subTargets.length) {
         // 子回复作者：其他网友（动态+内置混合，偶尔楼主本人回评，很 X）；同帖去重
+        const dynBeforeSubs = new Set(Object.keys(forumData().dynNpcs ?? {}));
         const subKeys = subTargets.map((c) => {
           if (post.authorKey !== 'user' && Math.random() < 0.3) return post.authorKey;
           return pickCommenters(1, postLang, post.content, post.authorKey, ...existingKeys, ...commenterKeys)[0];
@@ -1363,6 +1442,9 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
           sub.replyToPost = c.id;
           next.posts.push(sub);
         });
+        // LLM 起名：楼中楼阶段新建的动态网友也换 AI 网名（落盘前完成；失败保留占位名）
+        const subNewDyn = subKeys.filter((k) => k.startsWith('dyn:') && !dynBeforeSubs.has(k.slice(4)));
+        if (subNewDyn.length) await renameDynNpcsViaLlm(subNewDyn);
       }
     } catch {
       /* 子回复失败不影响主评论 */
@@ -1420,6 +1502,8 @@ export function queueUserPostInteractions(post: ForumPost): void {
     .slice(0, npcCount)
     .forEach((l) => likers.push(`npc:${l.id}`));
   while (likers.length < 3 + Math.floor(Math.random() * 3)) likers.push(createDynNpc());
+  // LLM 起名：新建的点赞网友换 AI 生成的网名（通知/主页里都是 AI 起的名；失败保留占位名）
+  void renameDynNpcsViaLlm(likers.filter((k) => k.startsWith('dyn:')));
   // char 好友优先来点赞
   const charLiker = next0.posts
     .filter((p) => p.authorKey.startsWith('char:'))

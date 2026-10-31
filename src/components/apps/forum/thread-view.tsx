@@ -6,12 +6,12 @@
  * 官方元数据行「H:mm · 年月日 · N 次浏览」+ 蓝色「翻译」按钮
  * （X 官方行为：译文原位替换正文展示，下方标注「由 AI 翻译」，
  * 按钮可在 查看原文/查看译文 间切换）；
- * 互动栏（回复/转推/点赞/书签/分享，爱心归位第三，带数字）+ 分隔线下接评论流；
+ * 互动栏（回复/转推/点赞/浏览/分享，爱心归位第三，带数字）+ 分隔线下接评论流；
  * 打开帖子自动补评论到 10~30 条（engine.ensureThreadComments，静默浮现）；
  * 底部「显示更多评论」按钮 → 再生成 10~30 条；
  * 评论流按参考图：头像 + 名字(bold) + @账号 · 时间(灰) + 右侧「···」，
- * 子回复带「回复 @xx」蓝字行，操作行为六个空心线性图标
- * （回复/转推/爱心/浏览/书签/分享，图标+数字）；头像右缘细竖线贯穿到子回复；
+ * 子回复带「回复 @xx」蓝字行，操作行为空心线性图标
+ * （回复/转推/爱心/浏览/分享，图标+数字；书签已按用户要求删除）；头像右缘细竖线贯穿到子回复；
  * 底部回复输入条（头像 + input + 蓝色发送圆钮），
  * 点击评论/子回复即定向回复（显示「回复 @xx」提示条，可取消）；
  * 用户回复 AI 评论 → AI 感觉主帖内容+用户评论内容再回一条，无限多轮（engine）。
@@ -42,13 +42,13 @@ import { useForum } from './ctx';
 import { CommunityIcon, PostMedia, PollBlock, LocationLine } from './feed';
 
 /** 论坛翻译请求 + 超时保护：翻译兜底链路（代理 → 浏览器直连 → 内置模型）最长可挂
- *  数分钟（直连超时 120s×2）；服务端内置模型带 429 退避重试（最长 ~11s），
- *  论坛场景 40s 未出结果即按失败处理快速提示；
- *  底层若稍后成功会写入译文缓存，重点一次直接命中。 */
+ *  数分钟（直连超时 120s×2）；服务端内置模型走全局串行队列 + 429 退避重试，
+ *  论坛生成高峰期翻译会在队列里排队等待（前面可能有几条生成请求）；
+ *  90s 未出结果才按失败提示——底层若稍后成功会写入译文缓存，重点一次直接命中。 */
 function translateForum(text: string): Promise<string> {
   const target = detectMessageLang(text) === 'zh-Hans' ? 'en' : 'zh-Hans';
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('翻译超时')), 40_000);
+    const timer = setTimeout(() => reject(new Error('翻译超时')), 90_000);
     requestTranslation({ text, lang: target, apiConfig: useSettings.getState().apiConfig })
       .then((out) => {
         clearTimeout(timer);
@@ -154,8 +154,8 @@ function ThreadAction({
   );
 }
 
-/** 评论操作行（参考图规格）：回复/转推/爱心/浏览/书签/分享 + 最右「翻译」
- *  （用户要求：评论区的翻译按钮放在最右面；爱心激活粉色实心、转推激活绿色），
+/** 评论操作行（参考图规格）：回复/转推/爱心/浏览/分享 + 最右「翻译」
+ *  （用户要求：评论区书签已删除；翻译按钮放在最右面；爱心激活粉色实心、转推激活绿色），
  *  图标+数字，悬停浅色圆底。translate 传入时在行末渲染翻译按钮。 */
 function CommentActions({
   post,
@@ -177,7 +177,6 @@ function CommentActions({
   const iconSize = compact ? 15 : 16;
   const size = compact ? 'sm' : 'md';
   const a = resolveAuthor(post.authorKey);
-  const [bookmarked, setBookmarked] = useState(false);
   return (
     <div
       className={`mt-1.5 flex items-center ${compact ? 'gap-[2px]' : 'justify-between'}`}
@@ -222,18 +221,6 @@ function CommentActions({
         hoverColor={t.blue}
         hoverBg="rgba(29,155,240,0.12)"
         onClick={() => f.toast(`这条回复已有 ${countShort(post.views)} 次浏览`)}
-      />
-      <ThreadAction
-        icon={XIcons.bookmark(bookmarked, iconSize)}
-        label={bookmarked ? '移除书签' : '添加书签'}
-        size={size}
-        color={bookmarked ? t.blue : t.secondary}
-        hoverColor={t.blue}
-        hoverBg="rgba(29,155,240,0.12)"
-        onClick={() => {
-          setBookmarked(!bookmarked);
-          f.toast(bookmarked ? '已移除书签' : '已添加到书签');
-        }}
       />
       <ThreadAction
         icon={XIcons.share(iconSize)}
@@ -377,7 +364,7 @@ function SubReplyItem({
           </p>
           {/* 译文（附加在原文之后；按钮在下方操作行最右） */}
           {tr.st.out !== null && tr.st.shown && <TranslatedTextLine out={tr.st.out} />}
-          {/* 小操作行（回复/转推/爱心/浏览/书签/分享 + 最右翻译，小一号） */}
+          {/* 小操作行（回复/转推/爱心/浏览/分享 + 最右翻译，小一号） */}
           <CommentActions
             post={s}
             subCount={sSubs.length}
@@ -443,7 +430,7 @@ function CommentRow({
           </p>
           {/* 译文（附加在原文之后；翻译按钮在下方操作行最右面） */}
           {tr.st.out !== null && tr.st.shown && <TranslatedTextLine out={tr.st.out} />}
-          {/* 操作行：回复/转推/爱心/浏览/书签/分享 + 最右翻译 */}
+          {/* 操作行：回复/转推/爱心/浏览/分享 + 最右翻译 */}
           <CommentActions
             post={comment}
             subCount={subReplies.length}

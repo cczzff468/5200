@@ -18,8 +18,10 @@ import type { ContactRecord } from '@/lib/contacts';
 export const FORUM_KEY = 'forum-data-v1';
 /** 生成引擎内容风格版本（升级拟真度时 bump：旧 AI 帖子/评论清除重播种，
  *  用户自己发的帖子与回复保留）。v3 = 真实网民口吻 + 防刷屏 + 热度分级 + 首刷连带评论
- *  + 评论主题匹配（版块定领域）+ 评论时间戳自然铺开 */
-export const GEN_VERSION = 3;
+ *  + 评论主题匹配（版块定领域）+ 评论时间戳自然铺开；
+ *  v4 = 网名改为 LLM 生成（不再用内置池子名，用户要求）+ 动态网友占比提升
+ *  + 点赞/浏览数字缩写改为 w/k 风格 */
+export const GEN_VERSION = 4;
 /** 首次播种的 NPC 帖子目标条数（feed 一屏半左右） */
 export const SEED_POST_TARGET = 14;
 /** 补新帖：feed 最新帖子超过该毫秒数视为「凉了」，打开时补 2~4 条 */
@@ -151,6 +153,10 @@ export interface ForumDynNpc {
   /** 最近发过的帖子/评论摘要（人设连通性：同一个人换个帖子接上之前的话茬，
    *  如上一条抱怨试驾没车、下一条晒提车；只保留最近 3 条） */
   recent?: string[];
+  /** 网名是否已由 LLM 生成（用户要求：网名不要内置池子，让 AI 起）：
+   *  createDynNpc 先用池子名同步占位，renameDynNpc 换成 LLM 名后置 true；
+   *  false/undefined = 还是占位名（限流期创建的网友），后续批次继续尝试回填 */
+  named?: boolean;
 }
 
 export interface ForumData {
@@ -944,6 +950,45 @@ function ensureUsedNames(d: ForumData): string[] {
   return d.usedNames;
 }
 
+/** 重命名动态网友（LLM 生成网名落地：用户要求网名由 AI 生成、不走内置池子；
+ *  createDynNpc 先用池子名占位（同步保底），LLM 起好名后调这里换掉）。
+ *  同步换 usedNames（旧名释放、新名占用）+ persona 里的「旧名」一并替换；
+ *  不触发 save——由调用方统一落盘广播。返回是否实际改名。 */
+export function renameDynNpc(key: AuthorKey, newName: string): boolean {
+  if (!key.startsWith('dyn:')) return false;
+  const d = forumData();
+  const npc = d.dynNpcs?.[key.slice(4)];
+  if (!npc) return false;
+  const old = npc.name;
+  const next = newName.trim().slice(0, 20);
+  if (!old || !next || old === next) return false;
+  npc.name = next;
+  npc.named = true; // 已用 LLM 名（后续批次不再回填这个网友）
+  // persona 里的名字同步替换（「瓜田里的猹」→ 新名，生成口吻跟着新身份走）
+  if (npc.persona.includes(`「${old}」`)) {
+    npc.persona = npc.persona.replaceAll(`「${old}」`, `「${next}」`);
+  } else if (npc.persona.includes(old)) {
+    npc.persona = npc.persona.replaceAll(old, next);
+  }
+  const names = ensureUsedNames(d);
+  const i = names.indexOf(old);
+  if (i !== -1) names.splice(i, 1);
+  if (!names.includes(next)) names.push(next);
+  return true;
+}
+
+/** 还是池子占位名的动态网友（限流期创建、LLM 起名失败落下的）：
+ *  renameDynNpcsViaLlm 每次额外带回填它们，直到全部换成 LLM 名。 */
+export function unnamedDynKeys(limit: number): AuthorKey[] {
+  const d = forumData();
+  const out: AuthorKey[] = [];
+  for (const [id, npc] of Object.entries(d.dynNpcs ?? {})) {
+    if (npc && !npc.named) out.push(`dyn:${id}`);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 /** 动态创建一个虚拟网友（同步、原位写入 forumData，由调用方随后 saveForum 落盘广播）。
  *  - 人设原型（32 领域）决定 persona/话题/网名风格；未指定时随机（大杂烩）；
  *  - 网名优先原型候选（强个人风格）→ 通用真实感池 → 变体名，全局防重永不重名；
@@ -1260,12 +1305,17 @@ export function relTime(at: number, now = Date.now()): string {
   return d.getFullYear() === new Date(now).getFullYear() ? md : `${d.getFullYear()}年${md}`;
 }
 
-/** 数字缩写（X 风格：1.2万 / 3400） */
+/** 数字缩写（用户要求：万→w、千→k，像真实网民写数据：3400 → 3.4k、
+ *  1.2万 → 1.2w；小于 1000 原样；亿级保留亿） */
 export function countShort(n: number): string {
-  if (n < 10000) return String(n);
+  if (n < 1000) return String(n);
+  if (n < 10_000) {
+    const k = n / 1000;
+    return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`;
+  }
   if (n < 100_000_000) {
     const w = n / 10000;
-    return `${w >= 100 ? Math.round(w) : Math.round(w * 10) / 10}万`;
+    return `${w >= 100 ? Math.round(w) : Math.round(w * 10) / 10}w`;
   }
   return `${Math.round((n / 100_000_000) * 10) / 10}亿`;
 }

@@ -357,8 +357,10 @@ async function runTranslate(apiConfig: ApiConfig, text: string, langLabel: strin
 
 const inflight = new Map<string, Promise<string>>();
 
-/** 失败冷却：同一 key 失败后 60s 内不再重试（避免上游不可用时反复轰炸） */
-const FAILED_TTL = 60_000;
+/** 失败冷却：同一 key 失败后短时间内不再重试（避免上游不可用时反复轰炸）。
+ *  60s 太长——用户点「翻译」重试时会被这个窗口直接拒绝，体验成「一直翻译失败」；
+ *  缩到 8s：点重试基本立刻放行，由服务端串行队列 + 退避兜底防轰炸。 */
+const FAILED_TTL = 8_000;
 const failedAt = new Map<string, number>();
 
 /**
