@@ -4,19 +4,20 @@
  * X论坛 · 行为引擎。
  *
  * 职责（全部非阻塞、失败静默、绝不抛错到 UI）：
- * 1. ensureSeed：首次打开 → NPC 文案池先落盘（论坛立刻有内容）+ 系统通知 + 欢迎私信；
+ * 1. ensureSeed：仅首次打开 → NPC 文案池先落盘（论坛立刻有内容 + 连带评论）+ 系统通知 + 欢迎私信；
  *    再异步 LLM 精修（NPC 新帖 + char 好友按人设发帖，LLM 失败仅跳过该条——NPC 池已保底）。
- * 2. ensureFresh：feed 最新帖超过 STALE_MS 视为「凉了」，打开时补 2~4 条
- *    （文案池即刻 + LLM 追加一条）。
- * 3. queueUserPostInteractions：用户发帖后延迟点赞（1~3 位 NPC + 好友），
+ *    【用户要求】生成完一批后不再自动生成：打开 App 不补帖（ensureFresh 已删）、
+ *    打开帖子也不自动补评论（ensureThreadComments 已删）——只在用户自己上滑/下滑松开、
+ *    点「显示更多评论」时才生成。
+ * 2. queueUserPostInteractions：用户发帖后延迟点赞（1~3 位 NPC + 好友），
  *    0~2 条 AI 回复（持久 pending 队列，重启不丢）。
- * 4. queueAiReplyToUserReply：用户回复了 AI 的帖/评论 → 该作者延迟再回一条
+ * 3. queueAiReplyToUserReply：用户回复了 AI 的帖/评论 → 该作者延迟再回一条
  *    （带完整上下文：主帖 + 被回复评论 + 用户评论 + 最近对话链，可无限多轮）。
- * 5. queueDmReply：用户私信发消息 → 对方延迟回复（LLM，失败通用兜底句）。
- * 6. generateMoreFeedPosts：主页滑到底 → 无限生成一批帖子（7~20 条，时间戳向前排，
- *    旧帖永不消失）；LLM 批量失败时 NPC 文案池兜底。
- * 7. ensureThreadComments / generateMoreComments：打开帖子自动把评论补到 10~30 条；
- *    「更多评论」按钮再生成 10~30 条（含楼中楼子回复）。
+ * 4. queueDmReply：用户私信发消息 → 对方延迟回复（LLM，失败通用兜底句）。
+ * 5. generateMoreFeedPosts / generateNewFeedPosts：主页上拉/下拉松开 → 无限生成一批帖子
+ *    （7~15 条，时间戳向前排，旧帖永不消失）；LLM 批量失败时 NPC 文案池兜底。
+ * 6. generateMoreComments：「显示更多评论」按钮 → 再生成 7~15 条（含楼中楼子回复）。
+ * 7. 热度合理性：评论/楼中楼/AI 回复的点赞浏览按父帖比例缩放（评论赞 << 主帖赞，像推特）。
  *
  * 模型连接（设置 App）：
  * - API 模型（apiConfig）：所有 LLM 生成（帖子/评论/回复/私信）；
@@ -32,8 +33,8 @@ import {
   PERSONA_ARCHETYPES,
   POST_MAX,
   REPLY_MAX,
-  STALE_MS,
   createDynNpc,
+  likesOf,
   recordDynNpcRecent,
   renameBuiltinNpc,
   renameDynNpc,
@@ -156,7 +157,35 @@ async function describePostMedia(media: string[] | undefined): Promise<string> {
 
 // ---------------- 帖子构造 ----------------
 
-function basePost(authorKey: AuthorKey, content: string, community: string | null, at: number, replyTo?: string, replyToName?: string | null, organic = true): ForumPost {
+/** 评论/楼中楼互动量（用户要求：评论的点赞/浏览必须合理——主帖 180 赞、
+ *  单条评论却几万赞太假，像推特一样评论赞远小于主帖赞）：
+ *  按父帖热度比例缩放——42% 几乎没人赞（父帖的 0.2%~3%）、33% 少量（2%~10%）、
+ *  20% 小热门（8%~30%）、5% 热评（20%~60%）；浏览 ≈ 父帖浏览的 2%~25%；转推 0~2。 */
+function rollCommentEngagement(parentLikes: number, parentViews: number): { likeBoost: number; views: number; reposts: number } {
+  const r = Math.random();
+  let ratio: number;
+  if (r < 0.42) ratio = 0.002 + Math.random() * 0.028;
+  else if (r < 0.75) ratio = 0.02 + Math.random() * 0.08;
+  else if (r < 0.95) ratio = 0.08 + Math.random() * 0.22;
+  else ratio = 0.2 + Math.random() * 0.4;
+  return {
+    likeBoost: Math.floor(parentLikes * ratio),
+    views: Math.max(3, Math.floor(parentViews * (0.02 + Math.random() * 0.23))),
+    reposts: Math.random() < 0.08 ? 1 + Math.floor(Math.random() * 2) : 0,
+  };
+}
+
+function basePost(
+  authorKey: AuthorKey,
+  content: string,
+  community: string | null,
+  at: number,
+  replyTo?: string,
+  replyToName?: string | null,
+  organic = true,
+  /** 被回复父帖的热度（评论点赞/浏览按父帖比例缩放，不再独立重尾分布） */
+  parentEng?: { likes: number; views: number },
+): ForumPost {
   const npcKeys = NPC_DEFS.map((n) => `npc:${n.id}` as AuthorKey);
   const likes: AuthorKey[] =
     organic && authorKey !== 'user'
@@ -166,8 +195,12 @@ function basePost(authorKey: AuthorKey, content: string, community: string | nul
           .slice(0, Math.floor(Math.random() * 5))
           .filter(() => Math.random() < 0.85)
       : [];
-  // 热度分级（用户要求：点赞/浏览生成 十几/几十/几百/几千/几万/几十万/几百万——重尾分布）
-  const eng = organic ? rollEngagement() : { likeBoost: 0, views: 40 + Math.floor(Math.random() * 900), reposts: 0 };
+  // 热度分级：主帖重尾分布（十几~几百万）；评论/楼中楼按父帖比例缩放（评论赞 << 主帖赞）
+  const eng = organic
+    ? replyTo !== undefined
+      ? rollCommentEngagement(parentEng?.likes ?? 40, parentEng?.views ?? 600)
+      : rollEngagement()
+    : { likeBoost: 0, views: Math.floor(Math.random() * 45), reposts: 0 };
   return {
     id: uid('p'),
     authorKey,
@@ -374,7 +407,7 @@ function resetAiContent(d: ForumData): void {
  *  池子主题匹配（评论对得上帖子内容）+ 少量楼中楼；时间在（发帖, 现在）内升序。 */
 function seedCommentsFor(post: ForumPost, out: ForumPost[]): void {
   const postAuthor = resolveAuthor(post.authorKey);
-  const count = 5 + Math.floor(Math.random() * 9); // 5~13 条
+  const count = 7 + Math.floor(Math.random() * 9); // 7~15 条（用户要求：评论一批 7~15）
   const keys = pickCommenters(count, postAuthor.lang, post.content, post.authorKey);
   const usedCt = new Set<string>();
   const texts: string[] = [];
@@ -387,10 +420,20 @@ function seedCommentsFor(post: ForumPost, out: ForumPost[]): void {
   const hi = Date.now() - 5_000;
   let lo = Math.max(post.createdAt + 5_000, hi - Math.max(texts.length * 2_500, 90_000));
   const span = Math.max(hi - lo, texts.length * 1_200);
+  const postEng = { likes: likesOf(post), views: post.views };
   const newComments: ForumPost[] = [];
   texts.forEach((t, i) => {
     const at = Math.floor(lo + (span * (i + 0.15 + Math.random() * 0.7)) / texts.length);
-    const c = basePost(keys[i], t.slice(0, REPLY_MAX), post.community, Math.min(Math.max(at, post.createdAt + 5_000), hi), post.id, postAuthor.name);
+    const c = basePost(
+      keys[i],
+      t.slice(0, REPLY_MAX),
+      post.community,
+      Math.min(Math.max(at, post.createdAt + 5_000), hi),
+      post.id,
+      postAuthor.name,
+      true,
+      postEng,
+    );
     newComments.push(c);
     out.push(c);
   });
@@ -403,7 +446,16 @@ function seedCommentsFor(post: ForumPost, out: ForumPost[]): void {
     const subLang = resolveAuthor(byAuthor).lang ?? 'zh-Hans';
     const text = pickTopicComment(`${c.content} ${post.content}`, subLang, usedSub, post.community) ?? pickGenericComment('zh-Hans', usedSub) ?? '哈哈哈哈哈';
     const subAt = Math.min(Date.now() - 30_000, c.createdAt + (3 + Math.random() * 40) * 60_000);
-    const sub = basePost(byAuthor, text.slice(0, REPLY_MAX), post.community, Math.max(subAt, c.createdAt + 90_000), c.id, resolveAuthor(c.authorKey).name);
+    const sub = basePost(
+      byAuthor,
+      text.slice(0, REPLY_MAX),
+      post.community,
+      Math.max(subAt, c.createdAt + 90_000),
+      c.id,
+      resolveAuthor(c.authorKey).name,
+      true,
+      { likes: likesOf(c), views: c.views },
+    );
     sub.replyToPost = c.id;
     out.push(sub);
   }
@@ -561,46 +613,9 @@ async function llmPolish(): Promise<void> {
   }
 }
 
-// ---------------- 补新帖 ----------------
-
-let refreshing = false;
-
-/** feed 凉了（最新帖 > STALE_MS）→ 补 2~4 条（池子即刻 + LLM 追加异步）。幂等。 */
-export async function ensureFresh(): Promise<void> {
-  if (refreshing) return;
-  const d = forumData();
-  if (!d.seeded) return;
-  const newest = d.posts.reduce((m, p) => Math.max(m, p.createdAt), 0);
-  if (newest && Date.now() - newest < STALE_MS) return;
-  refreshing = true;
-  try {
-    const n = 2 + Math.floor(Math.random() * 3);
-    const now = Date.now();
-    const next: ForumData = { ...forumData() };
-    const used = new Set(next.posts.map((p) => p.content.slice(0, 20)));
-    // 防刷屏：跳过当前最新一条主帖的作者（新帖会插在它附近）
-    const newestMain = [...next.posts].filter((p) => p.replyTo === null).sort((a, b) => b.createdAt - a.createdAt)[0];
-    let added = 0;
-    for (const npc of NPC_DEFS.slice().sort(() => Math.random() - 0.5)) {
-      if (added >= n) break;
-      if (newestMain && newestMain.authorKey === `npc:${npc.id}`) continue;
-      const cand = npc.pool.find((x) => !used.has(x.slice(0, 20)));
-      if (!cand) continue;
-      used.add(cand.slice(0, 20));
-      next.posts.push(basePost(`npc:${npc.id}`, cand, communityOfPoolText(npc.id, cand), now - Math.floor(Math.random() * 900_000) - 60_000));
-      added += 1;
-    }
-    next.lastGenAt = now;
-    saveForum(next);
-    void llmPolish();
-    // v5：起名回填（限流期没换上名的网友/内置 NPC，趁这次打开补齐；静默）
-    void renameDynNpcsViaLlm([]);
-  } finally {
-    refreshing = false;
-  }
-}
-
 // ---------------- 主页无限生成（底部上拉松开 / 顶部下拉松开 → 过界手势触发） ----------------
+// 用户要求：生成完一批后不再自动生成——打开 App 不补帖（ensureFresh 已删），
+// 只在用户自己下拉/上拉松开、或点「显示更多评论」时才生成。
 
 let feedGenerating = false;
 
@@ -1171,7 +1186,7 @@ async function buildFeedBatch(
 }
 
 /** 主页滑到最后一个帖子、继续上滑并松开 → 无限生成一批新帖子（过界手势触发）。
- *  - 一次 7~20 条（LLM 批量，设置里的 API 模型，主题：八卦/明星/吐槽/车/影视/娱乐/吃瓜）；
+ *  - 一次 7~15 条（用户要求；LLM 批量，设置里的 API 模型，主题：八卦/明星/吐槽/车/影视/娱乐/吃瓜）；
  *  - 时间戳排在现有最老主帖之前（信息流向下无限延伸，旧帖永不消失）；
  *  - 防刷屏：与现有 feed 尾部作者隔开 + 批内绝不连排；时间间隔自然衰减（40分钟~几小时，偶尔隔天）。
  *  返回本次新增条数。 */
@@ -1181,7 +1196,7 @@ export async function generateMoreFeedPosts(): Promise<number> {
   try {
     const d = forumData();
     if (!d.seeded) return 0;
-    const n = 7 + Math.floor(Math.random() * 14); // 7~20 条
+    const n = 7 + Math.floor(Math.random() * 9); // 7~15 条（用户要求）
     // 时间边界：全部主帖里最老的时间，新帖排在它之前（feed 下方）；
     // 同时拿到它的作者——新批次与它隔开（防刷屏跨批次也生效）
     let frontier = Date.now();
@@ -1230,7 +1245,7 @@ export async function generateMoreFeedPosts(): Promise<number> {
 }
 
 /** 主页滑到最顶部、下拉并松开 → 生成一批全新内容（过界手势触发）。
- *  - 一次 7~20 条，时间戳全部晚于现有最新帖（新内容整批插入信息流最上方）；
+ *  - 一次 7~15 条（用户要求），时间戳全部晚于现有最新帖（新内容整批插入信息流最上方）；
  *  - 防刷屏 + 自然时间衰减（最新一条「刚刚」，往下几分钟→几十分钟）；
  *  - 与底部生成共用互斥锁与批量生成器，旧帖永不消失。 */
 export async function generateNewFeedPosts(): Promise<number> {
@@ -1239,7 +1254,7 @@ export async function generateNewFeedPosts(): Promise<number> {
   if (!d0.seeded) return 0;
   feedGenerating = true;
   try {
-    const n = 7 + Math.floor(Math.random() * 14); // 7~20 条
+    const n = 7 + Math.floor(Math.random() * 9); // 7~15 条（用户要求）
     const used = new Set(d0.posts.map((p) => p.content.slice(0, 20)));
     const avoid = [...d0.posts]
       .sort((a, b) => b.createdAt - a.createdAt)
@@ -1279,18 +1294,10 @@ export async function generateNewFeedPosts(): Promise<number> {
   }
 }
 
-// ---------------- 帖子评论区批量生成（10~30 条 + 楼中楼） ----------------
+// ---------------- 帖子评论区批量生成（7~15 条 + 楼中楼；仅「更多评论」按钮触发） ----------------
 
 /** 正在生成评论的帖子 id（防并发重复） */
 const threadGen = new Set<string>();
-
-/** 帖子评论总数（顶层 + 楼中楼） */
-function countThreadComments(d: ForumData, postId: string): number {
-  const top = d.posts.filter((p) => p.replyTo === postId);
-  let n = top.length;
-  for (const c of top) n += d.posts.filter((p) => p.replyTo === c.id).length;
-  return n;
-}
 
 /** 随机挑评论者（用户要求评论区网名也要真实不重复）：
  *  ~58% 动态真实感新网友（每条帖子评论区大量新面孔）+ ~24% 已有动态网友回访
@@ -1354,23 +1361,15 @@ function archetypeIdsForContent(content: string): string[] {
 }
 
 /** 生成一批评论并落库（LLM 批量 + 池子兜底 + 楼中楼子回复）。
- *  mode='ensure'：评论不足 10 条时补到 10~30（打开帖子自动触发）；
- *  mode='more'：直接追加 10~30 条（「更多评论」按钮）。
+ *  仅由「显示更多评论」按钮触发（用户要求：生成完后不再自动生成，
+ *  只有用户自己上滑/下滑、点更多评论时才生成）；一次 7~15 条。
  *  返回新增评论数（含子回复）。 */
-async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise<number> {
+async function genCommentBatch(postId: string): Promise<number> {
   if (threadGen.has(postId)) return 0;
   const d0 = forumData();
   const post = d0.posts.find((p) => p.id === postId);
   if (!post) return 0;
-  const cur = countThreadComments(d0, postId);
-  let want: number;
-  if (mode === 'ensure') {
-    if (cur >= 10) return 0;
-    want = Math.max(0, 10 - cur) + Math.floor(Math.random() * 21); // 补到 10~30
-  } else {
-    want = 10 + Math.floor(Math.random() * 21); // 10~30
-  }
-  if (want <= 0) return 0;
+  const want = 7 + Math.floor(Math.random() * 9); // 7~15 条（用户要求）
   threadGen.add(postId);
   try {
     const d = forumData();
@@ -1447,10 +1446,12 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
 
     const next: ForumData = { ...forumData() };
     const newComments: ForumPost[] = [];
+    // 主帖热度（评论点赞/浏览按父帖比例缩放：评论赞 << 主帖赞，像推特一样合理）
+    const postEng = { likes: likesOf(post), views: post.views };
     texts.forEach((t, i) => {
       const at = Math.floor(lo + (span * (i + 0.2 + Math.random() * 0.65)) / texts.length);
       const authorKey = commenterKeys[i] ?? commenterKeys[commenterKeys.length - 1];
-      const c = basePost(authorKey, t.slice(0, REPLY_MAX), post.community, at, postId, postAuthor.name);
+      const c = basePost(authorKey, t.slice(0, REPLY_MAX), post.community, at, postId, postAuthor.name, true, postEng);
       newComments.push(c);
       next.posts.push(c);
       // 人设连通性：记录动态网友最近评论过的内容（下次发帖/评论能接上话疸）
@@ -1496,7 +1497,16 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
             text = pickTopicComment(`${c.content} ${post.content}`, subLang, usedSub) ?? pickGenericComment(subLang, usedSub) ?? pickGenericComment('zh-Hans', usedSub) ?? '哈哈哈哈';
           }
           const subAt = Math.min(Date.now() - Math.floor(Math.random() * 60_000), c.createdAt + (2 + Math.random() * 30) * 60_000);
-          const sub = basePost(subKeys[i], text.slice(0, REPLY_MAX), post.community, Math.max(subAt, c.createdAt + 60_000), c.id, resolveAuthor(c.authorKey).name);
+          const sub = basePost(
+            subKeys[i],
+            text.slice(0, REPLY_MAX),
+            post.community,
+            Math.max(subAt, c.createdAt + 60_000),
+            c.id,
+            resolveAuthor(c.authorKey).name,
+            true,
+            { likes: likesOf(c), views: c.views },
+          );
           sub.replyToPost = c.id;
           next.posts.push(sub);
         });
@@ -1532,18 +1542,10 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
   }
 }
 
-/** 打开帖子详情页时调用：评论不足 10 条 → 自动补到 10~30 条（静默，评论生成好后自动浮现）。 */
-export async function ensureThreadComments(postId: string): Promise<void> {
-  try {
-    await genCommentBatch(postId, 'ensure');
-  } catch {
-    /* 静默 */
-  }
-}
-
-/** 「更多评论」按钮：再生成 10~30 条（含楼中楼）。返回新增数。 */
+/** 「更多评论」按钮：再生成 7~15 条（含楼中楼；用户要求：仅按钮触发，打开帖子不自动补）。
+ *  返回新增数。 */
 export async function generateMoreComments(postId: string): Promise<number> {
-  return genCommentBatch(postId, 'more');
+  return genCommentBatch(postId);
 }
 
 // ---------------- 用户发帖 → NPC/char 互动 ----------------
@@ -1736,7 +1738,17 @@ async function execJob(job: PendingJob): Promise<void> {
         text = pool[Math.floor(Math.random() * pool.length)];
       }
       const next = { ...forumData() };
-      const replyPost = basePost(authorKey, text.slice(0, REPLY_MAX), target.community, Date.now(), groupId, replyName);
+      // AI 回复的热度按被回复父帖缩放（评论赞 << 主帖赞；用户的新帖 0 赞 → 回复也几乎 0 赞）
+      const replyPost = basePost(
+        authorKey,
+        text.slice(0, REPLY_MAX),
+        target.community,
+        Date.now(),
+        groupId,
+        replyName,
+        true,
+        { likes: likesOf(target), views: target.views },
+      );
       // 精确被回复对象 = 用户的回复（多轮接话定位）
       if (job.kind === 'aiReplyBack' && job.meta.userReplyId) replyPost.replyToPost = job.meta.userReplyId;
       next.posts.push(replyPost);
@@ -1808,12 +1820,15 @@ export async function bootForum(): Promise<void> {
   if (booting) return;
   booting = true;
   try {
+    // 仅首次播种（打开 App 不再自动补帖——用户要求：生成完后不自动生成，
+    // 只在用户下拉/上拉松开、点「更多评论」时才生成）
     await ensureSeed();
-    await ensureFresh();
     syncCommunities();
     // v5 兜底迁移：限流期播种/中间版本数据没挂上内置 NPC 覆盖名的，现在补上
     //（幂等：已有覆盖名/LLM 名的跳过；保证任何情况下都不露出内置描述型网名）
     if (seedBuiltinNpcFallbackNames()) saveForum({ ...forumData() });
+    // 起名回填：限流期没换上 LLM 名的网友趁机补齐（静默）
+    void renameDynNpcsViaLlm([]);
     runPending();
   } catch {
     /* 引擎失败不拦 UI */

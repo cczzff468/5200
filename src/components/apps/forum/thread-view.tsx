@@ -7,8 +7,7 @@
  * （X 官方行为：译文原位替换正文展示，下方标注「由 AI 翻译」，
  * 按钮可在 查看原文/查看译文 间切换）；
  * 互动栏（回复/转推/点赞/浏览/分享，爱心归位第三，带数字）+ 分隔线下接评论流；
- * 打开帖子自动补评论到 10~30 条（engine.ensureThreadComments，静默浮现）；
- * 底部「显示更多评论」按钮 → 再生成 10~30 条；
+ * 打开帖子不自动生成评论（用户要求：仅「显示更多评论」按钮触发，7~15 条）；
  * 评论流按参考图：头像 + 名字(bold) + @账号 · 时间(灰) + 右侧「···」，
  * 子回复带「回复 @xx」蓝字行，操作行为空心线性图标
  * （回复/转推/爱心/浏览/分享，图标+数字；书签已按用户要求删除）；头像右缘细竖线贯穿到子回复；
@@ -17,7 +16,7 @@
  * 用户回复 AI 评论 → AI 感觉主帖内容+用户评论内容再回一条，无限多轮（engine）。
  */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import { Languages } from 'lucide-react';
 import {
   countShort,
@@ -33,7 +32,7 @@ import {
   REPLY_MAX,
   type ForumPost,
 } from '@/lib/forum/core';
-import { ensureThreadComments, generateMoreComments, queueAiReplyToUserReply } from '@/lib/forum/engine';
+import { generateMoreComments, queueAiReplyToUserReply } from '@/lib/forum/engine';
 import { detectMessageLang, requestTranslation } from '@/lib/chat-translate';
 import { useSettings } from '@/lib/ios/store';
 import { XAvatar, XIcons, VerifiedBadge } from './shared';
@@ -342,7 +341,9 @@ function SubReplyItem({
   const f = useForum();
   const t = f.t;
   const sa = resolveAuthor(s.authorKey);
-  const replying = s.replyToName && s.replyToName !== sa.name ? s.replyToName : null;
+  // 正文已以「@某某」开头（新 prompt 要求楼中楼正文带 @）时不再重复显示「回复 @xx」行
+  const replying =
+    s.replyToName && s.replyToName !== sa.name && !s.content.trim().startsWith('@') ? s.replyToName : null;
   const sSubs = repliesOf(forumData(), s.id);
   const tr = useCommentTr(s.content);
   return (
@@ -485,11 +486,8 @@ export function ThreadView({ postId }: { postId: string }) {
   /** 定向回复目标（null = 回复主帖作者）：commentId = 分组锚点（顶层评论 id），
  *  postId = 精确被回复的帖（多轮接话定位：AI 回应“我评论的那条”），name = 显示名 */
   const [replyTarget, setReplyTarget] = useState<{ commentId: string; postId: string; name: string } | null>(null);
-  /** 「显示更多评论」生成中（engine 再生成 10~30 条） */
+  /** 「显示更多评论」生成中（engine 再生成 7~15 条；用户要求：打开帖子不自动生成） */
   const [moreLoading, setMoreLoading] = useState(false);
-  /** 打开帖子自动补评论进行中（0 评论时显示「评论正在赶来」骨架提示；
- *  挂载时即为 true，effect 完成后置 false——不在 effect 里同步 setState） */
-  const [initGen, setInitGen] = useState(true);
   /** AI 翻译：loading / 译文 / 是否展示 */
   const [tr, setTr] = useState<{ loading: boolean; text: string | null; shown: boolean }>({
     loading: false,
@@ -497,18 +495,6 @@ export function ThreadView({ postId }: { postId: string }) {
     shown: false,
   });
   const inputRef = useRef<HTMLInputElement | null>(null);
-
-  /** 打开帖子：评论不足 10 条 → 自动补到 10~30 条（生成好后自动浮现）；
- *  每次进入只触发一次（engine 内部防并发）。 */
-  useEffect(() => {
-    let alive = true;
-    void ensureThreadComments(postId).finally(() => {
-      if (alive) setInitGen(false);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [postId]);
 
   if (!post) {
     return (
@@ -753,7 +739,7 @@ export function ThreadView({ postId }: { postId: string }) {
 
         {/* 评论流（参考图规格：X 官方回复卡 + 嵌套连接线） */}
         {replies.length === 0 ? (
-          initGen || moreLoading ? (
+          moreLoading ? (
             <div className="flex items-center justify-center gap-2 py-10" aria-live="polite">
               <span
                 className="h-[16px] w-[16px] animate-spin rounded-full border-2"
@@ -776,7 +762,7 @@ export function ThreadView({ postId }: { postId: string }) {
             ))}
           </div>
         )}
-        {/* 「显示更多评论」按钮：点击再生成 10~30 条（含楼中楼）；生成中显示 loading */}
+        {/* 「显示更多评论」按钮：点击再生成 7~15 条（含楼中楼；用户要求：唯一的评论生成入口） */}
         <div className="px-4 py-4">
           <button
             type="button"

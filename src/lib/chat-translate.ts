@@ -354,11 +354,22 @@ function isUnconfiguredApi(cfg: ApiConfig): boolean {
   }
 }
 
+/** 译文是否是未解析的原始 SSE / 流式分块（用户反馈：点翻译满屏 data: {"id":...}）。
+ *  真实译文不会出现以 data: 开头的行、[DONE] 标记或 chatcmpl 分块特征——
+ *  这类结果一律视为失败（reject），绝不渲染到 UI。 */
+function looksLikeRawStream(text: string): boolean {
+  return /^\s*data:/m.test(text) || text.includes('[DONE]') || /"id"\s*:\s*"chatcmpl-/.test(text);
+}
+
 async function runTranslate(apiConfig: ApiConfig, text: string, langLabel: string): Promise<string> {
   // 未配置上游：直走服务端内置模型（省掉必失败的代理轮次——那会先白跑一整轮限流重试）
   if (!isUnconfiguredApi(apiConfig)) {
     try {
-      return await translateViaServer(apiConfig, text, langLabel);
+      const out = await translateViaServer(apiConfig, text, langLabel);
+      const trimmed = out.trim();
+      if (trimmed && !looksLikeRawStream(trimmed)) return trimmed;
+      // 命中原始流特征：视为失败，继续兜底（不带脏数据进 UI）
+      if (trimmed) throw new Error('上游返回了未解析的流式数据');
     } catch (err) {
       const directOnly = err instanceof Error && (err as Error & { directOnly?: boolean }).directOnly === true;
       // 内网地址 / 服务器建议直连：浏览器直连兜底（directChatStream 兼容非流式 JSON 解析）
@@ -366,15 +377,20 @@ async function runTranslate(apiConfig: ApiConfig, text: string, langLabel: strin
         try {
           const out = await directChatStream(apiConfig, buildTranslateMessages(text, langLabel), () => undefined);
           const trimmed = out.trim();
-          if (trimmed) return trimmed;
+          if (trimmed && !looksLikeRawStream(trimmed)) return trimmed;
+          // 直连成功但结果是原始流：不带脏数据，落到内置模型兜底
         } catch {
           // 直连也失败：落到内置模型兜底
         }
       }
+      // 代理/直连都失败或返回脏数据：落到内置模型兜底
     }
   }
   // 最终兜底：服务端内置模型（用户上游 403/401/不可达时翻译体验不中断）
-  return await translateViaSdk(text, langLabel);
+  const out = await translateViaSdk(text, langLabel);
+  const trimmed = out.trim();
+  if (trimmed && !looksLikeRawStream(trimmed)) return trimmed;
+  throw new Error('翻译失败：返回了无法解析的流式数据');
 }
 
 const inflight = new Map<string, Promise<string>>();

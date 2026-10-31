@@ -60,7 +60,10 @@ function extractNonStreamText(payload: unknown): string {
   return '';
 }
 
-/** 解析可能被错误标注 content-type 的 SSE 文本，返回拼接内容 */
+/** 解析 SSE 文本，返回拼接内容。
+ *  【修复】不再只读 choices[0].content——SSE 分块的真正字段是 choices[0].delta.content
+ *  （旧实现永远解析为空，导致原始流被当成「纯文本译文」返回给前端满屏渲染 data: {...}）；
+ *  复用 extractNonStreamText：兼容 delta.content / message.content / 分段数组 / text 等各种形态。 */
 function parseSseText(raw: string): string {
   let acc = '';
   for (const line of raw.split('\n')) {
@@ -69,14 +72,18 @@ function parseSseText(raw: string): string {
     const payload = trimmed.slice(5).trim();
     if (!payload || payload === '[DONE]') continue;
     try {
-      const chunk = JSON.parse(payload) as { choices?: unknown };
-      const first = Array.isArray(chunk.choices) ? chunk.choices[0] : chunk;
-      acc += pickContent(first);
+      acc += extractNonStreamText(JSON.parse(payload) as unknown);
     } catch {
-      // 忽略无法解析的行
+      // 忽略无法解析的行（注释 / event: 行 / 半截 JSON）
     }
   }
   return acc;
+}
+
+/** 结果是否仍是未解析的原始 SSE / JSON 分块（绝不能当译文返回给前端渲染）。
+ *  真实译文不会出现以 data: 开头的行，也不会包含 [DONE] 标记。 */
+function looksLikeRawStream(text: string): boolean {
+  return /^\s*data:/m.test(text) || text.includes('[DONE]') || /\"id\"\s*:\s*\"chatcmpl-/.test(text);
 }
 
 function extractConfig(value: unknown): UpstreamConfig | null {
@@ -281,8 +288,11 @@ export async function POST(req: NextRequest) {
     ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
   };
 
-  // 参数兼容重试（与 /api/chat 一致）：新模型拒绝 max_tokens / 温度时按上游 400 提示调整
+  // 参数兼容重试（与 /api/chat 一致）：新模型拒绝 max_tokens / 温度时按上游 400 提示调整。
+  // 【修复】默认 stream:false 一次性拿完整 JSON（前端不再有机会碰到流式原文）；
+  // 仅当上游 400 明确要求流式（部分网关只支持 stream:true）才回退流式，服务端聚合后再返回。
   let useMaxCompletion = false;
+  let useStream = false;
   let curTemperature: number | undefined = config.temperature;
 
   const makeBody = (): string =>
@@ -291,9 +301,7 @@ export async function POST(req: NextRequest) {
       messages,
       ...(curTemperature === undefined ? {} : { temperature: curTemperature }),
       ...(useMaxCompletion ? { max_completion_tokens: config.maxTokens } : { max_tokens: config.maxTokens }),
-      // 与 /api/chat 同款流式请求：部分网关不支持非流式，但聊天（流式）可用 —— 翻译走同一条已验证可用的路径，
-      // 服务端把 SSE 聚合成完整文本后返回 JSON
-      stream: true,
+      stream: useStream,
     });
 
   let lastErr: unknown = null;
@@ -335,6 +343,11 @@ export async function POST(req: NextRequest) {
             curTemperature = undefined;
             continue;
           }
+          // 网关只支持流式：回退 stream:true 重试（服务端聚合 SSE 后返回）
+          if (!useStream && /stream/i.test(upstreamMsg) && !/max_completion_tokens|max_tokens/i.test(upstreamMsg)) {
+            useStream = true;
+            continue;
+          }
         }
         const friendly =
           res.status === 401
@@ -348,24 +361,46 @@ export async function POST(req: NextRequest) {
           { status: 502 }
         );
       }
-      // 200：解析非流式文本
+      // 200：解析响应体——非流式 JSON / 流式 SSE（部分网关无视 stream:false）/ 纯文本三兼容。
+      // 【修复】不再以「开头是否 data:」为门槛：带注释行（: keep-alive）/ event: 行 / 前置空行的
+      // SSE 全文扫描 data: 行（旧逻辑会把整段原始流当纯文本译文返回 → 前端满屏 data: {...}）。
       const raw = await res.text().catch(() => '');
       const trimmed = raw.trim();
-      let translation = '';
-      if (trimmed.startsWith('data:')) {
-        translation = parseSseText(trimmed).trim();
-      }
+      let translation = parseSseText(raw).trim(); // ① 全文扫描 SSE data: 行（兼容 delta.content）
       if (!translation && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+        // ② 标准非流式 JSON
         try {
           translation = extractNonStreamText(JSON.parse(trimmed) as unknown).trim();
         } catch {
           // 非 JSON：按纯文本处理
         }
       }
-      if (!translation && trimmed && !trimmed.startsWith('{')) {
+      if (
+        !translation &&
+        trimmed &&
+        !/^\s*data:/m.test(trimmed) &&
+        !trimmed.includes('[DONE]') &&
+        !trimmed.startsWith('{') &&
+        !trimmed.startsWith('[')
+      ) {
+        // ③ 纯文本译文（网关直接回裸文本）；含流式痕迹的响应绝不落入此分支
         translation = trimmed;
       }
+      // 【修复】最终拦截：解析结果仍是原始流/分块 → 报错而不是把 data: {...} 返回给前端渲染
+      if (translation && looksLikeRawStream(translation)) {
+        return NextResponse.json(
+          { error: '翻译失败：上游返回了无法解析的流式响应，请检查 API 地址或模型名' },
+          { status: 502 }
+        );
+      }
       if (translation) return NextResponse.json({ translation });
+      // 响应带 data: 行但一条都没解析出内容 → 也是流式响应问题（提示更准确）
+      if (/^\s*data:/m.test(trimmed) || trimmed.includes('[DONE]')) {
+        return NextResponse.json(
+          { error: '翻译失败：上游返回了无法解析的流式响应，请检查 API 地址或模型名' },
+          { status: 502 }
+        );
+      }
       return NextResponse.json(
         { error: '翻译失败：上游返回了空响应，请检查模型名或稍后重试' },
         { status: 502 }

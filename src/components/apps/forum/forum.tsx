@@ -489,59 +489,65 @@ export default function ForumApp() {
                     transition: pulling ? 'none' : 'transform .25s ease',
                   }}
                 >
-                {/* 顶栏（X：头像 | 𝕏 | 订阅）+ tab 行（为你推荐|关注 + +），随内容滚走，不吸附 */}
-                <div style={{ background: t.bg }}>
-                  {/* 主顶栏：头像 / 𝕏 / 订阅胶囊 */}
-                  <div className="flex items-center justify-between px-4 pt-[54px]" style={{ height: 100 }}>
-                    <XAvatar authorKey="user" size={36} onClick={() => setDrawer(true)} />
-                    <span aria-hidden="true" style={{ color: t.text }}>
-                      <XLogo size={26} />
-                    </span>
-                    <button
-                      type="button"
-                      aria-label="订阅"
-                      onClick={() => toast('X Premium 订阅暂未开放，敬请期待')}
-                      className="flex h-[32px] items-center rounded-full border px-4 text-[13px] font-semibold transition-opacity active:opacity-60"
-                      style={{ borderColor: t.dark ? '#536471' : '#cfd9de', color: t.text }}
-                    >
-                      订阅
-                    </button>
+                {/* 顶栏(X:头像 | 𝕏 | 订阅):随内容滚走(用户要求:顶部的头像、X符号、订阅跟随滑动) */}
+                <div className="flex items-center justify-between px-4 pt-[54px]" style={{ height: 100, background: t.bg }}>
+                  <XAvatar authorKey="user" size={36} onClick={() => setDrawer(true)} />
+                  <span aria-hidden="true" style={{ color: t.text }}>
+                    <XLogo size={26} />
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="订阅"
+                    onClick={() => toast('X Premium 订阅暂未开放，敬请期待')}
+                    className="flex h-[32px] items-center rounded-full border px-4 text-[13px] font-semibold transition-opacity active:opacity-60"
+                    style={{ borderColor: t.dark ? '#536471' : '#cfd9de', color: t.text }}
+                  >
+                    订阅
+                  </button>
+                </div>
+                {/* tab 行(为你推荐|关注|分类标签… + ＋):吸顶固定在状态栏正下方(用户要求:不跟随滑动);
+                    sticky backdrop-blur 半透明(X 吸顶 header 观感) */}
+                <div
+                  className="sticky top-[54px] z-20 flex items-center border-b"
+                  style={{
+                    borderColor: t.border,
+                    minHeight: 46,
+                    background: t.dark ? 'rgba(0,0,0,0.78)' : 'rgba(255,255,255,0.78)',
+                    backdropFilter: 'blur(12px)',
+                    WebkitBackdropFilter: 'blur(12px)',
+                  }}
+                >
+                  <div className="forum-hide-scrollbar flex min-w-0 flex-1 flex-wrap items-center">
+                    {homeTabs.map(({ key: k, label }) => {
+                      const active = homeTab === k;
+                      return (
+                        <button
+                          key={k}
+                          type="button"
+                          onClick={() => setHomeTab(k)}
+                          className="relative flex h-[46px] shrink-0 items-center px-5 text-[15px]"
+                          style={{ color: active ? t.text : t.secondary, fontWeight: active ? 700 : 500 }}
+                        >
+                          {label}
+                          {active && (
+                            <span
+                              className="absolute bottom-0 left-1/2 h-[4px] w-12 -translate-x-1/2 rounded-full"
+                              style={{ background: t.blue }}
+                            />
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
-                  {/* tab 行：为你推荐 | 关注 | 分类标签… + ＋（添加分类标签）；
-                      用户要求：所有界面禁止左右滑动——标签多时换行铺开，不再横滑 */}
-                  <div className="flex items-center border-b" style={{ borderColor: t.border, minHeight: 46 }}>
-                    <div className="forum-hide-scrollbar flex min-w-0 flex-1 flex-wrap items-center">
-                      {homeTabs.map(({ key: k, label }) => {
-                        const active = homeTab === k;
-                        return (
-                          <button
-                            key={k}
-                            type="button"
-                            onClick={() => setHomeTab(k)}
-                            className="relative flex h-[46px] shrink-0 items-center px-5 text-[15px]"
-                            style={{ color: active ? t.text : t.secondary, fontWeight: active ? 700 : 500 }}
-                          >
-                            {label}
-                            {active && (
-                              <span
-                                className="absolute bottom-0 left-1/2 h-[4px] w-12 -translate-x-1/2 rounded-full"
-                                style={{ background: t.blue }}
-                              />
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <button
-                      type="button"
-                      aria-label="添加分类标签"
-                      onClick={() => setTagPicker(true)}
-                      className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-black/10 dark:active:bg-white/10"
-                      style={{ color: t.secondary }}
-                    >
-                      {XIcons.plus(22)}
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    aria-label="添加分类标签"
+                    onClick={() => setTagPicker(true)}
+                    className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-black/10 dark:active:bg-white/10"
+                    style={{ color: t.secondary }}
+                  >
+                    {XIcons.plus(22)}
+                  </button>
                 </div>
                 {authorsReady && seeded ? (
                   <FeedList
