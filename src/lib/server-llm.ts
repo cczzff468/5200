@@ -160,10 +160,14 @@ async function sdkComplete(messages: LLMMessage[]): Promise<string> {
  *  把所有 SDK 调用排成一条队（并发 = 1）：后面的请求等前面的完成再发；
  *  队头失败不阻塞后续（fn 照常执行）。导出给 /api/translate 等共用。
  *
- *  双优先级（修复「翻译一直失败/排队饿死」）：论坛/朋友圈生成是后台批量任务，
- *  一次串一长队；用户手点「翻译」是交互请求，排在批量任务后面等几分钟必然超时。
- *  high = 交互请求（翻译），发车前先看高优队；normal = 后台生成——并发仍恒为 1
- *  （429 防护不变），只是取任务时高优先出队。 */
+ *  双优先级 + 高优会话锁（修复「生成完成后点翻译还是失败」）：
+ *  - high/normal 两队，取任务时高优先出队（并发仍恒为 1，429 防护不变）；
+ *  - 【会话锁】仅排队优先还不够：翻译重试循环的退避等待（sleep 1.5s/3s/6s…）
+ *    期间翻译并不占队列，后台生成任务趁机执行，把刚恢复的 SDK 配额又抽干——
+ *    翻译下一次重试继续 429，直到预算耗尽（日志实测：translate 502 in 73s
+ *    与 forum/moments generate 200 in 43s 交替出现，即此恶性循环）。
+ *    runSdkHiSession 把翻译的「整个重试过程」包进会话：会话期间低优任务
+ *    暂停出队（SDK 空转、配额恢复），翻译重试通常几秒~几十秒内即可命中。 */
 interface SdkQJob {
   fn: () => Promise<unknown>;
   resolve: (v: unknown) => void;
@@ -172,10 +176,13 @@ interface SdkQJob {
 const sdkHiQueue: SdkQJob[] = [];
 const sdkLoQueue: SdkQJob[] = [];
 let sdkQRunning = false;
+/** 高优会话计数（>0 = 有交互请求在重试循环中，低优生成任务暂停出队） */
+let sdkHiSession = 0;
 
 function sdkQPump(): void {
   if (sdkQRunning) return;
-  const job = sdkHiQueue.shift() ?? sdkLoQueue.shift();
+  // 会话期间只放行高优任务（会话持有者自己的重试请求）；低优任务等会话结束
+  const job = sdkHiQueue.shift() ?? (sdkHiSession > 0 ? undefined : sdkLoQueue.shift());
   if (!job) return;
   sdkQRunning = true;
   void job
@@ -195,6 +202,20 @@ export function runInSdkQueue<T>(fn: () => Promise<T>, opts?: { priority?: 'high
     else sdkLoQueue.push(job);
     sdkQPump();
   });
+}
+
+/** 高优会话：翻译这类交互请求把「整个重试循环」（含退避等待）包在会话里。
+ *  会话期间低优（论坛/朋友圈生成）任务暂停出队——SDK 配额得以恢复，
+ *  翻译的下一次重试才能成功；会话结束（成功/放弃）后放行积压的生成任务。
+ *  可重入（计数）：多个翻译并发时全部结束才恢复生成。 */
+export async function runSdkHiSession<T>(fn: () => Promise<T>): Promise<T> {
+  sdkHiSession += 1;
+  try {
+    return await fn();
+  } finally {
+    sdkHiSession -= 1;
+    sdkQPump();
+  }
 }
 
 /**

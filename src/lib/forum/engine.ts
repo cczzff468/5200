@@ -102,14 +102,35 @@ function dropPending(id: string): void {
 
 // ---------------- LLM 调用 ----------------
 
+/** 限流识别（服务端错误详情里带 429/Too many requests 即为配额干旱） */
+const RATE_LIMIT_RE = /429|too many requests|rate.?limit/i;
+/** LLM 配额冷却截止时间：429 后 90s 内所有生成类请求直接抛错走池子兜底。
+ *  环境内置模型配额被翻译（用户手点，交互）与生成（后台批量）共享——
+ *  限流干旱期继续发请求只会：① 在服务端队列挂几分钟再 500（日志实测 6.3min）；
+ *  ② 挤占翻译的高优会话锁配额恢复窗口。冷却期内论坛照常有内容（池子兜底
+ *  秒出），翻译胜率大幅提升；冷却结束自动恢复 LLM 生成。 */
+let llmCooldownUntil = 0;
+
 async function callApi(payload: Record<string, unknown>): Promise<unknown> {
+  if (Date.now() < llmCooldownUntil) throw new Error('AI 配额冷却中（刚被限流，走池子兜底）');
   const { useSettings } = await import('@/lib/ios/store');
   const res = await fetch('/api/forum/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...payload, config: useSettings.getState().apiConfig }),
   });
-  if (!res.ok) throw new Error(`请求失败 ${res.status}`);
+  if (!res.ok) {
+    // 带上服务端错误详情：含 429 字样 → 识别为限流，进入冷却（不再轰炸）
+    let detail = '';
+    try {
+      const j = (await res.json()) as { error?: unknown };
+      if (typeof j.error === 'string') detail = j.error;
+    } catch {
+      /* 忽略解析失败 */
+    }
+    if (RATE_LIMIT_RE.test(detail)) llmCooldownUntil = Date.now() + 90_000;
+    throw new Error(detail || `请求失败 ${res.status}`);
+  }
   return res.json();
 }
 

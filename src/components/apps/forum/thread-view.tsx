@@ -40,24 +40,45 @@ import { XAvatar, XIcons, VerifiedBadge } from './shared';
 import { useForum } from './ctx';
 import { PostMedia, PollBlock, LocationLine } from './feed';
 
-/** 论坛翻译请求 + 超时保护：翻译兜底链路（代理 → 浏览器直连 → 内置模型）最长可挂
- *  数分钟（直连超时 120s×2）；服务端内置模型走全局串行队列 + 429 退避重试，
- *  论坛生成高峰期翻译会在队列里排队等待（前面可能有几条生成请求）；
- *  90s 未出结果才按失败提示——底层若稍后成功会写入译文缓存，重点一次直接命中。 */
+/** 论坛翻译请求 + 超时保护 + 限流自动重试。
+ *  服务端单轮预算 ~2 分钟（高优会话锁：重试期间后台生成暂停、配额恢复）；
+ *  失败若为限流（服务端带 rateLimited 标记）则 15s 后自动再试一轮，最多 2 轮——
+ *  生成高峰期点翻译不再「一下就报失败」，而是排队等配额恢复自动出结果。
+ *  总超时 280s（正常情况几秒~几十秒即出）。 */
 function translateForum(text: string): Promise<string> {
   const target = detectMessageLang(text) === 'zh-Hans' ? 'en' : 'zh-Hans';
+  const attempt = () =>
+    requestTranslation({ text, lang: target, apiConfig: useSettings.getState().apiConfig });
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('翻译超时')), 90_000);
-    requestTranslation({ text, lang: target, apiConfig: useSettings.getState().apiConfig })
-      .then((out) => {
-        clearTimeout(timer);
-        resolve(out);
-      })
-      .catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
+    const timer = setTimeout(() => reject(new Error('翻译超时，请稍后再试')), 280_000);
+    const run = (round: number) => {
+      attempt()
+        .then((out) => {
+          clearTimeout(timer);
+          resolve(out);
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          const limited = /429|too many|rate.?limit|限流/i.test(msg);
+          // 限流失败：自动再试一轮（服务端会话锁重试 + 客户端补轮，胜率大幅提升）
+          if (limited && round < 2) {
+            setTimeout(() => run(round + 1), 15_000);
+            return;
+          }
+          clearTimeout(timer);
+          reject(err);
+        });
+    };
+    run(1);
   });
+}
+
+/** 翻译失败提示（区分限流与其他错误）：限流 = AI 配额被生成任务占用，
+ *  稍等即恢复；其他 = 配置/网络问题。 */
+function translateFailToast(err: unknown, toast: (s: string) => void): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  const limited = /429|too many|rate.?limit|限流/i.test(msg);
+  toast(limited ? 'AI 配额限流中，稍等一会再点翻译' : '翻译失败，稍后再试');
 }
 
 /** 评论翻译（用户要求：评论区的翻译按钮放在最右面）。
@@ -82,9 +103,9 @@ function useCommentTr(text: string) {
     setSt({ loading: true, out: null, shown: false });
     translateForum(src)
       .then((out) => setSt({ loading: false, out, shown: true }))
-      .catch(() => {
+      .catch((err) => {
         setSt({ loading: false, out: null, shown: false });
-        f.toast('翻译失败，稍后再试');
+        translateFailToast(err, f.toast);
       });
   };
   return { st, toggle };
@@ -552,9 +573,9 @@ export function ThreadView({ postId }: { postId: string }) {
     setTr({ loading: true, text: null, shown: false });
     translateForum(text)
       .then((out) => setTr({ loading: false, text: out, shown: true }))
-      .catch(() => {
+      .catch((err) => {
         setTr({ loading: false, text: null, shown: false });
-        f.toast('翻译失败，稍后再试');
+        translateFailToast(err, f.toast);
       });
   };
 

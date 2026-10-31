@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { runInSdkQueue } from '@/lib/server-llm';
+import { runInSdkQueue, runSdkHiSession } from '@/lib/server-llm';
 
 export const runtime = 'nodejs';
 
@@ -141,54 +141,65 @@ function isPrivateHost(hostname: string): boolean {
 }
 
 /**
- * 内置模型兜底（z-ai-web-dev-sdk）：上游故障 / 未配置时把翻译救回来，
- * 与 /api/chat、server-llm.ts 同策略；z-ai SDK 实际接受 system 角色，直接传翻译指令。
- * 429/限流时指数退避重试（1.5s→3s→6s→12s→20s→30s，共 7 次尝试）：SDK 被朋友圈/论坛等模块并发占用时频繁限流，
- * 是「翻译一直失败」的主要根源——实测限流窗口最长几十秒，重试预算拉到 ~73s 后
- * 绝大多数能在窗口打开时拿到结果（客户端 90s 超时内完成）。
- * 实际 create 走 server-llm 的全局串行队列（并发=1）+ 高优先级通道：
- * 翻译是用户手点的交互请求，排在论坛/朋友圈后台批量生成任务前面插队执行，
- * 不再被生成队列饿死几分钟（并发仍恒为 1，429 防护不变）。
+ * 内置模型兜底（z-ai-web-dev-sdk）：上游故障 / 未配置时把翻译救回来。
+ * 429/限流时指数退避重试（1.5s→3s→6s→12s→20s→30s→45s，共 8 次尝试，预算 ~2 分钟）：
+ * SDK 被朋友圈/论坛等模块并发占用时频繁限流，是「翻译一直失败」的主要根源。
+ * 【高优会话锁】（修复「生成完成后点翻译还是失败」）：整个重试循环包在
+ * runSdkHiSession 里——重试的退避等待期间，论坛/朋友圈后台生成任务暂停出队，
+ * SDK 配额得以恢复；否则生成任务会在重试间隙里把配额又抽干（恶性循环，
+ * 日志实测：translate 502 in 73s 与 forum/moments generate 200 in 43s 交替出现）。
+ * 预算耗尽仍 429 时抛出带 rateLimited 标记的错误，客户端据此自动再试一轮
+ * 而不是直接报「翻译失败」。并发仍恒为 1（串行队列，429 防护不变）。
  */
 async function sdkTranslate(messages: UpstreamMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
-  let zai: Awaited<ReturnType<typeof ZAI.create>> | null = null;
-  let lastErr: unknown = null;
-  const waits = [1500, 3000, 6000, 12000, 20000, 30000];
-  for (let attempt = 0; attempt <= waits.length; attempt++) {
-    try {
-      // ZAI.create() 放进 try：限流高峰期 create() 本身也会 429（此前在 try 外，
-      // 一被限流就直接抛错退出——完全绕过退避重试，是「翻译一直失败」的直接原因之一）
-      if (!zai) zai = await ZAI.create();
-      const completion = await runInSdkQueue(
-        () =>
-          zai!.chat.completions.create({
-            messages: messages.map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            thinking: { type: 'disabled' },
-          }),
-        { priority: 'high' }, // 交互请求插队：排到后台批量生成任务之前
-      );
-      const choice = (completion as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0];
-      const content = choice?.message?.content;
-      const text = typeof content === 'string' ? content.trim() : '';
-      if (!text) throw new Error('内置模型返回空内容');
-      return text;
-    } catch (err) {
-      lastErr = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      const rateLimited = /429|too many requests|rate.?limit/i.test(msg);
-      const wait = waits[attempt];
-      if (rateLimited && wait !== undefined) {
-        await new Promise((r) => setTimeout(r, wait));
-        continue;
+  const waits = [1500, 3000, 6000, 12000, 20000, 30000, 45000];
+  return runSdkHiSession(async () => {
+    let zai: Awaited<ReturnType<typeof ZAI.create>> | null = null;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt <= waits.length; attempt++) {
+      try {
+        // ZAI.create() 放进 try：限流高峰期 create() 本身也会 429（在 try 外会绕过退避直接抛）
+        if (!zai) zai = await ZAI.create();
+        const completion = await runInSdkQueue(
+          () =>
+            zai!.chat.completions.create({
+              messages: messages.map((m) => ({
+                role: m.role,
+                content: m.content,
+              })),
+              thinking: { type: 'disabled' },
+            }),
+          { priority: 'high' }, // 交互请求插队：排到后台批量生成任务之前
+        );
+        const choice = (completion as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0];
+        const content = choice?.message?.content;
+        const text = typeof content === 'string' ? content.trim() : '';
+        if (!text) throw new Error('内置模型返回空内容');
+        return text;
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        const rateLimited = /429|too many requests|rate.?limit/i.test(msg);
+        const wait = waits[attempt];
+        if (rateLimited && wait !== undefined) {
+          await new Promise((r) => setTimeout(r, wait));
+          continue;
+        }
+        // 最后一搏仍限流：抛出前打上标记（客户端自动再试一轮，不直接报失败）
+        if (rateLimited) {
+          (err as Error & { rateLimited?: boolean }).rateLimited = true;
+        }
+        throw err;
       }
-      throw err;
     }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error('内置模型翻译失败');
+    // 兜底标记（循环正常走完的路径；一般不会到这）
+    const e = lastErr instanceof Error ? lastErr : new Error('内置模型翻译失败');
+    if (/429|too many requests|rate.?limit/i.test(e.message)) {
+      (e as Error & { rateLimited?: boolean }).rateLimited = true;
+    }
+    throw e;
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -226,7 +237,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ translation: await sdkTranslate(messages), viaSdk: true });
     } catch (err) {
       const detail = err instanceof Error && err.message ? err.message : '未知错误';
-      return NextResponse.json({ error: `内置模型翻译失败：${detail}` }, { status: 502 });
+      const limited = (err as { rateLimited?: boolean }).rateLimited === true;
+      return NextResponse.json(
+        { error: `内置模型翻译失败：${detail}`, ...(limited ? { rateLimited: true } : {}) },
+        { status: 502 }
+      );
     }
   }
 
@@ -237,8 +252,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ translation: await sdkTranslate(messages), viaSdk: true });
     } catch (err) {
       const detail = err instanceof Error && err.message ? err.message : '未知错误';
+      const limited = (err as { rateLimited?: boolean }).rateLimited === true;
       return NextResponse.json(
-        { error: `还没有配置 AI 接口，且内置模型不可用：${detail}` },
+        {
+          error: `还没有配置 AI 接口，且内置模型不可用：${detail}`,
+          ...(limited ? { rateLimited: true } : {}),
+        },
         { status: 502 }
       );
     }

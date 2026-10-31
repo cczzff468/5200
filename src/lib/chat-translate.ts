@@ -291,7 +291,8 @@ function buildTranslateMessages(text: string, langLabel: string): Array<{ role: 
   ];
 }
 
-/** 服务器代理翻译：POST /api/translate（非流式，返回 { translation }） */
+/** 服务器代理翻译：POST /api/translate（非流式，返回 { translation }）。
+ *  错误带上服务端标记（directOnly / rateLimited）供调用方分支处理。 */
 async function translateViaServer(apiConfig: ApiConfig, text: string, langLabel: string): Promise<string> {
   const res = await fetch('/api/translate', {
     method: 'POST',
@@ -304,17 +305,20 @@ async function translateViaServer(apiConfig: ApiConfig, text: string, langLabel:
   } catch {
     // 忽略解析失败
   }
-  const rec = (data && typeof data === 'object' ? data : {}) as { translation?: unknown; error?: unknown; directOnly?: unknown };
+  const rec = (data && typeof data === 'object' ? data : {}) as { translation?: unknown; error?: unknown; directOnly?: unknown; rateLimited?: unknown };
   if (res.ok && typeof rec.translation === 'string' && rec.translation.trim()) {
     return rec.translation.trim();
   }
   const detail = typeof rec.error === 'string' ? rec.error : `请求失败（${res.status}）`;
-  const err = new Error(detail) as Error & { directOnly?: boolean };
+  const err = new Error(detail) as Error & { directOnly?: boolean; rateLimited?: boolean };
   err.directOnly = rec.directOnly === true;
+  err.rateLimited = rec.rateLimited === true;
   throw err;
 }
 
-/** 内置模型兜底翻译：POST /api/translate { forceSdk: true }（代理 + 直连都失败后的最终手段） */
+/** 内置模型兜底翻译：POST /api/translate { forceSdk: true }（代理 + 直连都失败后的最终手段）。
+ *  服务端限流失败时返回 rateLimited 标记（高优会话锁重试 ~2 分钟后仍 429）——
+ *  调用方据此自动再试一轮，而不是直接报「翻译失败」。 */
 async function translateViaSdk(text: string, langLabel: string): Promise<string> {
   const res = await fetch('/api/translate', {
     method: 'POST',
@@ -327,32 +331,50 @@ async function translateViaSdk(text: string, langLabel: string): Promise<string>
   } catch {
     // 忽略解析失败
   }
-  const rec = (data && typeof data === 'object' ? data : {}) as { translation?: unknown; error?: unknown };
+  const rec = (data && typeof data === 'object' ? data : {}) as { translation?: unknown; error?: unknown; rateLimited?: unknown };
   if (res.ok && typeof rec.translation === 'string' && rec.translation.trim()) {
     return rec.translation.trim();
   }
   const detail = typeof rec.error === 'string' ? rec.error : `请求失败（${res.status}）`;
-  throw new Error(detail);
+  const err = new Error(detail) as Error & { rateLimited?: boolean };
+  err.rateLimited = rec.rateLimited === true;
+  throw err;
+}
+
+/** 是否「从未配置」上游（与服务端 extractConfig 同口径：默认 OpenAI 地址 + 空 Key）。
+ *  未配置时跳过代理轮次直走内置模型——否则服务端会先跑一整轮 ~2 分钟的
+ *  限流重试再报「未配置」，客户端再 forceSdk 又跑一轮，同一翻译白白双倍等待。 */
+function isUnconfiguredApi(cfg: ApiConfig): boolean {
+  if (!cfg?.baseUrl) return true;
+  if (cfg.apiKey) return false;
+  try {
+    return /(^|\.)api\.openai\.com$/i.test(new URL(cfg.baseUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 async function runTranslate(apiConfig: ApiConfig, text: string, langLabel: string): Promise<string> {
-  try {
-    return await translateViaServer(apiConfig, text, langLabel);
-  } catch (err) {
-    const directOnly = err instanceof Error && (err as Error & { directOnly?: boolean }).directOnly === true;
-    // 内网地址 / 服务器建议直连：浏览器直连兜底（directChatStream 兼容非流式 JSON 解析）
-    if (directOnly || isPrivateApiUrl(apiConfig.baseUrl)) {
-      try {
-        const out = await directChatStream(apiConfig, buildTranslateMessages(text, langLabel), () => undefined);
-        const trimmed = out.trim();
-        if (trimmed) return trimmed;
-      } catch {
-        // 直连也失败：落到内置模型兜底
+  // 未配置上游：直走服务端内置模型（省掉必失败的代理轮次——那会先白跑一整轮限流重试）
+  if (!isUnconfiguredApi(apiConfig)) {
+    try {
+      return await translateViaServer(apiConfig, text, langLabel);
+    } catch (err) {
+      const directOnly = err instanceof Error && (err as Error & { directOnly?: boolean }).directOnly === true;
+      // 内网地址 / 服务器建议直连：浏览器直连兜底（directChatStream 兼容非流式 JSON 解析）
+      if (directOnly || isPrivateApiUrl(apiConfig.baseUrl)) {
+        try {
+          const out = await directChatStream(apiConfig, buildTranslateMessages(text, langLabel), () => undefined);
+          const trimmed = out.trim();
+          if (trimmed) return trimmed;
+        } catch {
+          // 直连也失败：落到内置模型兜底
+        }
       }
     }
-    // 最终兜底：服务端内置模型（用户上游 403/401/不可达时翻译体验不中断）
-    return await translateViaSdk(text, langLabel);
   }
+  // 最终兜底：服务端内置模型（用户上游 403/401/不可达时翻译体验不中断）
+  return await translateViaSdk(text, langLabel);
 }
 
 const inflight = new Map<string, Promise<string>>();
