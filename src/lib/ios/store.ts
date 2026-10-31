@@ -1530,7 +1530,8 @@ export type AppId =
   | 'worldbook'
   | 'meituan'
   | 'couple'
-  | 'cottage';
+  | 'cottage'
+  | 'forum';
 
 export type AppPhase = 'closed' | 'opening' | 'open' | 'closing';
 

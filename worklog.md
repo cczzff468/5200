@@ -1701,3 +1701,23 @@ Work Log:
 Stage Summary:
 - A 类两处防御缺口补齐：[思考]块在主动消息/拾光小屋/朋友圈/QQ空间/电话续聊/拒接留言六条链路统一兜底剥离（一处不漏），开关说明文案消除「关闭=省流量」误解；B 类三项落地：群聊深度思考与单聊全口径一致（按群隔离开关+注入+卡片+上下文）、流式思考实况对标 DeepSeek/ChatGPT（脉动→已思考→落盘卡无缝衔接）、TTS 语速按表达风格轻推
 - 关键文件：think-filter.ts（新，纯模块）、deep-think.ts（再导出）、proactive-msg.ts、companion-brain.ts、moments/generate+phone/answer+phone/tts 路由、call-followup.ts、chat-settings.tsx、chat-stream-store.ts、think-card.tsx（ThinkLiveCard）、wechat/qq/chat.tsx（三端实况卡）、groups.ts + wx-group.tsx + qq-group.tsx（群聊全链路）、tts-client.ts + ai-voice.ts + phone.tsx（B4）
+
+---
+Task ID: 10
+Agent: 主控 Agent（Z.ai Code）
+Task: 新增「X论坛」App——界面 1:1 复刻 X（前 Twitter），AI 网友+好友共活的公开广场
+
+Work Log:
+- 需求溯源：用户先说「x论坛，国外的，不要做」本轮改口「添加论坛APP，和x论坛界面一模一样」；web_search 两轮确认「X论坛」无独立所指，合理解释 = X（前 Twitter，国外最大公开讨论广场，中文常称 X 论坛），其 Communities 即论坛板块 → 按官方 App 界面 1:1 复刻实现
+- 数据层 src/lib/forum/core.ts：ForumData 单键 kv（forum-data-v1，IndexedDB ios-phone-db）；作者三类 user/char:<联系人id>/npc:<id>；内置 10 位 NPC 论坛网友（人设+发帖池+回复池+粉丝数/蓝V/彩底首字头像）与 8 个版块（X Communities 风格）；快照缓存 forumSnapshot（getSnapshot 稳定引用——修 useSyncExternalStore 无限循环）；relTime/countShort/trendingTopics 等 X 风格工具
+- API /api/forum/generate：kind=posts（批量多人格发帖，一次生成逐行校验，缺行自动补一轮）/reply/dm（人设驱动短回复）；completeWithFallback（用户 API 优先 SDK 兜底）+ extractThinkBlocks + 北京时间感知；修一处返回值误用（{text,via} 结构体当字符串 → 500，四个调用点全部 .text 解包）
+- 引擎 src/lib/forum/engine.ts：ensureSeed（NPC 池先落盘保证「论坛永远不空」+ 系统通知 + 小助手欢迎私信 + char 好友自动关注）→ llmPolish（3 NPC + ≤2 char 的 LLM 真人感帖子异步追加，失败静默）；ensureFresh（feed 凉了 >2h 补 2~4 条）；queueUserPostInteractions（发帖后 3~9s 点赞 1~3 NPC+好友+点赞通知，8~20s 0~2 条 AI 回复）；queueAiReplyToUserReply（用户回复 AI 帖 → 6~15s 再回）；queueDmReply（私信 5~12s 回，LLM 失败落通用兜底句）；pending 队列持久化（kv forum-pending-v1，重启不丢，执行完才删）；basePost organic 参数（NPC 帖自带随机点赞/转推/浏览，用户帖从零起）
+- UI（src/components/apps/forum/ 8 文件）：shared.tsx（X 官方色板 #1d9bf0/#f91880/#00ba7c、深浅双主题（X 深色=纯黑）、XIcons lucide 线条集、XLogo 官方 wordmark path、VerifiedBadge 蓝圆白勾、XAvatar 彩底首字/dataURL/默认剪影三态）；forum.tsx 主框架（顶栏 头像+为你推荐|关注双 tab 蓝色圆头下划线+齿轮、底部 5 tab 纯图标选中实心、蓝色发布 FAB、页面栈右滑入（主 tab 层保挂载不丢滚动）、X 侧滑抽屉（个人摘要+重置论坛数据/关于）、toast 胶囊）；feed.tsx（PostCard：40 头像/名行认证徽章/回复@/社区来源标签/#话题#蓝染/五操作行悬停分色/计数）；compose-sheet（取消+发布胶囊、「有什么新鲜事？」20px、发布到·版块底部选择 sheet、X 字数圆环 <20 橙 <0 红）；thread-view（原帖 17px 放大 + N 转推·N 点赞·N 浏览 + 点赞头像排 + 底部回复输入条蓝发送钮）；profile-view（横幅渐变+72px 头像错位叠加+加入时间+关注·粉丝+关注/已关注/发私信按钮+帖子列表）；extras（搜索趋势榜+实时结果、社区 我的+发现+加入态、社区页横幅+版块帖子流、通知 类型图标着色+600ms 自动已读+蓝点未读）；dms（列表+X 气泡对话页 我方蓝底/对方灰底+发送即触发 AI 回复）
+- 注册接入：store.ts AppId +'forum'；registry.tsx ForumGlyph（X wordmark 线条版）+ ForumRealIcon（X 官方 App 图标 1:1：黑方块 #000 + 白 𝕏 #fff，自绘 SVG 不经 next/image）+ REAL_CUSTOM 表贯通 APPS/AppIconTile/AppIconById/AppStylePreview/AppMiniIcon 五处映射（毛玻璃/液态样式用 X wordmark 线条版）；HomeScreen PAGE3 第 10 位（存量布局走 sanitize 缺失补位自动上屏——实测旧布局落在第 2 页时钟右侧）；修一处关键笔误：APPS 映射解构 id 后漏放回对象 → 全部 App id 变 undefined → 主屏 DOCK_APPS 崩溃（bun 直导 registry 秒定位）
+- E2E（agent-browser 390×844 + VLM 双证）：主屏 X论坛图标 DOM 实锤（rect #000 + path #fff）；开屏 feed 秒出（VLM 误认成微博——「为你推荐/关注双 tab+蓝下划线、五操作行、5 tab 底栏选中实心、蓝色 FAB、通知蓝点」逐项确认 X 官方规格）；发布链路：FAB→「有什么新鲜事？」→带 #话题# 发布→置顶+40s 内 3 NPC 点赞（通知到达）+掌柜回复（池兜底）+点赞头像排展示；thread 页：数据行+回复输入→发送→「回复 @阿泽」标记正确；char LLM 播种：小鹿（温柔爱书爱猫人设）两条帖子「图书馆窗边的阳光刚好，猫咪蜷在我腿上打呼噜…呀～」人设口吻精准；私信：掌柜对话发消息 12s 收回复（蓝/灰气泡正确）；搜索「小鹿」2 条结果；社区加入数码圈→已加入状态持久；抽屉重置→重新播种+LLM 追加全链路复活；深浅主题由 StatusBarToneProbe 自动跟随
+- 排障记录：①dev.log「DOCK_APPS undefined」是编辑中途热更新残影与真实笔误并存——bun -e 直导 registry 三秒定位（id 漏放回）；②useSyncExternalStore getSnapshot 每次新对象触发「Maximum update depth exceeded」——快照对象缓存 rev 比对修复；③completeWithFallback 返回 {text,via} 结构体，route 按字符串用 → 「text.includes is not a function」500 ×6，四处 .text 解包修复后 LLM 秒通；④Next dev overlay「2 Issues」为开发期崩溃历史残影，整页刷新即清
+- lint：新增文件零错误零警告（react-hooks/preserve-manual-memoization 三处 useMemo 按规则改直算；toastTimer useRef 改 state+effect 消除 refs 告警）；tsc --noEmit 全过；dev.log 无新增错误；HomeScreen 仅存基线 react-hooks/refs（非本次引入）
+
+Stage Summary:
+- X论坛 App 落地：界面按 X 官方规格 1:1 复刻（黑白极简+品牌蓝+认证徽章+ Communities 版块），功能全链路可用——浏览（为你推荐/关注）、发帖（版块+话题）、互动（点赞/转推/回复/通知）、搜索（趋势榜+实时）、社区（加入/版块流）、私信（AI 人设回复）、个人页（关注/粉丝/帖子）；内容生态 = 10 位内置 NPC 网友（池保底）+ 用户 AI 好友（LLM 人设发帖/回复/私信）+ 用户自己，LLM 失败任何环节都有兜底，论坛永远不空
+- 关键文件：lib/forum/core.ts+engine.ts、api/forum/generate/route.ts、components/apps/forum/{forum,feed,compose-sheet,thread-view,profile-view,extras,dms,shared,ctx}.tsx、registry.tsx（REAL_CUSTOM 体系）、store.ts、HomeScreen.tsx
