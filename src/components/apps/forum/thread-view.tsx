@@ -24,6 +24,7 @@ import {
   countShort,
   forumData,
   forumSnapshot,
+  likesOf,
   relTime,
   repliesOf,
   resolveAuthor,
@@ -40,13 +41,14 @@ import { XAvatar, XIcons, VerifiedBadge } from './shared';
 import { useForum } from './ctx';
 import { CommunityIcon, PostMedia, PollBlock, LocationLine } from './feed';
 
-/** 论坛翻译请求 + 超时保护：翻译兑底链路（代理 → 浏览器直连 → 内置模型）最长可挂
- *  数分钟（直连超时 120s×2），论坛场景 25s 未出结果即按失败处理快速提示；
+/** 论坛翻译请求 + 超时保护：翻译兜底链路（代理 → 浏览器直连 → 内置模型）最长可挂
+ *  数分钟（直连超时 120s×2）；服务端内置模型带 429 退避重试（最长 ~11s），
+ *  论坛场景 40s 未出结果即按失败处理快速提示；
  *  底层若稍后成功会写入译文缓存，重点一次直接命中。 */
 function translateForum(text: string): Promise<string> {
   const target = detectMessageLang(text) === 'zh-Hans' ? 'en' : 'zh-Hans';
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('翻译超时')), 25_000);
+    const timer = setTimeout(() => reject(new Error('翻译超时')), 40_000);
     requestTranslation({ text, lang: target, apiConfig: useSettings.getState().apiConfig })
       .then((out) => {
         clearTimeout(timer);
@@ -57,6 +59,51 @@ function translateForum(text: string): Promise<string> {
         reject(err);
       });
   });
+}
+
+/** 评论翻译（用户要求：评论区的翻译按钮放在最右面）。
+ *  状态钩：按钮挂在操作行最右，译文附加显示在原文之后（不替换原文），
+ *  可在 查看译文/收起译文 间切换；外语评论 → 简体中文，简体中文评论 → 英语。 */
+function useCommentTr(text: string) {
+  const f = useForum();
+  const [st, setSt] = useState<{ loading: boolean; out: string | null; shown: boolean }>({
+    loading: false,
+    out: null,
+    shown: false,
+  });
+  const toggle = () => {
+    if (st.loading) return;
+    // 已有译文：切换展示/收起
+    if (st.out !== null) {
+      setSt((s) => ({ ...s, shown: !s.shown }));
+      return;
+    }
+    const src = text.trim();
+    if (!src) return;
+    setSt({ loading: true, out: null, shown: false });
+    translateForum(src)
+      .then((out) => setSt({ loading: false, out, shown: true }))
+      .catch(() => {
+        setSt({ loading: false, out: null, shown: false });
+        f.toast('翻译失败，稍后再试');
+      });
+  };
+  return { st, toggle };
+}
+
+/** 译文展示行：附加在原文之后（不替换原文）+「由 AI 翻译」标注 */
+function TranslatedTextLine({ out }: { out: string }) {
+  const f = useForum();
+  const t = f.t;
+  return (
+    <p className="mt-[3px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]" style={{ color: t.text }}>
+      {out}
+      <span className="ml-1.5 inline-flex items-center gap-1 text-[12px] font-normal" style={{ color: t.secondary }}>
+        <Languages width={11} height={11} strokeWidth={1.9} aria-hidden="true" />
+        由 AI 翻译
+      </span>
+    </p>
+  );
 }
 
 /** 详情页互动栏单个图标钮（X 官方：带数字，悬停浅色圆底 + 图标/数字同步变色） */
@@ -107,18 +154,21 @@ function ThreadAction({
   );
 }
 
-/** 评论操作行（参考图规格）：回复/转推/爱心/浏览/书签/分享 六个空心线性图标
- *  （未激活灰色；爱心激活粉色实心、转推激活绿色），图标+数字，悬停浅色圆底。 */
+/** 评论操作行（参考图规格）：回复/转推/爱心/浏览/书签/分享 + 最右「翻译」
+ *  （用户要求：评论区的翻译按钮放在最右面；爱心激活粉色实心、转推激活绿色），
+ *  图标+数字，悬停浅色圆底。translate 传入时在行末渲染翻译按钮。 */
 function CommentActions({
   post,
   subCount,
   compact,
   onReplyClick,
+  translate,
 }: {
   post: ForumPost;
   subCount: number;
   compact?: boolean;
   onReplyClick: () => void;
+  translate?: { loading: boolean; active: boolean; onClick: () => void };
 }) {
   const f = useForum();
   const t = f.t;
@@ -130,8 +180,8 @@ function CommentActions({
   const [bookmarked, setBookmarked] = useState(false);
   return (
     <div
-      className={`mt-1.5 flex items-center ${compact ? 'gap-[2px] pr-4' : 'justify-between pr-6'}`}
-      style={{ maxWidth: compact ? 340 : 430 }}
+      className={`mt-1.5 flex items-center ${compact ? 'gap-[2px]' : 'justify-between'}`}
+      style={{ maxWidth: compact ? 400 : 470 }}
     >
       <ThreadAction
         icon={XIcons.reply(iconSize)}
@@ -155,7 +205,7 @@ function CommentActions({
       />
       <ThreadAction
         icon={XIcons.like(liked, iconSize)}
-        count={post.likes.length}
+        count={likesOf(post)}
         label={liked ? '取消点赞' : '点赞'}
         size={size}
         color={liked ? t.pink : t.secondary}
@@ -201,68 +251,27 @@ function CommentActions({
           f.toast('链接已复制');
         }}
       />
-    </div>
-  );
-}
-
-/** 评论翻译行（用户要求：评论区添加翻译按钮）。外语评论 → 简体中文，
- *  简体中文评论 → 英语；译文附加显示在原文之后（不替换原文），
- *  带「由 AI 翻译」标注，可在 查看译文/收起译文 间切换。 */
-function CommentTranslateLine({ text }: { text: string }) {
-  const f = useForum();
-  const t = f.t;
-  const [st, setSt] = useState<{ loading: boolean; out: string | null; shown: boolean }>({
-    loading: false,
-    out: null,
-    shown: false,
-  });
-
-  const run = () => {
-    if (st.loading) return;
-    // 已有译文：切换展示/收起
-    if (st.out !== null) {
-      setSt((s) => ({ ...s, shown: !s.shown }));
-      return;
-    }
-    const src = text.trim();
-    if (!src) return;
-    setSt({ loading: true, out: null, shown: false });
-    translateForum(src)
-      .then((out) => setSt({ loading: false, out, shown: true }))
-      .catch(() => {
-        setSt({ loading: false, out: null, shown: false });
-        f.toast('翻译失败，稍后再试');
-      });
-  };
-
-  const label = st.loading ? '翻译中…' : st.out !== null ? (st.shown ? '收起译文' : '查看译文') : '翻译';
-
-  return (
-    <div className="mt-[3px]">
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          run();
-        }}
-        disabled={st.loading}
-        className="text-[13px] font-bold transition-opacity active:opacity-50 disabled:opacity-60"
-        style={{ color: t.blue }}
-        aria-label={label}
-      >
-        {label}
-      </button>
-      {st.out !== null && st.shown && (
-        <p
-          className="mt-[3px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]"
-          style={{ color: t.text }}
-        >
-          {st.out}
-          <span className="ml-1.5 inline-flex items-center gap-1 text-[12px] font-normal" style={{ color: t.secondary }}>
-            <Languages width={11} height={11} strokeWidth={1.9} aria-hidden="true" />
-            由 AI 翻译
-          </span>
-        </p>
+      {/* 翻译按钮：操作行最右面（用户要求）；已有译文时高亮，点击展开/收起 */}
+      {translate && (
+        <ThreadAction
+          icon={
+            translate.loading ? (
+              <span
+                className="inline-block h-[13px] w-[13px] animate-spin rounded-full border-[1.8px]"
+                style={{ borderColor: 'currentColor', borderTopColor: 'transparent' }}
+                aria-hidden="true"
+              />
+            ) : (
+              <Languages width={iconSize} height={iconSize} strokeWidth={1.9} />
+            )
+          }
+          label={translate.active ? '收起译文' : '翻译'}
+          size={size}
+          color={translate.active ? t.blue : t.secondary}
+          hoverColor={t.blue}
+          hoverBg="rgba(29,155,240,0.12)"
+          onClick={translate.onClick}
+        />
       )}
     </div>
   );
@@ -313,8 +322,77 @@ function CommentNameRow({
   );
 }
 
+/** 子回复条目（独立组件：每条子回复有独立的翻译状态钩，按钮在其操作行最右） */
+function SubReplyItem({
+  s,
+  rootId,
+  onReply,
+}: {
+  s: ForumPost;
+  rootId: string;
+  onReply: (rootId: string, postId: string, name: string) => void;
+}) {
+  const f = useForum();
+  const t = f.t;
+  const sa = resolveAuthor(s.authorKey);
+  const replying = s.replyToName && s.replyToName !== sa.name ? s.replyToName : null;
+  const sSubs = repliesOf(forumData(), s.id);
+  const tr = useCommentTr(s.content);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`回复 ${sa.name} 的评论`}
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest('button')) return;
+        onReply(rootId, s.id, sa.name); // 点子回复 → 回复该作者（仍挂顶层评论下，多轮接话定位到 TA）
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') onReply(rootId, s.id, sa.name);
+      }}
+      className="cursor-pointer rounded-lg py-2 transition-colors active:opacity-60"
+    >
+      <div className="flex gap-2">
+        <XAvatar authorKey={s.authorKey} size={36} onClick={() => f.openProfile(s.authorKey)} />
+        <div className="min-w-0 flex-1">
+          {/* 名行：名字(bold) + @账号 · 时间(灰) + 最右「···」 */}
+          <CommentNameRow
+            authorKey={s.authorKey}
+            createdAt={s.createdAt}
+            onMore={() => f.openPostMenu(s)}
+            nameMax={90}
+          />
+          {/* 被回复人提示（参考图：「回复 @xx」@为品牌蓝） */}
+          {replying && (
+            <p className="text-[14px]" style={{ color: t.secondary }}>
+              回复 <span style={{ color: t.blue }}>@{replying}</span>
+            </p>
+          )}
+          {/* 子回复正文 */}
+          <p
+            className="mt-[1px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]"
+            style={{ color: t.text }}
+          >
+            {s.content}
+          </p>
+          {/* 译文（附加在原文之后；按钮在下方操作行最右） */}
+          {tr.st.out !== null && tr.st.shown && <TranslatedTextLine out={tr.st.out} />}
+          {/* 小操作行（回复/转推/爱心/浏览/书签/分享 + 最右翻译，小一号） */}
+          <CommentActions
+            post={s}
+            subCount={sSubs.length}
+            compact
+            onReplyClick={() => onReply(rootId, s.id, sa.name)}
+            translate={{ loading: tr.st.loading, active: tr.st.shown, onClick: tr.toggle }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** 顶层评论（参考图规格）：头像 44px + 头像右缘竖线贯穿到子回复 +
- *  名行（名字bold + @账号·时间灰 + 右侧···）+ 正文 + 六图标操作行；
+ *  名行（名字bold + @账号·时间灰 + 右侧···）+ 正文 + 图标操作行（最右翻译）；
  *  子回复嵌套在正文列下方：头像 36px、「回复 @xx」蓝字行，
  *  样式与顶层一致（用户要求子回复也显示头像名字爱心）。
  *  点评论/子回复 → 定向回复（onReply 传 rootId=顶层评论 id + postId=精确被回复帖 + 名字，
@@ -332,6 +410,7 @@ function CommentRow({
   // 直算不 memo：论坛数据对象会被引擎原位变更（saveForum 浅拷贝外壳、posts 原数组），
   // useMemo 依赖 [comment.id] 在新增子回复时不会重算 → 子回复列表滞留旧值（同 profile-view 的教训）。
   const subReplies = repliesOf(forumData(), comment.id);
+  const tr = useCommentTr(comment.content);
 
   return (
     <div
@@ -362,73 +441,21 @@ function CommentRow({
           <p className="mt-[2px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]" style={{ color: t.text }}>
             {comment.content}
           </p>
-          {/* 翻译按钮（用户要求：评论区添加翻译；译文附加在原文之后） */}
-          <CommentTranslateLine text={comment.content} />
-          {/* 操作行：回复/转推/爱心/浏览/书签/分享（空心线性图标 + 数字） */}
+          {/* 译文（附加在原文之后；翻译按钮在下方操作行最右面） */}
+          {tr.st.out !== null && tr.st.shown && <TranslatedTextLine out={tr.st.out} />}
+          {/* 操作行：回复/转推/爱心/浏览/书签/分享 + 最右翻译 */}
           <CommentActions
             post={comment}
             subCount={subReplies.length}
             onReplyClick={() => onReply(comment.id, comment.id, a.name)}
+            translate={{ loading: tr.st.loading, active: tr.st.shown, onClick: tr.toggle }}
           />
           {/* 子回复：头像+名行+「回复 @xx」蓝字+正文+小操作行（与顶层一致的完整样式） */}
           {subReplies.length > 0 && (
             <div className="mt-2 flex flex-col">
-              {subReplies.map((s) => {
-                const sa = resolveAuthor(s.authorKey);
-                const replying = s.replyToName && s.replyToName !== sa.name ? s.replyToName : null;
-                const sSubs = repliesOf(forumData(), s.id);
-                return (
-                  <div
-                    key={s.id}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`回复 ${sa.name} 的评论`}
-                    onClick={(e) => {
-                      if ((e.target as HTMLElement).closest('button')) return;
-                      onReply(comment.id, s.id, sa.name); // 点子回复 → 回复该作者（仍挂顶层评论下，多轮接话定位到 TA）
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') onReply(comment.id, s.id, sa.name);
-                    }}
-                    className="cursor-pointer rounded-lg py-2 transition-colors active:opacity-60"
-                  >
-                    <div className="flex gap-2">
-                      <XAvatar authorKey={s.authorKey} size={36} onClick={() => f.openProfile(s.authorKey)} />
-                      <div className="min-w-0 flex-1">
-                        {/* 名行：名字(bold) + @账号 · 时间(灰) + 最右「···」 */}
-                        <CommentNameRow
-                          authorKey={s.authorKey}
-                          createdAt={s.createdAt}
-                          onMore={() => f.openPostMenu(s)}
-                          nameMax={90}
-                        />
-                        {/* 被回复人提示（参考图：「回复 @xx」@为品牌蓝） */}
-                        {replying && (
-                          <p className="text-[14px]" style={{ color: t.secondary }}>
-                            回复 <span style={{ color: t.blue }}>@{replying}</span>
-                          </p>
-                        )}
-                        {/* 子回复正文 */}
-                        <p
-                          className="mt-[1px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]"
-                          style={{ color: t.text }}
-                        >
-                          {s.content}
-                        </p>
-                        {/* 子回复翻译按钮（评论区翻译能力覆盖楼中楼） */}
-                        <CommentTranslateLine text={s.content} />
-                        {/* 小操作行（与顶层一致的六图标，小一号） */}
-                        <CommentActions
-                          post={s}
-                          subCount={sSubs.length}
-                          compact
-                          onReplyClick={() => onReply(comment.id, s.id, sa.name)}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+              {subReplies.map((s) => (
+                <SubReplyItem key={s.id} s={s} rootId={comment.id} onReply={onReply} />
+              ))}
             </div>
           )}
         </div>
@@ -448,7 +475,6 @@ export function ThreadView({ postId }: { postId: string }) {
   /** 全部回复数（顶层 + 嵌套子回复） */
   const totalReplies = replies.reduce((n, r) => n + 1 + repliesOf(d, r.id).length, 0);
   const [draft, setDraft] = useState('');
-  const [bookmarked, setBookmarked] = useState(false);
   /** 定向回复目标（null = 回复主帖作者）：commentId = 分组锚点（顶层评论 id），
  *  postId = 精确被回复的帖（多轮接话定位：AI 回应“我评论的那条”），name = 显示名 */
   const [replyTarget, setReplyTarget] = useState<{ commentId: string; postId: string; name: string } | null>(null);
@@ -681,7 +707,8 @@ export function ThreadView({ postId }: { postId: string }) {
               {tr.loading ? '翻译中…' : tr.text ? (tr.shown ? '查看原文' : '查看译文') : '翻译'}
             </button>
           </p>
-          {/* 互动栏（X 官方顺序：回复/转推/点赞/书签/分享，爱心归位第三，在评论区上方，带数字） */}
+          {/* 互动栏（X 官方顺序：回复/转推/点赞/浏览/分享；用户要求：爱心旁边是浏览不是书签；
+              浏览量与点赞数为分级热度值：十几/几十/几百/几千/几万/几十万/几百万） */}
           <div className="mt-1 flex items-center justify-between border-b py-3" style={{ borderColor: t.border }}>
             <ThreadAction
               icon={XIcons.reply(21)}
@@ -701,10 +728,10 @@ export function ThreadView({ postId }: { postId: string }) {
               hoverBg="rgba(0,186,124,0.12)"
               onClick={() => f.repostToggle(post.id)}
             />
-            {/* 爱心归位：第三位（用户要求移回原位，与帖子卡操作行一致） */}
+            {/* 爱心归位：第三位（用户要求移回原位，与帖子卡操作行一致）；点赞数为分级热度值 */}
             <ThreadAction
               icon={XIcons.like(liked, 21)}
-              count={post.likes.length}
+              count={likesOf(post)}
               label={liked ? '取消点赞' : '点赞'}
               color={liked ? t.pink : t.secondary}
               hoverColor={t.pink}
@@ -712,15 +739,13 @@ export function ThreadView({ postId }: { postId: string }) {
               onClick={() => f.likeToggle(post.id)}
             />
             <ThreadAction
-              icon={XIcons.bookmark(bookmarked, 21)}
-              label={bookmarked ? '移除书签' : '添加书签'}
-              color={bookmarked ? t.blue : t.secondary}
+              icon={XIcons.views(21)}
+              count={post.views}
+              label="浏览量"
+              color={t.secondary}
               hoverColor={t.blue}
               hoverBg="rgba(29,155,240,0.12)"
-              onClick={() => {
-                setBookmarked(!bookmarked);
-                f.toast(bookmarked ? '已移除书签' : '已添加到书签');
-              }}
+              onClick={() => f.toast(`这条帖子已有 ${countShort(post.views)} 次浏览`)}
             />
             <ThreadAction
               icon={XIcons.share(21)}

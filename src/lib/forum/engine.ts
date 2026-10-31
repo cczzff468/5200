@@ -27,11 +27,15 @@
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import {
   COMMUNITY_DEFS,
+  GEN_VERSION,
   NPC_DEFS,
+  PERSONA_ARCHETYPES,
   POST_MAX,
   REPLY_MAX,
   STALE_MS,
   createDynNpc,
+  recordDynNpcRecent,
+  rollEngagement,
   type AuthorKey,
   type ForumData,
   type ForumPost,
@@ -136,6 +140,8 @@ function basePost(authorKey: AuthorKey, content: string, community: string | nul
           .slice(0, Math.floor(Math.random() * 5))
           .filter(() => Math.random() < 0.85)
       : [];
+  // 热度分级（用户要求：点赞/浏览生成 十几/几十/几百/几千/几万/几十万/几百万——重尾分布）
+  const eng = organic ? rollEngagement() : { likeBoost: 0, views: 40 + Math.floor(Math.random() * 900), reposts: 0 };
   return {
     id: uid('p'),
     authorKey,
@@ -143,8 +149,9 @@ function basePost(authorKey: AuthorKey, content: string, community: string | nul
     community,
     createdAt: at,
     likes,
-    reposts: organic ? Math.floor(Math.random() * 60) : 0,
-    views: organic ? 300 + Math.floor(Math.random() * 3000) : 40 + Math.floor(Math.random() * 900),
+    reposts: eng.reposts,
+    views: eng.views,
+    likeBoost: eng.likeBoost,
     replyTo: replyTo ?? null,
     replyToName: replyToName ?? null,
   };
@@ -201,34 +208,160 @@ function communityOfPoolText(npcId: string, text: string): string | null {
   return def;
 }
 
+// ---------------- 防刷屏 / 时间线工具 ----------------
+
+/** 全部人设原型 id（信息流大杂烩轮换环：每隔几条就是完全不同领域和语气的人） */
+const ARCHETYPE_IDS = PERSONA_ARCHETYPES.map((a) => a.id);
+
+/** 重排一批帖子：同一信息流内绝不连续出现同一作者（用户要求：严格防刷屏）。
+ *  prev = 批次之前紧邻的那条作者（如现有 feed 最老一条），一并隔开。 */
+function shuffleNoAdjacent<T extends { key: AuthorKey }>(items: T[], prev?: AuthorKey): T[] {
+  const pool = items.slice();
+  const out: T[] = [];
+  let last = prev;
+  let guard = 0;
+  while (pool.length && guard++ < 600) {
+    let idx = Math.floor(Math.random() * pool.length);
+    if (pool[idx].key === last) {
+      // 随机撞了同一作者：强制换人（找不到别人才允许连排）
+      const alt = pool.findIndex((p) => p.key !== last);
+      if (alt !== -1) idx = alt;
+    }
+    out.push(pool[idx]);
+    last = pool[idx].key;
+    pool.splice(idx, 1);
+  }
+  return out;
+}
+
+/** 自然时间间隔（用户要求：最新一条「刚刚」，往下 15分钟前/1小时前/昨天 衰减自然）。
+ *  越往下间隔越大：几分钟 → 几十分钟 → 几小时，偶尔隔天；带随机抖动。 */
+function naturalGapMs(depth: number): number {
+  const r = Math.random();
+  if (depth < 2) return (2 + Math.random() * 20) * 60_000; // 头两条：2~22 分钟
+  if (depth < 5) return (15 + Math.random() * 75) * 60_000; // 15~90 分钟
+  if (r < 0.12) return (8 + Math.random() * 34) * 3600_000; // 偶尔隔大半天
+  return (40 + Math.random() * 170) * 60_000; // 40分钟~3.5小时
+}
+
 // ---------------- 播种 ----------------
 
 let seeding = false;
 
-/** 首次打开：池子同步落盘（立即有内容），LLM 精修异步追加。幂等。
- *  播种作者 60% 动态真实感网友 + 40% 内置主题 NPC——首屏就不是重名大军。 */
+/** 内容风格版本升级：清除旧 AI 帖（用户自己的帖子/回复保留），重新播种。
+ *  v2 = 真实网民口吻 + 防刷屏 + 热度分级 + 首刷连带评论（用户反馈旧内容太像 AI）。 */
+function resetAiContent(d: ForumData): void {
+  const keepPosts = d.posts.filter((p) => p.authorKey === 'user');
+  const keepIds = new Set(keepPosts.map((p) => p.id));
+  d.posts = keepPosts;
+  d.dynNpcs = {};
+  d.usedNames = [];
+  d.hiddenPosts = (d.hiddenPosts ?? []).filter((id) => keepIds.has(id));
+  // 通知里指向已删帖的丢掉（system 通知 postId 为空，保留）
+  d.notifications = d.notifications.filter((n) => !n.postId || keepIds.has(n.postId));
+  // 关注列表里已消失的动态网友清理
+  d.following = d.following.filter((k) => !k.startsWith('dyn:'));
+  d.genVersion = GEN_VERSION;
+  d.seeded = false;
+}
+
+/** 给种子帖同步连带一批评论（用户要求：第一次生成帖子就连带着生成评论——
+ *  打开帖子就是热闹评论区，而不是「评论正在赶来」）。
+ *  池子主题匹配（评论对得上帖子内容）+ 少量楼中楼；时间在（发帖, 现在）内升序。 */
+function seedCommentsFor(post: ForumPost, out: ForumPost[]): void {
+  const postAuthor = resolveAuthor(post.authorKey);
+  const count = 5 + Math.floor(Math.random() * 9); // 5~13 条
+  const keys = pickCommenters(count, postAuthor.lang, post.content, post.authorKey);
+  const usedCt = new Set<string>();
+  const texts: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const lang = resolveAuthor(keys[i]).lang ?? 'zh-Hans';
+    texts.push(pickTopicComment(post.content, lang, usedCt, post.community) ?? pickGenericComment('zh-Hans', usedCt) ?? '哈哈哈哈');
+  }
+  // 时间：在（发帖后, 现在）窗口内自然铺开；帖子很新时评论挤在最近几十秒（爆款即视感），
+  // 老帖则从发帖后一直散到现在——绝不再出现全部同一毫秒的假时间戳
+  const hi = Date.now() - 5_000;
+  let lo = Math.max(post.createdAt + 5_000, hi - Math.max(texts.length * 2_500, 90_000));
+  const span = Math.max(hi - lo, texts.length * 1_200);
+  const newComments: ForumPost[] = [];
+  texts.forEach((t, i) => {
+    const at = Math.floor(lo + (span * (i + 0.15 + Math.random() * 0.7)) / texts.length);
+    const c = basePost(keys[i], t.slice(0, REPLY_MAX), post.community, Math.min(Math.max(at, post.createdAt + 5_000), hi), post.id, postAuthor.name);
+    newComments.push(c);
+    out.push(c);
+  });
+  // 楼中楼：随机挑 1~2 条评论各接一条子回复（其他网友/楼主接话）
+  const subN = Math.min(newComments.length, 1 + Math.floor(Math.random() * 2));
+  const subs = newComments.slice().sort(() => Math.random() - 0.5).slice(0, subN);
+  const usedSub = new Set<string>();
+  for (const c of subs) {
+    const byAuthor = post.authorKey !== 'user' && Math.random() < 0.35 ? post.authorKey : pickCommenters(1, postAuthor.lang, post.content, post.authorKey, ...keys)[0];
+    const subLang = resolveAuthor(byAuthor).lang ?? 'zh-Hans';
+    const text = pickTopicComment(`${c.content} ${post.content}`, subLang, usedSub, post.community) ?? pickGenericComment('zh-Hans', usedSub) ?? '哈哈哈哈哈';
+    const subAt = Math.min(Date.now() - 30_000, c.createdAt + (3 + Math.random() * 40) * 60_000);
+    const sub = basePost(byAuthor, text.slice(0, REPLY_MAX), post.community, Math.max(subAt, c.createdAt + 90_000), c.id, resolveAuthor(c.authorKey).name);
+    sub.replyToPost = c.id;
+    out.push(sub);
+  }
+}
+
+/** 内置 NPC → 领域相近的人设原型（池子文案交给动态网友发时，人设与内容领域对上：
+ *  车帖由车友发、吃瓜帖由吃瓜群众发——口吻才真实） */
+const NPC_DOMAIN_ARCH: Record<string, string[]> = {
+  wang: ['chigua', 'gangjing'], canteen: ['fanquan', 'chigua'], kitty: ['dagong', 'gaoxiao'],
+  iron: ['xinshou', 'laosiji'], boat: ['zhuiju', 'yemao'], abacus: ['zhuiju'],
+  kai: ['laosiji'], candy: ['fanquan'], liang: ['dagong', 'ningmeng'], sunny: ['chigua'],
+  gua: ['chigua', 'kebiao'], ju: ['zhuiju'], che: ['laosiji', 'xinshou'], bao: ['kebiao', 'chigua'],
+};
+
+/** 首次打开：池子同步落盘（立即有内容 + 连带评论），LLM 精修异步追加。幂等。
+ *  播种作者 60% 动态真实感网友 + 40% 内置主题 NPC——首屏就不是重名大军；
+ *  防刷屏：落盘前重排（同一信息流绝不连续同一作者）；时间线自然衰减（刚刚→15分钟→1小时→昨天）。 */
 export async function ensureSeed(): Promise<void> {
+  const d0 = forumData();
+  if ((d0.genVersion ?? 1) < GEN_VERSION && d0.seeded) {
+    // 内容风格升级：旧 AI 帖清除重播种（用户帖保留）
+    resetAiContent(d0);
+    saveForum({ ...d0 });
+  }
   const d = forumData();
   if (d.seeded || seeding) return;
   seeding = true;
   try {
     const now = Date.now();
-    const seedPosts: ForumPost[] = [];
+    const specs: { key: AuthorKey; text: string; community: string | null; npcId: string }[] = [];
     for (const npc of NPC_DEFS) {
       const n = 1 + Math.floor(Math.random() * 2);
       const pool = [...npc.pool];
       for (let i = 0; i < n && pool.length; i++) {
         const idx = Math.floor(Math.random() * pool.length);
         const text = pool.splice(idx, 1)[0];
-        const at = now - Math.floor(Math.random() * 26 * 3600_000) - 600_000;
-        // 60% 概率换成动态真实感网友发（文案口吻通用，成立；网名不重复的关键）
-        const author: AuthorKey = Math.random() < 0.6 ? createDynNpc() : `npc:${npc.id}`;
-        seedPosts.push(basePost(author, text, communityOfPoolText(npc.id, text), at));
+        // 60% 概率换成动态真实感网友发（人设原型与文案领域对上，口吻才真实）
+        const domainArch = NPC_DOMAIN_ARCH[npc.id] ?? [];
+        const author: AuthorKey =
+          Math.random() < 0.6
+            ? createDynNpc({ archetypeId: domainArch.length ? domainArch[Math.floor(Math.random() * domainArch.length)] : undefined })
+            : `npc:${npc.id}`;
+        specs.push({ key: author, text, community: communityOfPoolText(npc.id, text), npcId: npc.id });
       }
     }
+    // 防刷屏重排（同一信息流绝不连续同一作者）
+    const ordered = shuffleNoAdjacent(specs);
+    // 自然时间线：最新一条「刚刚」（15~60 秒前），往下间隔逐渐拉大（15分钟→1小时→昨天）
+    const seedPosts: ForumPost[] = [];
+    let at = now - (15 + Math.random() * 45) * 1000;
+    ordered.forEach((sp, i) => {
+      seedPosts.push(basePost(sp.key, sp.text, sp.community, at));
+      // 人设连通性：记录动态网友最近发的内容（下个帖子里接上话疸）
+      recordDynNpcRecent(sp.key, sp.text);
+      at -= naturalGapMs(i);
+    });
+    // 首刷连带评论（用户要求：第一次生成帖子就连带着生成评论）
+    const allNew: ForumPost[] = [...seedPosts];
+    for (const sp of seedPosts) seedCommentsFor(sp, allNew);
     const next: ForumData = {
       ...d,
-      posts: [...d.posts, ...seedPosts],
+      posts: [...d.posts, ...allNew],
       // char 好友自动关注（X：好友互关，「关注」页能刷到 TA 的帖子）
       following: [...new Set([...d.following, ...forumContactsSnap().filter((c) => c.kind === 'char').map((c) => `char:${c.id}` as AuthorKey)])],
       notifications: [
@@ -255,11 +388,12 @@ export async function ensureSeed(): Promise<void> {
               ],
             },
           ],
+      genVersion: GEN_VERSION,
       seeded: true,
       lastGenAt: now,
     };
     saveForum(next);
-    // 异步 LLM 精修（NPC 3 条新帖 + char 好友各一条人设帖；失败静默跳过）
+    // 异步 LLM 精修（NPC 3 条新帖 + char 好友按人设发帖；失败静默跳过）
     void llmPolish();
   } finally {
     seeding = false;
@@ -327,9 +461,12 @@ export async function ensureFresh(): Promise<void> {
     const now = Date.now();
     const next: ForumData = { ...forumData() };
     const used = new Set(next.posts.map((p) => p.content.slice(0, 20)));
+    // 防刷屏：跳过当前最新一条主帖的作者（新帖会插在它附近）
+    const newestMain = [...next.posts].filter((p) => p.replyTo === null).sort((a, b) => b.createdAt - a.createdAt)[0];
     let added = 0;
     for (const npc of NPC_DEFS.slice().sort(() => Math.random() - 0.5)) {
       if (added >= n) break;
+      if (newestMain && newestMain.authorKey === `npc:${npc.id}`) continue;
       const cand = npc.pool.find((x) => !used.has(x.slice(0, 20)));
       if (!cand) continue;
       used.add(cand.slice(0, 20));
@@ -469,6 +606,212 @@ function pickGenericComment(lang: string, usedCt: Set<string>): string | null {
  *  LLM 按主题方向生成；兜底组合池同主题，保证无 LLM 也是对味内容 */
 export const FEED_TOPICS = ['明星八卦', '吃瓜现场', '影视综艺', '汽车圈', '娱乐热点', '今日吐槽'];
 
+// ---------------- 主题匹配评论池（评论必须对得上帖子内容） ----------------
+
+/** 主题评论池：按帖子关键词命中主题，评论直接围绕该主题接话
+ *  （用户要求：评论和发表的内容对不上是不行的；含杠精/课代表/跟风/吐槽党多角色）。
+ *  {t} = 帖子命中的话题词（如「这瓜」「这车」「这剧」），渲染时替换。 */
+const TOPIC_COMMENT_POOLS: { re: RegExp; subject: string; comments: string[] }[] = [
+  {
+    re: /瓜|塌|恋情|官宣|热搜|爆料|同框|拍到|声明|辟谣|反转|吃瓜|出轨|分手|结婚|离婚|绯闻/i,
+    subject: '这瓜',
+    comments: [
+      '救命这瓜也太大了吧？？？我吃到现在都没吃明白，有没有课代表总结一下',
+      '课代表来了：起因是{t}被扒，中间反转了两次，现在双方都装死，蹲后续',
+      '只有我觉得{t}很无聊吗，每次都是这套流程，看腻了',
+      '让子弹再飞一会儿，上次那个瓜最后不也是乌龙',
+      '我朋友就在现场，她说根本不是传的那样，等我详细问问',
+      '哈哈哈哈哈哈笑死，楼主你太惨了，蹲蹲蹲',
+      '{t}我早就有预感了，懂的都懂，不敢多说',
+      '蹲一个后续，别断更啊，我瓜子都买好了',
+      '家人们谁懂啊，半夜刷到{t}直接睡不着了',
+      '就这也能上热搜？现在的热搜是越来越水了',
+      '先别站队，上次提前站队的都被打脸了，让子弹飞',
+      '这瓜保熟吗，不保熟我可就走了',
+    ],
+  },
+  {
+    re: /剧|追剧|大结局|烂尾|编剧|男主|女主|剧情|综艺|电影|影院|红毯|上映|预告|豆瓣|倍速|剧荒/i,
+    subject: '这剧',
+    comments: [
+      '{t}我也在追！！第八集直接封神，编剧是懂怎么拿捏我的',
+      '预警：后面开始注水了，回忆杀能占半集，我提前弃了',
+      '编剧出来挨打！！{t}这结局我意难平到现在',
+      '只有我觉得{t}很难看吗，全程倍速都嫌慢',
+      '课代表总结：{t}前三集平，第四集起飞，中间注水两集，结局烂尾',
+      '为了{t}开了三个会员，平台是懂绑架的',
+      '哈哈哈哈哈楼主说的太对了，我也是这么想的',
+      '别看解说版！{t}必须亲自看，两分钟解说会毁掉两小时',
+      '安利给所有还没看的人，撑过前三集你会回来谢我的',
+      '这导演的运镜真的绝，{t}那段长镜头我倒回去看了五遍',
+      '女主演技被女主粉丝吹过头了吧，尴尬到脚趾抠地',
+      '求下饭剧！不烧脑不虐心一集一个故事的那种',
+    ],
+  },
+  {
+    re: /车|油|堵|驾|4S|提车|试驾|轮胎|油耗|加塞|变道|停车场|科目|刹车|引擎|声浪/i,
+    subject: '这车',
+    comments: [
+      '别买{t}，买了就后悔，修车排队排到怀疑人生',
+      '车主路过，{t}确实是这样，油耗高得离谱',
+      '只有我一个人觉得{t}还行吗，你们是不是要求太高了',
+      '课代表：{t}优点是动力，缺点是价格和油耗，自己权衡',
+      '键盘车神又开始了，{t}你们真开过吗就搁这评',
+      '哈哈哈哈哈哈笑死，新手司机真实写照，我也是三把才进去的',
+      '早高峰被加塞三次+1，血压和油门一起踩到底',
+      '攒钱提车中，看完{t}更焦虑了，钱包和快乐总得选一个',
+      '这油耗正常吧，市区通勤谁开都这样，别吓唬楼主',
+      '老司机说得对，刹得住比跑得快重要',
+      '{t}我试驾过，推背感是真的，价格也是真的硬',
+      '刚拿本别买手动挡，相信我，堵车的时候你会哭的',
+    ],
+  },
+  {
+    re: /明星|偶像|爱豆|本命|追星|演唱会|应援|粉丝|站姐|代拍|周边|签售|安可|主唱|哥哥|姐姐|排队|见到本人|现场|本人比屏幕/i,
+    subject: '追星',
+    comments: [
+      '天哪这也太好磕了，{t}我先磕为敬',
+      '姐妹你是我的互联网嘴替！！说得太对了',
+      '理智追星，不代拍不私生，{t}看看就好别上头',
+      '只有我觉得{t}有点过了吗，追星还是要先过好自己的生活',
+      '我也在现场！！{t}那段我现在想起来还是想哭',
+      '代拍真的该管管了，{t}都被拍成什么样了',
+      '啊啊啊啊啊同担！！终于刷到组织了',
+      '追星女孩路过，{t}这个说法我认可',
+      '白嫖它不香吗，{t}氪金要量力而行啊家人们',
+      '笑死，追星追到倾家荡产，说的是我本人',
+      '蹲一个演唱会门票转让，蹲蹲蹲',
+      '他站到光里的同时你也要把自己的日子过亮呀',
+    ],
+  },
+  {
+    re: /班|老板|工资|加班|通勤|辞职|摸鱼|周报|开会|同事|甲方|乙方|上班|打工|绩效|KPI|裁员|领导|地铁/i,
+    subject: '打工',
+    comments: [
+      '{t}世另我，今天也是不想上班的一天',
+      '老板画的饼真香，我血压也真高',
+      '只有我觉得{t}还能忍吗，至少还有工资拿',
+      '课代表：{t}的本质是资本压榨，建议保留证据，骑驴找马',
+      '哈哈哈哈哈哈带薪如厕大师就是我，摸鱼才是打工人的本体',
+      '已老实，{t}之后我连辞职口号都不敢喊了',
+      '工资三分钟热度+1，每月还款日都在怀疑人生',
+      '辞职口号月更选手路过，咱们俩组个队吧',
+      '{t}真的会谢，谁懂啊，周一综合征又犯了',
+      '跑吧，{t}这种环境待久了人会废掉的',
+      '工位摸鱼冠军在此，楼主悄悄的，别让老板刷到',
+      '笑死，班味洗不掉的，周末泡澡都没用',
+    ],
+  },
+  {
+    re: /猫|狗|宠物|铲屎|主子|疫苗|猫粮|狗粮|拆家|撸猫|遛狗/i,
+    subject: '宠物',
+    comments: [
+      '{t}快发照片！不看照片等于没说',
+      '哈哈哈哈哈哈拆家现场我也经历过，沙发已经阵亡了',
+      '铲屎官含泪点赞，{t}懂的都懂',
+      '只有养过的人才知道{t}有多真实，主子的脸色就是天气',
+      '猫毛过敏但养猫+1，戒不掉的根本戒不掉',
+      '{t}建议直接发视频，让我们云吸一下',
+      '我家那位也是，{t}的时候一脸无辜，气死又好笑',
+      '疫苗本收藏家路过，宠物医院VIP就是我',
+      '笑死，{t}这条我要转给我妈看，让她知道养宠物的快乐',
+    ],
+  },
+  {
+    re: /吃|喝|外卖|探店|美食|火锅|奶茶|咖啡|餐厅|好吃|难吃|宵夜|零食|甜品/i,
+    subject: '探店',
+    comments: [
+      '看饿了，{t}求地址，已经准备好出发了',
+      '{t}避雷+1，我也踩过这个坑，难吃到怀疑人生',
+      '只有我觉得{t}一般般吗，可能是我口味问题',
+      '哈哈哈哈哈哈深夜放毒是吧，举报了（咽口水）',
+      '课代表总结：{t}值得冲的是招牌，别的别点',
+      '奶茶三分甜选手路过，{t}这个搭配我认可',
+      '救命，半夜刷到{t}是对减肥人士的谋杀',
+      '碳水快乐星人狂喜，{t}看着就香',
+      '外卖红包猎人来了，{t}有没有优惠券链接',
+    ],
+  },
+  {
+    re: /手机|芯片|跑分|新机|发布会|显卡|装机|屏幕|数码|耳机|键盘|游戏|排位|上分|开黑|外挂/i,
+    subject: '数码',
+    comments: [
+      '等等党永不为奴，{t}再战三年',
+      '只有我觉得{t}参数没意义吗，体验才是王道',
+      '跑分不代表体验，{t}实测才是真的',
+      '{t}买新不买旧，一步到位，别问，问就是过来人',
+      '装机预算超了+1，{t}一看价格我沉默了',
+      '哈哈哈哈哈哈显卡终于到了，恭喜脱贫',
+      '{t}散热怎么样，我看评测说烫手',
+      '课代表：{t}首发别冲，等两个月降价+固件稳定',
+      '凌晨排位的兄弟还在吗，{t}组一队',
+    ],
+  },
+  {
+    re: /失眠|熬夜|凌晨|睡不着|emo|崩溃|焦虑|压力|累|孤独|深夜/i,
+    subject: '深夜',
+    comments: [
+      '凌晨三点刷到{t}，突然就不那么孤独了',
+      '抱抱楼主，{t}这个阶段都会过去的',
+      '只有我睡不着的时候刷到{t}更emo了吗',
+      '月亮不睡我不睡+1，{t}咱们组个失眠互助群吧',
+      '{t}写的就是我吧，别念了别念了',
+      '褪黑素依赖中，{t}看得我更清醒了',
+      '深夜的情绪别当真，{t}睡一觉明天再看会不一样',
+      '数羊数到一万选手路过，{t}同病相怜',
+    ],
+  },
+];
+
+/** 版块 → 匹配的主题评论池（评论与帖子内容对得上：版块定领域，关键词做微调）。
+ *  索引：0=瓜 1=剧 2=车 3=追星 4=打工 5=宠物 6=吃 7=数码 8=深夜 */
+const COMMUNITY_POOLS: Record<string, number[]> = {
+  gossip: [0, 3],
+  movie: [1],
+  car: [2],
+  rant: [4],
+  digital: [7],
+  food: [6],
+  work: [4],
+  fit: [7],
+  travel: [6, 8],
+  night: [8],
+  game: [7],
+};
+
+/** 从帖子内容提取主题词（给 {t} 槽位用：优先 #话题#，否则用主体词） */
+function topicSubjectOf(text: string, fallback: string): string {
+  const tag = /#([^#\s]{1,12})#/.exec(text)?.[1];
+  return tag ?? fallback;
+}
+
+/** 兜底评论：按帖子内容命中的主题池抽取（对得上帖子内容，不是万金油），
+ *  主题池尽/未命中 → 通用池。外语评论者走外语通用池。 */
+function pickTopicComment(postContent: string, lang: string, used: Set<string>, community?: string | null): string | null {
+  if (lang !== 'zh-Hans') {
+    const cand = pickGenericComment(lang, used);
+    if (cand) return cand;
+  }
+  // 版块优先：帖子所在版块的领域池先抽（追星帖出追星评论，车帖出车友评论）
+  const pools: { re: RegExp; subject: string; comments: string[] }[] = [];
+  const commIdx = community ? COMMUNITY_POOLS[community] ?? [] : [];
+  for (const i of commIdx) pools.push(TOPIC_COMMENT_POOLS[i]);
+  // 再补关键词命中的池（版块没匹配到时兜底；已加入的不重复）
+  const hit = TOPIC_COMMENT_POOLS.filter((p) => p.re.test(postContent) && !pools.includes(p));
+  pools.push(...hit);
+  if (!pools.length) return pickGenericComment('zh-Hans', used);
+  for (let i = 0; i < 60; i++) {
+    const pool = pools[Math.floor(Math.random() * pools.length)];
+    const raw = pool.comments[Math.floor(Math.random() * pool.comments.length)];
+    const cand = raw.replaceAll('{t}', topicSubjectOf(postContent, pool.subject));
+    if (!used.has(cand.slice(0, 16))) {
+      used.add(cand.slice(0, 16));
+      return cand;
+    }
+  }
+  return pickGenericComment('zh-Hans', used);
+}
+
 /** 组合式帖子兜底（NPC 池耗尽 + LLM 失败时：话题×开头×正文×结尾 组合出近乎无限的帖子，
  *  保证「下滑无限生成」在任何情况下都有新内容；主题与 FEED_TOPICS 同向） */
 const GEN_TOPICS = ['明星塌房', '恋情官宣', '热搜第一', '大结局烂尾', '新剧上头', '电影彩蛋', '提车第一天', '油价', '早高峰堵车', '司机加塞', '综艺名场面', '红毯造型', '剧组路透', '新车发布', '试驾感受', '二手车避坑', '追星开销', '剧荒求推', '瓜反转', '代拍乱象'];
@@ -581,20 +924,25 @@ function comboPostText(used: Set<string>, lang = 'zh-Hans'): string | null {
   return null;
 }
 
-/** 批量生成一批 feed 帖子（作者池 = 动态真实感网友为主 ~75% + 主题 NPC 15% + char 好友 10%，
- *  每人带主题方向 + 惯用语言——网名永不重复、帖子多语言）。
- *  LLM 批量（设置›API 模型）→ NPC 文案池补齐 → 组合式兜底，任何情况下都有内容。
+/** 批量生成一批 feed 帖子（作者池 = 动态真实感网友为主 ~70% + 主题 NPC 15% + char 好友 10%，
+ *  动态网友按原型轮换 → 信息流大杂烩，每隔几条就是完全不同领域和语气的人；
+ *  复用的老网友带 recent 记忆 → 跨帖连通）。
+ *  LLM 批量（设置›API 模型）→ NPC 文案池轮换补齐（每 NPC 一轮只出一条，绝不连发）
+ *  → 组合式兜底，任何情况下都有内容。
  *  used = 全局内容前缀指纹（跨调用累积去重）。 */
 async function buildFeedBatch(
   n: number,
   used: Set<string>,
   avoid: string[],
-): Promise<{ key: AuthorKey; text: string }[]> {
+): Promise<{ key: AuthorKey; text: string; recent?: string[] }[]> {
   const chars = forumContactsSnap().filter((c) => c.kind === 'char' && (c.persona || c.background));
   const shuffledNpcs = NPC_DEFS.slice().sort(() => Math.random() - 0.5);
   const topics = FEED_TOPICS.slice().sort(() => Math.random() - 0.5);
-  const specs: { key: AuthorKey; name: string; persona: string; community: string | null; topic: string; lang: string }[] = [];
+  // 原型轮换环（打工人→饭圈女孩→数码极客→宝妈→搞笑女……保证大杂烩）
+  const archRing = ARCHETYPE_IDS.slice().sort(() => Math.random() - 0.5);
+  const specs: { key: AuthorKey; name: string; persona: string; community: string | null; topic: string; lang: string; recent?: string[] }[] = [];
   let npcCursor = 0;
+  let archCursor = 0;
   for (let i = 0; i < n; i++) {
     const topic = topics[i % topics.length];
     const r = Math.random();
@@ -609,23 +957,38 @@ async function buildFeedBatch(
         lang: 'zh-Hans',
       });
     } else if (r < 0.25) {
-      // 内置主题 NPC（大 V，自带版块）
+      // 内置主题 NPC（大 V，自带版块；轮换环保证一环内不重复）
       const nd = shuffledNpcs[npcCursor++ % shuffledNpcs.length];
       specs.push({ key: `npc:${nd.id}`, name: nd.name, persona: nd.persona, community: defaultCommunityFor(nd.id), topic, lang: 'zh-Hans' });
+    } else if (r < 0.4) {
+      // 老网友回访（带 recent 记忆：上一个帖子里聊过的事，这次能接上话疸）
+      const d = forumData();
+      const dynIds = Object.keys(d.dynNpcs ?? {});
+      if (dynIds.length) {
+        const key = `dyn:${dynIds[Math.floor(Math.random() * dynIds.length)]}`;
+        const a = resolveAuthor(key);
+        const npc = d.dynNpcs![key.slice(4)];
+        specs.push({ key, name: a.name, persona: a.persona ?? '', community: null, topic, lang: a.lang ?? 'zh-Hans', recent: npc.recent });
+        continue;
+      }
+      // 池子还空（首刷）：落新网友
+      const key = createDynNpc({ archetypeId: archRing[archCursor++ % archRing.length] });
+      const a = resolveAuthor(key);
+      specs.push({ key, name: a.name, persona: a.persona ?? '', community: null, topic, lang: a.lang ?? 'zh-Hans' });
     } else {
-      // 动态真实感网友（主力：每批几乎全新面孔，网名不重复）
-      const key = createDynNpc();
+      // 新面孔（原型轮换：每隔几条就是完全不同领域的人）
+      const key = createDynNpc({ archetypeId: archRing[archCursor++ % archRing.length] });
       const a = resolveAuthor(key);
       specs.push({ key, name: a.name, persona: a.persona ?? '', community: null, topic, lang: a.lang ?? 'zh-Hans' });
     }
   }
 
-  // LLM 批量生成（一次 7~20 条；失败静默走池子）
+  // LLM 批量生成（一次 7~20 条；失败静默走池子；recent = 老网友最近发过的内容，LLM 据此接话疸）
   const results: { key: AuthorKey; text: string }[] = [];
   try {
     const r = (await callApi({
       kind: 'posts',
-      items: specs.map(({ name, persona, community, topic, lang }) => ({ name, persona, community: community ?? '今日热议', topic, lang })),
+      items: specs.map(({ name, persona, community, topic, lang, recent }) => ({ name, persona, community: community ?? '今日热议', topic, lang, recent })),
       avoid,
       userName: resolveAuthor('user').name,
     })) as { items?: string[] };
@@ -638,34 +1001,51 @@ async function buildFeedBatch(
   } catch {
     /* 走池子兜底 */
   }
-  // NPC 文案池补齐（LLM 失败/条数不足；全局去重——同一帖子不应重复出现）
+  // NPC 文案池补齐（LLM 失败/条数不足）：轮换环——每个 NPC 一轮只出一条，
+  // 同一批内绝不连续出现同一作者（修复「秋名山下打车连发多条」刷屏 Bug 的关键）
   if (results.length < n) {
-    for (const npc of NPC_DEFS.slice().sort(() => Math.random() - 0.5)) {
-      if (results.length >= n) break;
-      for (const cand of npc.pool) {
+    let rounds = 0;
+    while (results.length < n && rounds < 60) {
+      let addedThisRound = 0;
+      for (const npc of shuffledNpcs) {
         if (results.length >= n) break;
-        if (used.has(cand.slice(0, 20))) continue;
+        const cand = npc.pool.find((x) => !used.has(x.slice(0, 20)));
+        if (!cand) continue;
         used.add(cand.slice(0, 20));
         results.push({ key: `npc:${npc.id}`, text: cand });
+        addedThisRound += 1;
       }
+      if (!addedThisRound) break; // 池子彻底耗尽
+      rounds += 1;
     }
   }
-  // NPC 池也耗尽 → 组合式生成兜底（话题×开头×正文×结尾 + 外语整帖，近乎无限，下滑永远有新帖）
-  while (results.length < n) {
-    const spec = specs[results.length] ?? specs[specs.length - 1];
-    const lang = spec?.key.startsWith('dyn:') ? resolveAuthor(spec.key).lang ?? 'zh-Hans' : 'zh-Hans';
-    const t = comboPostText(used, lang);
-    if (!t) break;
-    const author: AuthorKey = spec?.key ?? `npc:${NPC_DEFS[Math.floor(Math.random() * NPC_DEFS.length)].id}`;
-    results.push({ key: author, text: t });
+  // NPC 池也耗尽 → 组合式生成兜底（话题×开头×正文×结尾 + 外语整帖，近乎无限；作者轮换环）
+  if (results.length < n) {
+    const d = forumData();
+    const dynIds = Object.keys(d.dynNpcs ?? {}).sort(() => Math.random() - 0.5);
+    const npcRing = NPC_DEFS.slice().sort(() => Math.random() - 0.5);
+    let rr = 0;
+    while (results.length < n) {
+      const spec = specs[results.length] ?? specs[specs.length - 1];
+      const lang = spec?.key.startsWith('dyn:') ? resolveAuthor(spec.key).lang ?? 'zh-Hans' : 'zh-Hans';
+      const t = comboPostText(used, lang);
+      if (!t) break;
+      // 作者轮换：动态网友与内置 NPC 交替，同批不重样
+      const author: AuthorKey =
+        dynIds.length && rr % 3 !== 2
+          ? `dyn:${dynIds[rr % dynIds.length]}`
+          : `npc:${npcRing[rr % npcRing.length].id}`;
+      results.push({ key: author, text: t });
+      rr += 1;
+    }
   }
   return results;
 }
 
 /** 主页滑到最后一个帖子、继续上滑并松开 → 无限生成一批新帖子（过界手势触发）。
  *  - 一次 7~20 条（LLM 批量，设置里的 API 模型，主题：八卦/明星/吐槽/车/影视/娱乐/吃瓜）；
- *  - 时间戳排在现有最老主帖之前（信息流向下无限延伸，上面已生成的帖子永不消失）；
- *  - LLM 失败/不足时 NPC 文案池兜底，永远有内容。
+ *  - 时间戳排在现有最老主帖之前（信息流向下无限延伸，旧帖永不消失）；
+ *  - 防刷屏：与现有 feed 尾部作者隔开 + 批内绝不连排；时间间隔自然衰减（40分钟~几小时，偶尔隔天）。
  *  返回本次新增条数。 */
 export async function generateMoreFeedPosts(): Promise<number> {
   if (feedGenerating) return 0;
@@ -674,10 +1054,15 @@ export async function generateMoreFeedPosts(): Promise<number> {
     const d = forumData();
     if (!d.seeded) return 0;
     const n = 7 + Math.floor(Math.random() * 14); // 7~20 条
-    // 时间边界：全部主帖里最老的时间，新帖排在它之前（feed 下方）
+    // 时间边界：全部主帖里最老的时间，新帖排在它之前（feed 下方）；
+    // 同时拿到它的作者——新批次与它隔开（防刷屏跨批次也生效）
     let frontier = Date.now();
+    let frontierAuthor: AuthorKey | undefined;
     for (const p of d.posts) {
-      if (p.replyTo === null && p.createdAt < frontier) frontier = p.createdAt;
+      if (p.replyTo === null && p.createdAt < frontier) {
+        frontier = p.createdAt;
+        frontierAuthor = p.authorKey;
+      }
     }
     // 防重复：取现有全部帖子的前缀指纹
     const used = new Set(d.posts.map((p) => p.content.slice(0, 20)));
@@ -686,13 +1071,16 @@ export async function generateMoreFeedPosts(): Promise<number> {
       .slice(0, 12)
       .map((p) => p.content.slice(0, 60));
 
-    const results = await buildFeedBatch(n, used, avoid);
-    if (!results.length) return 0;
+    const raw = await buildFeedBatch(n, used, avoid);
+    if (!raw.length) return 0;
+    // 防刷屏重排：绝不连续同一作者（含与 feed 现有尾部那奈）
+    const results = shuffleNoAdjacent(raw, frontierAuthor);
 
-    // 落库：时间戳自 frontier 向前递减（20~120 分钟一档），旧帖永在上方
+    // 落库：时间戳自 frontier 向前铺（自然衰减：40分钟~3.5小时一档，10% 隔半天）；
+    // 同一作者的帖子若同批出现两次，天然被隔到不同深度（时间差拉开）
     const next = { ...forumData() };
-    let at = frontier - (20 + Math.random() * 40) * 60_000;
-    for (const { key, text } of results) {
+    let at = frontier - (8 + Math.random() * 30) * 60_000;
+    results.forEach(({ key, text }, i) => {
       const tag = /#([^#\s]+)#/.exec(text)?.[1];
       const cid = key.startsWith('npc:')
         ? communityOfPoolText(key.slice(4), text)
@@ -700,8 +1088,9 @@ export async function generateMoreFeedPosts(): Promise<number> {
           ? NPC_COMMUNITY_MAP[tag] ?? null
           : null;
       next.posts.push(basePost(key, text, cid, at));
-      at -= (20 + Math.random() * 100) * 60_000;
-    }
+      recordDynNpcRecent(key, text); // 人设连通性
+      at -= naturalGapMs(6 + i); // 底部生成：间隔从几十分钟起拉大
+    });
     next.lastGenAt = Date.now();
     saveForum(next);
     return results.length;
@@ -714,7 +1103,8 @@ export async function generateMoreFeedPosts(): Promise<number> {
 
 /** 主页滑到最顶部、下拉并松开 → 生成一批全新内容（过界手势触发）。
  *  - 一次 7~20 条，时间戳全部晚于现有最新帖（新内容整批插入信息流最上方）；
- *  - 与底部生成共用互斥锁与批量生成器（主题同向），旧帖永不消失。 */
+ *  - 防刷屏 + 自然时间衰减（最新一条「刚刚」，往下几分钟→几十分钟）；
+ *  - 与底部生成共用互斥锁与批量生成器，旧帖永不消失。 */
 export async function generateNewFeedPosts(): Promise<number> {
   if (feedGenerating) return 0;
   const d0 = forumData();
@@ -728,13 +1118,19 @@ export async function generateNewFeedPosts(): Promise<number> {
       .slice(0, 12)
       .map((p) => p.content.slice(0, 60));
 
-    const results = await buildFeedBatch(n, used, avoid);
-    if (!results.length) return 0;
+    const raw = await buildFeedBatch(n, used, avoid);
+    if (!raw.length) return 0;
+    // 防刷屏重排（新内容插最上方，批内绝不连排）
+    const results = shuffleNoAdjacent(raw);
 
-    // 落库：时间戳从「现在」向前铺（40s~3.4min 一档递减），最新在最上、整批压过现有 feed
+    // 落库：最新一条 = 刚刚（30~90 秒前），往下自然衰减（几分钟→几十分钟）；
+    // 不越过现有最新帖（否则会被旧帖压到下面）
     const next = { ...forumData() };
-    let at = Date.now() - 20_000;
-    for (const { key, text } of results) {
+    let newestExisting = 0;
+    for (const p of next.posts) newestExisting = Math.max(newestExisting, p.createdAt);
+    const floorAt = newestExisting + 90_000;
+    let at = Date.now() - (30 + Math.random() * 60) * 1000;
+    results.forEach(({ key, text }, i) => {
       const tag = /#([^#\s]+)#/.exec(text)?.[1];
       const cid = key.startsWith('npc:')
         ? communityOfPoolText(key.slice(4), text)
@@ -742,8 +1138,9 @@ export async function generateNewFeedPosts(): Promise<number> {
           ? NPC_COMMUNITY_MAP[tag] ?? null
           : null;
       next.posts.push(basePost(key, text, cid, at));
-      at -= (40 + Math.random() * 160) * 1000;
-    }
+      recordDynNpcRecent(key, text); // 人设连通性
+      at = Math.max(at - naturalGapMs(i), floorAt);
+    });
     next.lastGenAt = Date.now();
     saveForum(next);
     return results.length;
@@ -768,29 +1165,62 @@ function countThreadComments(d: ForumData, postId: string): number {
 }
 
 /** 随机挑评论者（用户要求评论区网名也要真实不重复）：
- *  ~60% 动态真实感新网友（每条帖子评论区大量新面孔）+ ~25% 已有动态网友回访
- *  + ~10% 内置 NPC + char 好友穿插。postLang = 主帖语言（外语帖评论区外语网友更多）。 */
-function pickCommenters(count: number, postLang?: string): AuthorKey[] {
+ *  ~58% 动态真实感新网友（每条帖子评论区大量新面孔）+ ~24% 已有动态网友回访
+ *  + ~10% 内置 NPC + char 好友穿插。
+ *  postLang = 主帖语言（外语帖评论区外语网友更多）；
+ *  postContent = 主帖内容（新网友的人设原型向帖子主题倾斜：车帖更容易招来车友）；
+ *  avoidKeys = 本帖内已出现过的作者（同帖不重复 + 避开楼主——真实评论区没有复读机）。 */
+function pickCommenters(count: number, postLang?: string, postContent?: string, ...avoidKeys: AuthorKey[]): AuthorKey[] {
   const d = forumData();
   const chars = forumContactsSnap().filter((c) => c.kind === 'char' && (c.persona || c.background));
   const npcs = NPC_DEFS.slice().sort(() => Math.random() - 0.5);
   const dynKeys = Object.keys(d.dynNpcs ?? {});
   const bias = postLang && postLang !== 'zh-Hans' ? postLang : undefined;
+  // 帖子主题 → 更可能来评论的人设原型（评论区同温层，但保留乱入的乐子人）
+  const archBias = postContent ? archetypeIdsForContent(postContent) : [];
+  const seen = new Set<AuthorKey>(avoidKeys.filter(Boolean));
   const out: AuthorKey[] = [];
-  for (let i = 0; i < count; i++) {
+  let guard = 0;
+  while (out.length < count && guard++ < count * 12) {
     const r = Math.random();
-    if (chars.length && r < 0.08) {
-      out.push(`char:${chars[Math.floor(Math.random() * chars.length)].id}`);
+    let k: AuthorKey;
+    if (chars.length && r < 0.06) {
+      k = `char:${chars[Math.floor(Math.random() * chars.length)].id}`;
     } else if (r < 0.16) {
-      out.push(`npc:${npcs[i % npcs.length].id}`);
-    } else if (r < 0.38 && dynKeys.length) {
+      k = `npc:${npcs[out.length % npcs.length].id}`;
+    } else if (r < 0.4 && dynKeys.length) {
       // 已有动态网友回访（同一人出现在不同帖子评论区，真实论坛常态）
-      out.push(`dyn:${dynKeys[Math.floor(Math.random() * dynKeys.length)]}`);
+      k = `dyn:${dynKeys[Math.floor(Math.random() * dynKeys.length)]}`;
     } else {
-      // 新面孔（外语帖偏置外语网友）
-      out.push(createDynNpc(bias));
+      // 新面孔：60% 概率人设原型贴合帖子主题，40% 纯随机乱入（大杂烩）
+      const archId = archBias.length && Math.random() < 0.6 ? archBias[Math.floor(Math.random() * archBias.length)] : undefined;
+      k = createDynNpc({ archetypeId: archId, langBias: bias });
     }
+    if (seen.has(k)) continue; // 同帖去重：换下一个人（绝不连发两条）
+    seen.add(k);
+    out.push(k);
   }
+  return out;
+}
+
+/** 帖子内容 → 相关人设原型 id 列表（评论者与帖子同领域，评论才对得上内容） */
+function archetypeIdsForContent(content: string): string[] {
+  const map: { re: RegExp; ids: string[] }[] = [
+    { re: /车|油|堵|驾|4S|提车|试驾|胎|加塞|变道/i, ids: ['laosiji', 'xinshou', 'beipiao', 'dagong'] },
+    { re: /剧|追|烂尾|编剧|男主|女主|电影|影院|综艺|红毯|上映|剧荒|倍速/i, ids: ['zhuiju', 'yemao', 'daxuesheng', 'gaoxiao'] },
+    { re: /瓜|塌|恋情|官宣|热搜|爆料|同框|拍到|辟谣|反转|吃瓜/i, ids: ['chigua', 'fanquan', 'kebiao', 'gangjing'] },
+    { re: /明星|偶像|爱豆|本命|追星|演唱会|应援|粉丝|代拍|安可/i, ids: ['fanquan', 'gaoxiao', 'chigua'] },
+    { re: /班|老板|工资|加班|通勤|辞职|摸鱼|周报|开会|同事|打工/i, ids: ['dagong', 'beipiao', 'kafei', 'daxuesheng'] },
+    { re: /手机|芯片|跑分|新机|发布会|显卡|装机|屏幕|数码/i, ids: ['shuma', 'ningmeng', 'dagong'] },
+    { re: /游戏|排位|上分|开黑|外挂|新游/i, ids: ['youxi', 'daxuesheng', 'yemao'] },
+    { re: /猫|狗|宠物|铲屎|主子/i, ids: ['chanshou', 'baoma', 'gaoxiao'] },
+    { re: /吃|喝|外卖|探店|美食|火锅|奶茶|咖啡|宵夜/i, ids: ['chihuo', 'shengqian', 'jianshen'] },
+    { re: /失眠|熬夜|凌晨|睡不着|emo|深夜/i, ids: ['yemao', 'beipiao', 'daxuesheng'] },
+    { re: /健身|减脂|体脂|蛋白|深蹲/i, ids: ['jianshen', 'chihuo'] },
+    { re: /考研|背书|图书馆|自习/i, ids: ['kaoyan', 'daxuesheng'] },
+  ];
+  const out: string[] = [];
+  for (const m of map) if (m.re.test(content)) out.push(...m.ids);
   return out;
 }
 
@@ -825,7 +1255,9 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
     const mediaDesc = await describePostMedia(post.media);
     // 主帖语言（外语帖评论区外语网友更多）
     const postLang = resolveAuthor(post.authorKey).lang ?? 'zh-Hans';
-    const commenterKeys = pickCommenters(want, postLang);
+    // 评论者：新面孔 + 老网友回访；同帖去重（含已有评论者 + 楼主，绝不复读）
+    const existingKeys = threadReplies.map((p) => p.authorKey);
+    const commenterKeys = pickCommenters(want, postLang, post.content, post.authorKey, ...existingKeys);
     const avoid = threadReplies.slice(-10).map((p) => p.content.slice(0, 40));
 
     // ---- 顶层评论（LLM 批量，池子兜底） ----
@@ -837,7 +1269,8 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
         count: want,
         personas: commenterKeys.map((k) => {
           const a = resolveAuthor(k);
-          return { name: a.name, persona: a.persona || '普通论坛网友', lang: a.lang ?? 'zh-Hans' };
+          const recent = k.startsWith('dyn:') ? forumData().dynNpcs?.[k.slice(4)]?.recent : undefined;
+          return { name: a.name, persona: a.persona || '普通论坛网友', lang: a.lang ?? 'zh-Hans', recent };
         }),
         avoid,
         userName: resolveAuthor('user').name,
@@ -847,39 +1280,17 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
       texts = [];
     }
     if (texts.length < want) {
-      // 池子兜底：NPC replies 池 + 按评论者语言的通用池轮换（去重仅限本帖，保证任何帖子都能补满）
+      // 池子兜底：按帖子内容命中的主题评论池（评论对得上帖子内容，不是万金油）
+      // + 外语评论者走外语通用池；去重仅限本帖，保证任何帖子都能补满
       const usedCt = new Set<string>([
         ...texts.map((t) => t.slice(0, 16)),
         ...threadReplies.map((p) => p.content.slice(0, 16)),
       ]);
-      const npcRing = NPC_DEFS.slice().sort(() => Math.random() - 0.5);
       let ni = 0;
       while (texts.length < want && ni < 400) {
         const idx = texts.length;
         const commenterLang = resolveAuthor(commenterKeys[idx] ?? 'user').lang ?? 'zh-Hans';
-        const npc = npcRing[ni % npcRing.length];
-        // 外语评论者 → 外语通用池；中文评论者 → NPC 池 + 中文通用池交替
-        // 注意：pickGenericComment 命中时已自行写入 usedCt，这里不再双重检查
-        //（双重检查会因「已加入」而永远拒收，历史上导致每帖只出 2 条兜底评论）
-        let cand: string | null;
-        if (commenterLang !== 'zh-Hans') {
-          cand = pickGenericComment(commenterLang, usedCt);
-          if (!cand) cand = pickGenericComment('zh-Hans', usedCt);
-        } else {
-          const useGeneric = ni >= 36 || Math.random() < 0.35;
-          if (useGeneric) {
-            cand = pickGenericComment('zh-Hans', usedCt);
-          } else {
-            const raw = npc.replies[Math.floor(Math.random() * npc.replies.length)];
-            if (raw && !usedCt.has(raw.slice(0, 16))) {
-              cand = raw;
-              // NPC 池文案 → 评论者换成该 NPC（口吻一致）
-              commenterKeys[idx] = `npc:${npc.id}`;
-            } else {
-              cand = pickGenericComment('zh-Hans', usedCt);
-            }
-          }
-        }
+        const cand = pickTopicComment(post.content, commenterLang, usedCt, post.community) ?? pickGenericComment('zh-Hans', usedCt);
         if (cand) {
           usedCt.add(cand.slice(0, 16));
           texts.push(cand);
@@ -889,21 +1300,25 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
     }
     if (!texts.length) return 0;
 
-    // 时间戳：在（发帖时间、现在］内升序铺开；已有评论则从最后一条之后接
+    // 时间戳：在（发帖时间、现在］内升序铺开；已有评论则从最后一条之后接。
+    // 修复：起点不再越过「现在」（旧逻辑全新帖会把起点排到未来，全部被钳到同一毫秒）
     const lastAt = threadReplies.reduce((m, p) => Math.max(m, p.createdAt), 0);
-    const start = Math.max(post.createdAt + 60_000, lastAt + 60_000);
-    const end = Math.max(start + texts.length * 90_000, Date.now());
-    const step = Math.max(45_000, (end - start) / texts.length);
+    const hi = Date.now() - 5_000;
+    let lo = Math.max(post.createdAt + 60_000, lastAt + 60_000);
+    if (lo > hi - texts.length * 1_500) lo = hi - texts.length * 1_500;
+    lo = Math.max(lo, post.createdAt + 5_000);
+    const span = Math.max(hi - lo, texts.length * 1_000);
 
     const next: ForumData = { ...forumData() };
     const newComments: ForumPost[] = [];
-    let at = start;
     texts.forEach((t, i) => {
-      at += step * (0.5 + Math.random() * 0.7);
+      const at = Math.floor(lo + (span * (i + 0.2 + Math.random() * 0.65)) / texts.length);
       const authorKey = commenterKeys[i] ?? commenterKeys[commenterKeys.length - 1];
       const c = basePost(authorKey, t.slice(0, REPLY_MAX), post.community, at, postId, postAuthor.name);
       newComments.push(c);
       next.posts.push(c);
+      // 人设连通性：记录动态网友最近评论过的内容（下次发帖/评论能接上话疸）
+      recordDynNpcRecent(authorKey, `评论过：${t.slice(0, 60)}`);
     });
 
     // ---- 楼中楼：约 1/3 的新评论各来 1 条子回复（其他网友/楼主接话） ----
@@ -913,10 +1328,10 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
         .sort(() => Math.random() - 0.5)
         .slice(0, Math.max(1, Math.floor(newComments.length / 3)));
       if (subTargets.length) {
-        // 子回复作者：其他网友（动态+内置混合，偶尔楼主本人回评，很 X）
+        // 子回复作者：其他网友（动态+内置混合，偶尔楼主本人回评，很 X）；同帖去重
         const subKeys = subTargets.map((c) => {
           if (post.authorKey !== 'user' && Math.random() < 0.3) return post.authorKey;
-          return pickCommenters(1, postLang)[0];
+          return pickCommenters(1, postLang, post.content, post.authorKey, ...existingKeys, ...commenterKeys)[0];
         });
         let subTexts: string[] = [];
         try {
@@ -939,9 +1354,9 @@ async function genCommentBatch(postId: string, mode: 'ensure' | 'more'): Promise
         subTargets.forEach((c, i) => {
           let text = subTexts[i];
           if (!text) {
-            // 池子兜底：按子回复者语言取通用池（外语网友外语接话）
+            // 池子兜底：优先主题匹配（接得上评论/主帖），外语网友外语接话
             const subLang = resolveAuthor(subKeys[i]).lang ?? 'zh-Hans';
-            text = pickGenericComment(subLang, usedSub) ?? pickGenericComment('zh-Hans', usedSub) ?? '哈哈哈哈';
+            text = pickTopicComment(`${c.content} ${post.content}`, subLang, usedSub) ?? pickGenericComment(subLang, usedSub) ?? pickGenericComment('zh-Hans', usedSub) ?? '哈哈哈哈';
           }
           const subAt = Math.min(Date.now() - Math.floor(Math.random() * 60_000), c.createdAt + (2 + Math.random() * 30) * 60_000);
           const sub = basePost(subKeys[i], text.slice(0, REPLY_MAX), post.community, Math.max(subAt, c.createdAt + 60_000), c.id, resolveAuthor(c.authorKey).name);

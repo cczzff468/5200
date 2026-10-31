@@ -133,22 +133,39 @@ function isPrivateHost(hostname: string): boolean {
 /**
  * 内置模型兜底（z-ai-web-dev-sdk）：上游故障 / 未配置时把翻译救回来，
  * 与 /api/chat、server-llm.ts 同策略；z-ai SDK 实际接受 system 角色，直接传翻译指令。
+ * 429/限流时指数退避重试（1.5s→3s→6s→12s，共 5 次尝试）：SDK 被朋友圈/论坛等模块并发占用时频繁限流，
+ * 是「翻译一直失败」的主要根源——重试后绝大多数能在限流窗口内成功。
  */
 async function sdkTranslate(messages: UpstreamMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
-  const completion = await zai.chat.completions.create({
-    messages: messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    })),
-    thinking: { type: 'disabled' },
-  });
-  const choice = (completion as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0];
-  const content = choice?.message?.content;
-  const text = typeof content === 'string' ? content.trim() : '';
-  if (!text) throw new Error('内置模型返回空内容');
-  return text;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const completion = await zai.chat.completions.create({
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        thinking: { type: 'disabled' },
+      });
+      const choice = (completion as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0];
+      const content = choice?.message?.content;
+      const text = typeof content === 'string' ? content.trim() : '';
+      if (!text) throw new Error('内置模型返回空内容');
+      return text;
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const rateLimited = /429|too many requests|rate.?limit/i.test(msg);
+      if (rateLimited && attempt < 4) {
+        await new Promise((r) => setTimeout(r, Math.min(12000, 1500 * Math.pow(2, attempt))));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('内置模型翻译失败');
 }
 
 export async function POST(req: NextRequest) {

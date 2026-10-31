@@ -187,6 +187,10 @@ const QUEUE_KEY = 'moments-queue';
 const AUTO_CFG_KEY = 'moments-auto-cfg';
 /** 自动发布失败退避 */
 const attemptKey = (contactId: string, platform: MomentPlatform) => `moments-auto-attempt:${contactId}:${platform}`;
+/** SDK/上游账号级 429 限流的全局冷却标记：自动发帖全部暂停 5 分钟，
+ *  别让几十个角色排队撞墙耗光配额——论坛翻译/生成等前台功能更需要这点份额 */
+const GLOBAL_429_UNTIL_KEY = 'moments-auto-429-until';
+const GLOBAL_429_COOLDOWN_MS = 5 * 60_000;
 
 /** C4：聊天路径 [发朋友圈] 落库后登记尝试标记——调度器 10 分钟内不再为该角色自动发帖
  *  （聊天路径此前不写标记，调度器可能在几秒后同刻再自动发一条，同屏双帖穿帮） */
@@ -2591,6 +2595,13 @@ async function drainInteractions(
 /** 到点检查自动发布（定时 / 频率 / 聊天灵感；一次 tick 最多发 1 条，防突发轰炸）
  *  feat-64：开关与节奏按平台独立 —— 朋友圈/空间各自的 autoPostEnabled 与 min/max 间隔互不影响 */
 async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
+  // 账号级 429 冷却中：本轮 tick 直接跳过（配额让给前台翻译/生成）
+  try {
+    const until = kvGet<number>(GLOBAL_429_UNTIL_KEY) ?? 0;
+    if (Date.now() < until) return;
+  } catch {
+    /* kv 异常不拦发帖 */
+  }
   const plan: { peer: ContactRecord; platform: MomentPlatform; cfg: MomentAutoCfg; hint?: string }[] = [];
   for (const platform of ['wx', 'qq'] as MomentPlatform[]) {
     const settings = getMomentsSettings(platform);
@@ -2670,6 +2681,16 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
     emitMomentsChanged(pick.platform);
   } catch (err) {
     // 保留退避标记（10 分钟后重试）
+    const errMsg = err instanceof Error ? err.message : String(err);
+    // 429/限流是账号级的：写全局冷却 5 分钟，之后所有角色暂停自动发帖，
+    // 把 SDK 配额让给前台（论坛翻译一直失败的主要根源就是这里排队撞 429）
+    if (/429|too many requests|rate.?limit/i.test(errMsg)) {
+      try {
+        kvSet(GLOBAL_429_UNTIL_KEY, Date.now() + GLOBAL_429_COOLDOWN_MS);
+      } catch {
+        /* kv 异常忽略 */
+      }
+    }
     console.warn('[moments] 自动发帖失败', pick.peer.name, pick.platform, err);
   }
 }

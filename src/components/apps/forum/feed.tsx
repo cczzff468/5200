@@ -9,12 +9,13 @@
  * 「···」更多按钮 → 底部弹层菜单（推荐/不感兴趣/举报，主框架渲染）。
  */
 
-import { memo, useState } from 'react';
+import { memo } from 'react';
 import {
   castVote as castVoteCore,
   communityName,
   countShort,
   forumData,
+  likesOf,
   relTime,
   repliesOf,
   resolveAuthor,
@@ -243,10 +244,10 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
   const a = resolveAuthor(post.authorKey);
   const liked = post.likes.includes('user');
   const repostedByMe = post.reposted === true;
-  const [bookmarked, setBookmarked] = useState(false);
   const communityLabel = post.community && post.community !== 'hot' ? communityName(post.community) : '';
   const time = relTime(post.createdAt);
   const replyCount = repliesOf(forumData(), post.id).length;
+  const likeCount = likesOf(post);
   const media = post.media ?? [];
   const scheduled = typeof post.visibleAt === 'number' && post.visibleAt > Date.now();
 
@@ -318,7 +319,8 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
               ⏱ 定时发布 · {new Date(post.visibleAt!).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 自动发出
             </p>
           )}
-          {/* 操作行：X 官方顺序 回复/转推/点赞/书签/分享（均分铺满可用宽，悬停浅色圆底） */}
+          {/* 操作行：X 官方顺序 回复/转推/点赞/浏览/分享（用户要求：爱心旁边是浏览不是书签；
+              浏览量与点赞数为分级热度值：十几/几十/几百/几千/几万/几十万/几百万） */}
           <div className="mt-2 mb-1 flex w-full items-center justify-between">
             <ActionBtn
               icon={XIcons.reply()}
@@ -340,7 +342,7 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
             />
             <ActionBtn
               icon={XIcons.like(liked)}
-              count={post.likes.length}
+              count={likeCount}
               label={liked ? '取消点赞' : '点赞'}
               color={liked ? t.pink : t.secondary}
               hoverColor={t.pink}
@@ -348,15 +350,13 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
               onClick={() => f.likeToggle(post.id)}
             />
             <ActionBtn
-              icon={XIcons.bookmark(bookmarked)}
-              label={bookmarked ? '移除书签' : '添加书签'}
-              color={bookmarked ? t.blue : t.secondary}
+              icon={XIcons.views()}
+              count={post.views}
+              label="浏览量"
+              color={t.secondary}
               hoverColor={t.blue}
               hoverBg={HOVER_BG.blue}
-              onClick={() => {
-                setBookmarked((b) => !b);
-                f.toast(bookmarked ? '已从书签移除' : '已添加到书签');
-              }}
+              onClick={() => f.toast(`这条帖子已有 ${countShort(post.views)} 次浏览`)}
             />
             <ActionBtn
               icon={XIcons.share()}

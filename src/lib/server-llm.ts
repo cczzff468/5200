@@ -51,7 +51,7 @@ interface UpstreamChoice {
   text?: unknown;
 }
 
-/** 用户上游非流式补全；失败抛错（由调用方兜底） */
+/** 用户上游非流式补全；失败抛错（由调用方兜底）。429 限流时退避重试一次。 */
 async function upstreamComplete(config: UpstreamConfig, messages: LLMMessage[]): Promise<string> {
   const body = JSON.stringify({
     model: config.model,
@@ -60,21 +60,28 @@ async function upstreamComplete(config: UpstreamConfig, messages: LLMMessage[]):
     max_tokens: config.maxTokens,
     stream: false,
   });
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+  };
   let lastErr = '';
   for (const url of buildChatCandidates(config.baseUrl)) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
-        },
-        body,
-        signal: AbortSignal.timeout(60_000),
-      });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(60_000) });
+      } catch (err) {
+        lastErr = err instanceof Error ? err.message : String(err);
+        break; // 网络不通：换下一个候选端点
+      }
       if (!res.ok) {
+        if (res.status === 429 && attempt === 0) {
+          // 429 限流：退避 2.5s 后同端点重试一次
+          await new Promise((r) => setTimeout(r, 2500));
+          continue;
+        }
         lastErr = `上游 ${res.status}`;
-        continue;
+        break; // 换下一个候选端点
       }
       const data: unknown = await res.json().catch(() => null);
       const choice = (data as { choices?: UpstreamChoice[] })?.choices?.[0];
@@ -83,24 +90,41 @@ async function upstreamComplete(config: UpstreamConfig, messages: LLMMessage[]):
         (typeof choice?.text === 'string' ? choice.text : '');
       if (content.trim()) return content;
       lastErr = '上游返回空内容';
-    } catch (err) {
-      lastErr = err instanceof Error ? err.message : String(err);
+      break;
     }
   }
   throw new Error(lastErr || '上游不可用');
 }
 
-/** z-ai-web-dev-sdk 兜底（后端内置） */
+/** z-ai-web-dev-sdk 兜底（后端内置）。
+ *  429/限流时指数退避重试（1.5s→3s→6s）：SDK 在多模块并发下（朋友圈自动发帖/
+ *  论坛生成/翻译）频繁限流，直接抛错会让论坛生成与翻译「一直失败」——
+ *  重试后绝大多数能在几秒内拿到结果。 */
 async function sdkComplete(messages: LLMMessage[]): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
-  const completion = await zai.chat.completions.create({
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    thinking: { type: 'disabled' },
-  });
-  const text = completion.choices[0]?.message?.content ?? '';
-  if (!text.trim()) throw new Error('内置模型返回空内容');
-  return text;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const completion = await zai.chat.completions.create({
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        thinking: { type: 'disabled' },
+      });
+      const text = completion.choices[0]?.message?.content ?? '';
+      if (!text.trim()) throw new Error('内置模型返回空内容');
+      return text;
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const rateLimited = /429|too many requests|rate.?limit/i.test(msg);
+      if (rateLimited && attempt < 3) {
+        await new Promise((r) => setTimeout(r, 1500 * Math.pow(2, attempt)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('内置模型调用失败');
 }
 
 /**
