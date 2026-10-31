@@ -3,15 +3,18 @@
 /**
  * X论坛 · 帖子详情页（X thread + 微信式嵌套评论）。
  * 顶栏：返回 + 「帖子」；主帖 48px 头像 / 名行右侧「关注」黑胶囊；
- * 官方元数据行「H:mm · 年月日 · N 次浏览」+ 蓝色「翻译」按钮（AI 翻译正文，译文展示在正文下方）；
- * 互动栏（回复/转推/点赞/分享带数字）+ 分隔线下接评论流；
+ * 官方元数据行「H:mm · 年月日 · N 次浏览」+ 蓝色「翻译」按钮
+ * （X 官方行为：译文原位替换正文展示，下方标注「由 AI 翻译」，
+ * 按钮可在 查看原文/查看译文 间切换）；
+ * 互动栏（回复/转推/书签/分享/点赞，爱心置最右，带数字）+ 分隔线下接评论流；
  * 评论流为微信式嵌套：顶层评论（头像+名字+内容+回复/赞），
- * 子回复收在灰色圆角盒里，一行一条「名字 回复 名字2：内容」（名字蓝色，点击可再回复）；
+ * 子回复同样带头像+名字+时间+回复/爱心（与顶层评论一致的完整样式）；
  * 底部回复输入条（头像 + input + 蓝色发送圆钮），
  * 点击评论/子回复即定向回复（显示「回复 @xx」提示条，可取消）。
  */
 
 import { useRef, useState, useSyncExternalStore } from 'react';
+import { Languages } from 'lucide-react';
 import {
   communityName,
   countShort,
@@ -76,7 +79,8 @@ function ThreadAction({
 }
 
 /** 微信式嵌套评论行：顶层评论 = 头像 + 蓝名 + 内容 + （回复/赞）；
- *  子回复收在灰色圆角盒里「名字 回复 名字2：内容」（微信 Moments 观感）。
+ *  子回复同样带头像 + 蓝名 + 时间 + 内容 + （回复/赞），收在灰色圆角盒里
+ *  （与顶层评论一致的完整样式，用户要求子回复也显示头像名字爱心）。
  *  点评论/子回复 → 定向回复（onReply 传顶层评论 id + 被回复者名字）。 */
 function CommentRow({
   comment,
@@ -123,11 +127,12 @@ function CommentRow({
           <p className="mt-[2px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]" style={{ color: t.text }}>
             {comment.content}
           </p>
-          {/* 子回复（微信式嵌套：灰盒 + 「A 回复 B：内容」一行一条，蓝名可点头像页） */}
+          {/* 子回复（微信式嵌套：灰盒内每条子回复也是 头像+名字+时间+内容+回复/爱心 完整样式） */}
           {subReplies.length > 0 && (
-            <div className="mt-2 rounded-xl px-3 py-[3px]" style={{ background: t.dark ? '#202327' : '#f7f9f9' }}>
+            <div className="mt-2 rounded-xl px-3 py-1" style={{ background: t.dark ? '#202327' : '#f7f9f9' }}>
               {subReplies.map((s) => {
                 const sa = resolveAuthor(s.authorKey);
+                const sLiked = s.likes.includes('user');
                 const replying = s.replyToName && s.replyToName !== sa.name ? s.replyToName : null;
                 return (
                   <div
@@ -142,27 +147,58 @@ function CommentRow({
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') onReply(comment.id, sa.name);
                     }}
-                    className="cursor-pointer rounded-lg py-[7px] transition-colors active:opacity-60"
+                    className="cursor-pointer rounded-lg py-2 transition-colors active:opacity-60"
                   >
-                    <p className="whitespace-pre-wrap break-words text-[14px] leading-[1.45]">
-                      <button
-                        type="button"
-                        onClick={() => f.openProfile(s.authorKey)}
-                        className="font-bold"
-                        style={{ color: t.blue }}
-                      >
-                        {sa.name}
-                      </button>
-                      {replying && (
-                        <>
-                          <span style={{ color: t.secondary }}> 回复 </span>
-                          <span className="font-bold" style={{ color: t.blue }}>
-                            {replying}
+                    <div className="flex gap-2">
+                      <XAvatar authorKey={s.authorKey} size={28} onClick={() => f.openProfile(s.authorKey)} />
+                      <div className="min-w-0 flex-1">
+                        {/* 名行：蓝名 + 时间 */}
+                        <p className="flex items-baseline gap-2">
+                          <button
+                            type="button"
+                            onClick={() => f.openProfile(s.authorKey)}
+                            className="max-w-[130px] truncate text-[14px] font-bold"
+                            style={{ color: t.blue }}
+                          >
+                            {sa.name}
+                          </button>
+                          <span className="shrink-0 text-[11px]" style={{ color: t.secondary }}>
+                            {relTime(s.createdAt)}
                           </span>
-                        </>
-                      )}
-                      <span style={{ color: t.text }}>：{s.content}</span>
-                    </p>
+                        </p>
+                        {/* 被回复人提示（非顶层作者时） */}
+                        {replying && (
+                          <p className="text-[12px]" style={{ color: t.secondary }}>
+                            回复 <span style={{ color: t.blue }}>@{replying}</span>
+                          </p>
+                        )}
+                        {/* 子回复正文 */}
+                        <p className="mt-[1px] whitespace-pre-wrap break-words text-[14px] leading-[1.45]" style={{ color: t.text }}>
+                          {s.content}
+                        </p>
+                        {/* 操作行：回复 / 爱心（与顶层评论一致） */}
+                        <div className="mt-1 flex items-center gap-4">
+                          <button
+                            type="button"
+                            onClick={() => onReply(comment.id, sa.name)}
+                            className="text-[12px] font-medium active:opacity-50"
+                            style={{ color: t.secondary }}
+                          >
+                            回复
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={sLiked ? '取消点赞' : '点赞'}
+                            onClick={() => f.likeToggle(s.id)}
+                            className="flex items-center gap-1 rounded-full py-[2px] text-[12px] font-medium transition-colors active:opacity-50"
+                            style={{ color: sLiked ? t.pink : t.secondary }}
+                          >
+                            {XIcons.like(sLiked, 13)}
+                            {s.likes.length > 0 && <span>{s.likes.length}</span>}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 );
               })}
@@ -366,19 +402,16 @@ export function ThreadView({ postId }: { postId: string }) {
               </div>
             </div>
           </div>
+          {/* 正文：翻译激活时原位替换为译文（X 官方行为），未翻译/收起时显示原文 */}
           <p className="mt-2.5 whitespace-pre-wrap break-words text-[17px] leading-[1.42]" style={{ color: t.text }}>
-            {post.content}
+            {tr.shown && tr.text ? tr.text : post.content}
           </p>
-          {/* AI 译文（点「翻译」后展示；收起后再点重新展开） */}
+          {/* 翻译标注行（译文已原位替换正文） */}
           {tr.text && tr.shown && (
-            <div className="mt-2.5 rounded-2xl p-3" style={{ background: t.hover }}>
-              <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.42]" style={{ color: t.text }}>
-                {tr.text}
-              </p>
-              <p className="mt-1 text-[12px]" style={{ color: t.secondary }}>
-                由 AI 翻译
-              </p>
-            </div>
+            <p className="mt-1.5 flex items-center gap-1.5 text-[13px]" style={{ color: t.secondary }}>
+              <Languages width={13} height={13} strokeWidth={1.9} aria-hidden="true" />
+              由 AI 翻译
+            </p>
           )}
           {/* 主帖附图 / 投票 / 位置（与帖子卡同规格） */}
           {(post.media ?? []).length > 0 && <PostMedia media={post.media!} />}
@@ -418,12 +451,12 @@ export function ThreadView({ postId }: { postId: string }) {
               disabled={tr.loading}
               className="ml-1 text-[14px] font-bold transition-opacity active:opacity-50 disabled:opacity-60"
               style={{ color: t.blue }}
-              aria-label={tr.text ? (tr.shown ? '收起译文' : '展开译文') : 'AI 翻译帖子'}
+              aria-label={tr.text ? (tr.shown ? '查看原文' : '查看译文') : 'AI 翻译帖子'}
             >
-              {tr.loading ? '翻译中…' : tr.text ? (tr.shown ? '收起译文' : '查看译文') : '翻译'}
+              {tr.loading ? '翻译中…' : tr.text ? (tr.shown ? '查看原文' : '查看译文') : '翻译'}
             </button>
           </p>
-          {/* 互动栏（X 官方：回复/转推/点赞/书签/分享，带数字） */}
+          {/* 互动栏（X 官方：回复/转推/书签/分享/点赞，爱心置最右在评论区上方，带数字） */}
           <div className="mt-1 flex items-center justify-between border-b py-3" style={{ borderColor: t.border }}>
             <ThreadAction
               icon={XIcons.reply(21)}
@@ -442,15 +475,6 @@ export function ThreadView({ postId }: { postId: string }) {
               hoverColor={t.green}
               hoverBg="rgba(0,186,124,0.12)"
               onClick={() => f.repostToggle(post.id)}
-            />
-            <ThreadAction
-              icon={XIcons.like(liked, 21)}
-              count={post.likes.length}
-              label={liked ? '取消点赞' : '点赞'}
-              color={liked ? t.pink : t.secondary}
-              hoverColor={t.pink}
-              hoverBg="rgba(249,24,128,0.12)"
-              onClick={() => f.likeToggle(post.id)}
             />
             <ThreadAction
               icon={XIcons.bookmark(bookmarked, 21)}
@@ -477,6 +501,16 @@ export function ThreadView({ postId }: { postId: string }) {
                 }
                 f.toast('链接已复制');
               }}
+            />
+            {/* 爱心移到最右面（用户要求，位于评论区上方互动栏最右端） */}
+            <ThreadAction
+              icon={XIcons.like(liked, 21)}
+              count={post.likes.length}
+              label={liked ? '取消点赞' : '点赞'}
+              color={liked ? t.pink : t.secondary}
+              hoverColor={t.pink}
+              hoverBg="rgba(249,24,128,0.12)"
+              onClick={() => f.likeToggle(post.id)}
             />
           </div>
         </div>

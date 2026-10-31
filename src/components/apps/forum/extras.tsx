@@ -223,8 +223,9 @@ export function CommunitiesView() {
   const t = f.t;
   useSyncExternalStore(subscribeForum, forumSnapshot, forumSnapshot);
   const d = forumData();
-  const mine = COMMUNITY_DEFS.filter((c) => d.communities.find((x) => x.id === c.id)?.joined);
-  const rest = COMMUNITY_DEFS.filter((c) => !d.communities.find((x) => x.id === c.id)?.joined);
+  // 「今日热议」= 广场概念（与首页「为你推荐」重复），已按用户要求从社区列表移除
+  const mine = COMMUNITY_DEFS.filter((c) => c.id !== 'hot' && d.communities.find((x) => x.id === c.id)?.joined);
+  const rest = COMMUNITY_DEFS.filter((c) => c.id !== 'hot' && !d.communities.find((x) => x.id === c.id)?.joined);
 
   return (
     <div className="flex h-full flex-col" style={{ background: t.bg, color: t.text }}>

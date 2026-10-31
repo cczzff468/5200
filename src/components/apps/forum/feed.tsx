@@ -192,14 +192,27 @@ export function PollBlock({ post }: { post: ForumPost }) {
   );
 }
 
-/** 位置行（X：📍 地名，次要色，帖子卡与 thread 主帖共用） */
+/** 位置行（用户要求美化：品牌蓝定位胶囊 + 精修定位图标，帖子卡与 thread 主帖共用） */
 export function LocationLine({ name }: { name: string }) {
   const t = useXTheme();
   return (
-    <p className="mt-1 flex items-center gap-1.5 text-[14px]" style={{ color: t.secondary }} aria-label={`位置：${name}`}>
-      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-        <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" strokeLinecap="round" strokeLinejoin="round" />
-        <circle cx="12" cy="10" r="3" />
+    <p
+      className="mt-2 flex w-fit items-center gap-1.5 rounded-full px-2.5 py-[5px] text-[13px] font-medium"
+      style={{
+        color: t.blue,
+        background: t.dark ? 'rgba(29,155,240,0.12)' : 'rgba(29,155,240,0.08)',
+      }}
+      aria-label={`位置：${name}`}
+    >
+      {/* 精修定位图标：品牌蓝描边水滴 + 实心圆心 */}
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+        <path
+          d="M12 21.5s-7.5-5.9-7.5-11.4a7.5 7.5 0 1 1 15 0c0 5.5-7.5 11.4-7.5 11.4Z"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinejoin="round"
+        />
+        <circle cx="12" cy="10" r="2.6" fill="currentColor" />
       </svg>
       {name}
     </p>

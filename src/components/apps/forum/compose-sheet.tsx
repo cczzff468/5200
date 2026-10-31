@@ -8,21 +8,20 @@
  * - 正文区：40px 头像 + 「有什么新鲜事？」20px 大输入；
  * - 媒体预览：2 列网格 + 右上删除角标（相册/GIF，最多 4 张）；
  * - 投票编辑卡：选项 2~4 条，可增删（工具栏投票开关）；
- * - 隐私行：🌍「所有人都可以回复」蓝字 + 右侧「发布到·版块」胶囊；
+ * - 隐私行/版块胶囊已按用户要求移除（「所有人都可以回复」与「今日热议」不再展示）；
  * - 工具行（细分隔线上方）：相册（手机上传/文字搜图二选一）/ 投票 / 表情 / 定时 / 位置 / 旗子(话题)
  *   未激活灰色线条（用户指定），激活蓝底白图标 + 字数圆环；
- * - 底行：左下灰色圆角「全屏」方块（写作模式）+ 定时/位置状态。
+ * - 底行：左下灰色圆角「全屏」方块（写作模式）+ 定时/位置状态芯片（图标化美化）。
  *
  * 数据出参 ComposePayload：media / poll / location / visibleAt（定时帖）。
  * 话题面板：支持自定义话题输入 + 热门话题列表。
  */
 
-import { useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   BarChart3,
   CalendarClock,
   Flag,
-  Globe,
   Image as ImageIcon,
   MapPin,
   Maximize2,
@@ -30,7 +29,7 @@ import {
   Smile,
   X,
 } from 'lucide-react';
-import { COMMUNITY_DEFS, trendingTopics, forumData } from '@/lib/forum/core';
+import { trendingTopics, forumData } from '@/lib/forum/core';
 import { XAvatar, XIcons, useXTheme } from './shared';
 import { useForum } from './ctx';
 
@@ -155,13 +154,11 @@ export function ComposeSheet({
   const f = useForum();
   const t = f.t;
   const [text, setText] = useState('');
-  const [communityId, setCommunityId] = useState<string>('hot');
   const [media, setMedia] = useState<string[]>([]);
   const [pollOptions, setPollOptions] = useState<string[] | null>(null);
   const [location, setLocation] = useState<string | null>(null);
   const [visibleAt, setVisibleAt] = useState<number | null>(null);
   const [full, setFull] = useState(false);
-  const [picking, setPicking] = useState(false);
   const [sheet, setSheet] = useState<null | 'gallery' | 'emoji' | 'schedule' | 'geo' | 'gif' | 'topic'>(null);
   const [gifQuery, setGifQuery] = useState('');
   const [gifResults, setGifResults] = useState<{ url: string; source?: string }[]>([]);
@@ -173,11 +170,6 @@ export function ComposeSheet({
 
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
-
-  const communityLabel = useMemo(
-    () => COMMUNITY_DEFS.find((c) => c.id === communityId)?.name ?? '今日热议',
-    [communityId],
-  );
 
   const left = LIMIT - text.length;
   const validPoll =
@@ -274,7 +266,7 @@ export function ComposeSheet({
       if (pollOptions && !validPoll) f.toast('投票至少需要 2 个非空选项');
       return;
     }
-    onPublish(text.trim(), communityId, {
+    onPublish(text.trim(), null, {
       media: media.length ? media : undefined,
       poll: pollOptions && validPoll ? { options: pollOptions.filter((o) => o.trim()) } : undefined,
       location: location ?? undefined,
@@ -425,32 +417,8 @@ export function ComposeSheet({
           </div>
         )}
 
-        {/* 隐私行（官方 Earth · Everyone can reply 蓝字）+ 右侧版块胶囊 */}
-        {!full && (
-          <div className="flex shrink-0 items-center justify-between gap-2 px-4 py-2">
-            <button
-              type="button"
-              onClick={() => f.toast('回复权限：所有人都可以回复')}
-              className="flex items-center gap-2"
-              style={{ color: t.blue }}
-              aria-label="回复权限设置"
-            >
-              <Globe width={16} height={16} strokeWidth={SW} aria-hidden="true" />
-              <span className="text-[13px] font-medium">所有人都可以回复</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setPicking(true)}
-              className="flex h-[30px] shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-bold active:opacity-60"
-              style={{ background: t.dark ? 'rgba(29,155,240,0.15)' : 'rgba(29,155,240,0.12)', color: t.blue }}
-            >
-              <MapPin width={13} height={13} strokeWidth={2.2} aria-hidden="true" />
-              {communityLabel}
-            </button>
-          </div>
-        )}
-
-        {/* 工具行（相册/投票/表情/定时/位置/话题，灰色线条；相册含手机上传与文字搜图两种方式）+ 字数圆环 */}
+        {/* 工具行（相册/投票/表情/定时/位置/话题，灰色线条；相册含手机上传与文字搜图两种方式）+ 字数圆环
+            （隐私行「所有人都可以回复」与「今日热议」版块胶囊已按用户要求删除） */}
         <div
           className="forum-hide-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-t px-3 py-1"
           style={{ borderColor: t.border }}
@@ -502,7 +470,8 @@ export function ComposeSheet({
                   className="flex h-[28px] shrink-0 items-center gap-1.5 rounded-full px-3 text-[12px] font-bold active:opacity-60"
                   style={{ background: 'rgba(0,186,124,0.14)', color: t.green }}
                 >
-                  ⏱ {fmtSchedule(visibleAt)} · 点击修改
+                  <CalendarClock width={13} height={13} strokeWidth={2.2} aria-hidden="true" />
+                  {fmtSchedule(visibleAt)} · 点击修改
                 </button>
               )}
               {location !== null && (
@@ -512,7 +481,8 @@ export function ComposeSheet({
                   className="flex h-[28px] shrink-0 items-center gap-1.5 rounded-full px-3 text-[12px] font-bold active:opacity-60"
                   style={{ background: 'rgba(29,155,240,0.14)', color: t.blue }}
                 >
-                  📍 {location} · 点击修改
+                  <MapPin width={13} height={13} strokeWidth={2.2} aria-hidden="true" />
+                  {location} · 点击修改
                 </button>
               )}
               <span className="ml-auto text-[12px]" style={{ color: t.secondary }}>
@@ -538,59 +508,8 @@ export function ComposeSheet({
         )}
       </div>
 
-      {/* 版块选择 sheet */}
-      {picking && (
-        <div className="absolute inset-0 z-10" role="dialog" aria-label="选择版块">
-          <button
-            type="button"
-            aria-label="关闭"
-            className="absolute inset-0 animate-[forum-fade_.18s_ease-out]"
-            style={{ background: 'rgba(0,0,0,0.4)' }}
-            onClick={() => setPicking(false)}
-          />
-          <div
-            className="forum-hide-scrollbar absolute inset-x-0 bottom-0 max-h-[70%] animate-[forum-sheet_.24s_ease-out] overflow-y-auto rounded-t-2xl pb-[24px]"
-            style={{ background: t.bg, color: t.text }}
-          >
-            <p className="px-5 pb-2 pt-4 text-[17px] font-bold">发布到版块</p>
-            {COMMUNITY_DEFS.map((c) => {
-              const on = c.id === communityId;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => {
-                    setCommunityId(c.id);
-                    setPicking(false);
-                  }}
-                  className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors active:opacity-60"
-                  style={{ background: on ? t.hover : 'transparent' }}
-                >
-                  <div
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] text-[16px] font-bold text-white"
-                    style={{ background: c.coverBg }}
-                  >
-                    {c.name.slice(0, 1)}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <span className="block text-[15px] font-bold">{c.name}</span>
-                    <span className="block truncate text-[13px]" style={{ color: t.secondary }}>
-                      {c.desc}
-                    </span>
-                  </div>
-                  {on && (
-                    <span className="text-[13px] font-bold" style={{ color: t.blue }}>
-                      已选
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* emoji / 定时 / 位置 / GIF / 话题 底部弹层（互斥，一次一个） */}
+      {/* emoji / 定时 / 位置 / GIF / 话题 底部弹层（互斥，一次一个）;
+          版块选择弹层已随隐私行一并移除（用户要求删除「今日热议」） */}
       {sheet && (
         <div className="absolute inset-0 z-10" role="dialog" aria-label="工具面板">
           <button

@@ -228,7 +228,8 @@ export default function ForumApp() {
 
   const d = forumData();
   const seeded = d.seeded && d.posts.length > 0;
-  const pinnedTags = (d.pinnedTags ?? []).filter((id) => COMMUNITY_DEFS.some((c) => c.id === id));
+  // pinnedTags 过滤掉 'hot'（今日热议 = 广场，与「为你推荐」重复，不作为分类标签）
+  const pinnedTags = (d.pinnedTags ?? []).filter((id) => id !== 'hot' && COMMUNITY_DEFS.some((c) => c.id === id));
 
   /** 主页 tab 集：为你推荐 | 关注 | 已添加的分类标签（按添加顺序） */
   const homeTabs: { key: string; label: string }[] = useMemo(
@@ -647,7 +648,8 @@ export default function ForumApp() {
                 </p>
                 <div className="mx-5 mt-3 border-t" style={{ borderColor: t.border }} />
               </div>
-              {COMMUNITY_DEFS.map((c) => {
+              {/* 「今日热议」= 广场（与为你推荐重复），已按用户要求从标签列表移除 */}
+              {COMMUNITY_DEFS.filter((c) => c.id !== 'hot').map((c) => {
                 const on = pinnedTags.includes(c.id);
                 return (
                   <button
