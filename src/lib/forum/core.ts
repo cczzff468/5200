@@ -502,11 +502,17 @@ export function forumRev(): number {
 
 // ---------------- 作者解析 ----------------
 
-/** 模块级缓存填充：读联系人 + 机主名/头像（App 挂载时调一次；联系人变化时可重调） */
+/** 模块级缓存填充：读联系人 + 机主名/头像（App 挂载时调一次；联系人变化时可重调）
+ *  头像优先级（与微信/QQ 同源）：论坛内自定义 › 机主联系人头像 › 设置›个人信息头像。
+ *  修复：此前只读 settings.profile.avatar，机主头像存在联系人记录上（微信用的就是它），
+ *  导致个人主页/发帖等全部显示灰色默认头像。 */
 export async function refreshForumAuthors(): Promise<void> {
   try {
     const list = await listContacts();
     contactsSnap = list;
+    // 机主联系人（kind='user' 且非小号档案）的头像：微信/视频通话等所有 App 的「我」头像同源
+    const me = list.find((c) => c.kind === 'user' && !c.altOf);
+    if (me?.avatar) ownerAvatar = me.avatar;
   } catch {
     contactsSnap = [];
   }
@@ -518,7 +524,8 @@ export async function refreshForumAuthors(): Promise<void> {
   try {
     const { useSettings } = await import('@/lib/ios/store');
     const prof = useSettings.getState().profile;
-    ownerAvatar = prof?.avatar || null;
+    // 联系人头像优先；联系人也未设置时回退设置›个人信息的头像
+    if (!ownerAvatar) ownerAvatar = prof?.avatar || null;
     if (prof?.name) ownerName = prof.name;
   } catch {
     /* 保持默认 */

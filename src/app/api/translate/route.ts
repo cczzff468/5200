@@ -315,6 +315,15 @@ export async function POST(req: NextRequest) {
   }
 
   const detail = lastErr instanceof Error && lastErr.message ? lastErr.message : String(lastErr ?? '');
+  // 上游完全连不上：先走服务端内置模型兜底（浏览器直连公网地址大概率也不通，
+  // 且直连超时长达 120s×2 会把翻译卡住几分钟）；内置也失败才回 directOnly 让浏览器试直连。
+  if (lastErr !== null) {
+    try {
+      return NextResponse.json({ translation: await sdkTranslate(messages), viaSdk: true });
+    } catch {
+      /* 内置模型也失败：落到 directOnly 报错 */
+    }
+  }
   return NextResponse.json(
     { error: `无法连接到上游接口：${detail}`, directOnly: true },
     { status: 502 }

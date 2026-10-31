@@ -73,7 +73,9 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
   const joined = new Date(d.joinedAt);
   const joinedLabel = `${joined.getFullYear()}年${joined.getMonth() + 1}月加入`;
   const myBanner = isMe ? d.profile?.banner : undefined;
-  const bannerBg = a.npcAvatar?.bg ?? (a.key.startsWith('char:') ? '#5b7d9e' : '#657786');
+  /** 真人主页（自己/联系人）无自定义背景时的默认横幅（精致渐变艺术图）；NPC 用品牌色渐变 */
+  const useDefaultBanner = !myBanner && (isMe || authorKey.startsWith('char:'));
+  const bannerBg = a.npcAvatar?.bg ?? (authorKey.startsWith('char:') ? '#5b7d9e' : '#657786');
   const followingCount = isMe ? myFollowingCount(d) : 3 + (all.length > 3 ? 2 : 0);
 
   /** 页内搜索关键词过滤（当前 tab 的列表） */
@@ -188,12 +190,16 @@ export function ProfileView({ authorKey }: { authorKey: AuthorKey }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* 横幅（150px，X 官方比例；背景图在「编辑资料」里上传，横幅上无任何按钮） */}
+        {/* 横幅（150px，X 官方比例；背景图在「编辑资料」里上传；未上传时真人主页用默认艺术横幅） */}
         <div
           className="relative h-[150px] w-full shrink-0 overflow-hidden"
-          style={myBanner ? undefined : { background: `linear-gradient(135deg, ${bannerBg}, ${t.dark ? '#1b2733' : '#c9d6e2'})` }}
+          style={useDefaultBanner || myBanner ? undefined : { background: `linear-gradient(135deg, ${bannerBg}, ${t.dark ? '#1b2733' : '#c9d6e2'})` }}
         >
-          {myBanner && <img src={myBanner} alt="主页背景图" className="h-full w-full object-cover" />}
+          {myBanner ? (
+            <img src={myBanner} alt="主页背景图" className="h-full w-full object-cover" />
+          ) : useDefaultBanner ? (
+            <img src="/forum-default-banner.svg" alt="默认背景图" className="h-full w-full object-cover" />
+          ) : null}
         </div>
         {/* 头像 + 操作排（X：80px 半嵌横幅，4px 底色描边）。
             描边 span 必须显式 inline-block：inline 无法约束尺寸，头像会被内容撑破变形。 */}

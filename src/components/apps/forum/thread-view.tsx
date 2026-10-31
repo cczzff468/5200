@@ -1,19 +1,23 @@
 'use client';
 
 /**
- * X论坛 · 帖子详情页（X thread）。
+ * X论坛 · 帖子详情页（X thread + 微信式嵌套评论）。
  * 顶栏：返回 + 「帖子」；主帖 48px 头像 / 名行右侧「关注」黑胶囊；
- * 官方元数据行「H:mm · 年月日 · N 次浏览」（日期与浏览加粗）；统计行（N 转推·N 点赞·N 浏览）；
- * 互动栏（回复/转推/点赞/分享带数字）+ 分隔线下接回复流（PostCard）；
- * 底部回复输入条（头像 + input + 蓝色发送圆钮）。
+ * 官方元数据行「H:mm · 年月日 · N 次浏览」+ 蓝色「翻译」按钮（AI 翻译正文，译文展示在正文下方）；
+ * 互动栏（回复/转推/点赞/分享带数字）+ 分隔线下接评论流；
+ * 评论流为微信式嵌套：顶层评论（头像+名字+内容+回复/赞），
+ * 子回复收在灰色圆角盒里，一行一条「名字 回复 名字2：内容」（名字蓝色，点击可再回复）；
+ * 底部回复输入条（头像 + input + 蓝色发送圆钮），
+ * 点击评论/子回复即定向回复（显示「回复 @xx」提示条，可取消）。
  */
 
-import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import {
   communityName,
   countShort,
   forumData,
   forumSnapshot,
+  relTime,
   repliesOf,
   resolveAuthor,
   saveForum,
@@ -23,9 +27,11 @@ import {
   type ForumPost,
 } from '@/lib/forum/core';
 import { queueAiReplyToUserReply } from '@/lib/forum/engine';
+import { detectMessageLang, requestTranslation } from '@/lib/chat-translate';
+import { useSettings } from '@/lib/ios/store';
 import { XAvatar, XIcons, VerifiedBadge } from './shared';
 import { useForum } from './ctx';
-import { PostCard, CommunityIcon, PostMedia, PollBlock, LocationLine } from './feed';
+import { CommunityIcon, PostMedia, PollBlock, LocationLine } from './feed';
 
 /** 详情页互动栏单个图标钮（X 官方：带数字，悬停浅色圆底 + 图标/数字同步变色） */
 function ThreadAction({
@@ -69,15 +75,146 @@ function ThreadAction({
   );
 }
 
+/** 微信式嵌套评论行：顶层评论 = 头像 + 蓝名 + 内容 + （回复/赞）；
+ *  子回复收在灰色圆角盒里「名字 回复 名字2：内容」（微信 Moments 观感）。
+ *  点评论/子回复 → 定向回复（onReply 传顶层评论 id + 被回复者名字）。 */
+function CommentRow({
+  comment,
+  onReply,
+}: {
+  comment: ForumPost;
+  onReply: (commentId: string, name: string) => void;
+}) {
+  const f = useForum();
+  const t = f.t;
+  const a = resolveAuthor(comment.authorKey);
+  // 直算不 memo：论坛数据对象会被引擎原位变更（saveForum 浅拷贝外壳、posts 原数组），
+  // useMemo 依赖 [comment.id] 在新增子回复时不会重算 → 子回复列表滞留旧值（同 profile-view 的教训）。
+  const subReplies = repliesOf(forumData(), comment.id);
+  const liked = comment.likes.includes('user');
+
+  return (
+    <div
+      className="border-b px-4 py-3"
+      style={{ borderColor: t.border }}
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest('button')) return;
+        onReply(comment.id, a.name); // 微信行为：点评论即回复
+      }}
+    >
+      <div className="flex gap-2.5">
+        <XAvatar authorKey={comment.authorKey} size={38} onClick={() => f.openProfile(comment.authorKey)} />
+        <div className="min-w-0 flex-1">
+          {/* 名行：蓝名 + 时间 */}
+          <p className="flex items-baseline gap-2">
+            <button
+              type="button"
+              onClick={() => f.openProfile(comment.authorKey)}
+              className="max-w-[160px] truncate text-[15px] font-bold"
+              style={{ color: t.blue }}
+            >
+              {a.name}
+            </button>
+            <span className="shrink-0 text-[12px]" style={{ color: t.secondary }}>
+              {relTime(comment.createdAt)}
+            </span>
+          </p>
+          {/* 评论正文 */}
+          <p className="mt-[2px] whitespace-pre-wrap break-words text-[15px] leading-[1.45]" style={{ color: t.text }}>
+            {comment.content}
+          </p>
+          {/* 子回复（微信式嵌套：灰盒 + 「A 回复 B：内容」一行一条，蓝名可点头像页） */}
+          {subReplies.length > 0 && (
+            <div className="mt-2 rounded-xl px-3 py-[3px]" style={{ background: t.dark ? '#202327' : '#f7f9f9' }}>
+              {subReplies.map((s) => {
+                const sa = resolveAuthor(s.authorKey);
+                const replying = s.replyToName && s.replyToName !== sa.name ? s.replyToName : null;
+                return (
+                  <div
+                    key={s.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`回复 ${sa.name} 的评论`}
+                    onClick={(e) => {
+                      if ((e.target as HTMLElement).closest('button')) return;
+                      onReply(comment.id, sa.name); // 点子回复 → 回复该作者（仍挂顶层评论下）
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') onReply(comment.id, sa.name);
+                    }}
+                    className="cursor-pointer rounded-lg py-[7px] transition-colors active:opacity-60"
+                  >
+                    <p className="whitespace-pre-wrap break-words text-[14px] leading-[1.45]">
+                      <button
+                        type="button"
+                        onClick={() => f.openProfile(s.authorKey)}
+                        className="font-bold"
+                        style={{ color: t.blue }}
+                      >
+                        {sa.name}
+                      </button>
+                      {replying && (
+                        <>
+                          <span style={{ color: t.secondary }}> 回复 </span>
+                          <span className="font-bold" style={{ color: t.blue }}>
+                            {replying}
+                          </span>
+                        </>
+                      )}
+                      <span style={{ color: t.text }}>：{s.content}</span>
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {/* 操作行：回复 / 赞（微信式小字操作） */}
+          <div className="mt-1.5 flex items-center gap-5">
+            <button
+              type="button"
+              onClick={() => onReply(comment.id, a.name)}
+              className="text-[13px] font-medium active:opacity-50"
+              style={{ color: t.secondary }}
+            >
+              回复
+            </button>
+            <button
+              type="button"
+              aria-label={liked ? '取消点赞' : '点赞'}
+              onClick={() => f.likeToggle(comment.id)}
+              className="flex items-center gap-1 rounded-full py-[2px] text-[13px] font-medium transition-colors active:opacity-50"
+              style={{ color: liked ? t.pink : t.secondary }}
+            >
+              {XIcons.like(liked, 14)}
+              {comment.likes.length > 0 && <span>{comment.likes.length}</span>}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ThreadView({ postId }: { postId: string }) {
   const f = useForum();
   const t = f.t;
   useSyncExternalStore(subscribeForum, forumSnapshot, forumSnapshot);
   const d = forumData();
   const post = d.posts.find((p) => p.id === postId);
-  const replies = useMemo(() => (post ? repliesOf(d, postId) : []), [d, postId, post]);
+  /** 顶层评论（直接回复主帖）——直算不 memo：数据原位变更时 memo 依赖不可靠（同 profile-view 教训） */
+  const replies = post ? repliesOf(d, postId) : [];
+  /** 全部回复数（顶层 + 嵌套子回复） */
+  const totalReplies = replies.reduce((n, r) => n + 1 + repliesOf(d, r.id).length, 0);
   const [draft, setDraft] = useState('');
   const [bookmarked, setBookmarked] = useState(false);
+  /** 定向回复目标（null = 回复主帖作者）：commentId = 挂载的顶层评论 id */
+  const [replyTarget, setReplyTarget] = useState<{ commentId: string; name: string } | null>(null);
+  /** AI 翻译：loading / 译文 / 是否展示 */
+  const [tr, setTr] = useState<{ loading: boolean; text: string | null; shown: boolean }>({
+    loading: false,
+    text: null,
+    shown: false,
+  });
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   if (!post) {
@@ -95,11 +232,14 @@ export function ThreadView({ postId }: { postId: string }) {
   const dateStr = `${dt.getFullYear()}年${dt.getMonth() + 1}月${dt.getDate()}日`;
   const communityLabel = post.community && post.community !== 'hot' ? communityName(post.community) : '';
 
-  /** 发送回复：落为一条帖（replyTo=本帖）+ 原帖作者是 AI 时排再回复 */
+  /** 发送回复：挂主帖（无目标）或顶层评论（微信式嵌套）；
+   *  被回复对象作者是 AI 时，排一条 AI 嵌套再回复。 */
   const sendReply = () => {
     const text = draft.trim();
     if (!text) return;
     const nd = forumData();
+    const targetId = replyTarget?.commentId ?? post.id;
+    const targetName = replyTarget?.name ?? a.name;
     const reply: ForumPost = {
       id: uid('p'),
       authorKey: 'user',
@@ -109,14 +249,41 @@ export function ThreadView({ postId }: { postId: string }) {
       likes: [],
       reposts: 0,
       views: 0,
-      replyTo: post.id,
-      replyToName: a.name,
+      replyTo: targetId,
+      replyToName: targetName,
       reposted: false,
     };
     nd.posts.push(reply);
     saveForum({ ...nd });
     setDraft('');
-    queueAiReplyToUserReply(post.id, reply.id);
+    const targetPost = nd.posts.find((p) => p.id === targetId);
+    if (targetPost && targetPost.authorKey !== 'user') queueAiReplyToUserReply(targetId, reply.id);
+    setReplyTarget(null);
+  };
+
+  /** 点击评论/子回复：定向回复并聚焦输入框 */
+  const startReply = (commentId: string, name: string) => {
+    setReplyTarget({ commentId, name });
+    inputRef.current?.focus();
+  };
+
+  /** AI 翻译正文：中文 → 英语，外语 → 中文（带缓存与内置模型兜底） */
+  const runTranslate = () => {
+    // 已有译文：切换展示/收起
+    if (tr.text) {
+      setTr((s) => ({ ...s, shown: !s.shown }));
+      return;
+    }
+    const text = post.content.trim();
+    if (!text || tr.loading) return;
+    setTr({ loading: true, text: null, shown: false });
+    const target = detectMessageLang(text) === 'zh-Hans' ? 'en' : 'zh-Hans';
+    requestTranslation({ text, lang: target, apiConfig: useSettings.getState().apiConfig })
+      .then((out) => setTr({ loading: false, text: out, shown: true }))
+      .catch(() => {
+        setTr({ loading: false, text: null, shown: false });
+        f.toast('翻译失败，稍后再试');
+      });
   };
 
   return (
@@ -202,6 +369,17 @@ export function ThreadView({ postId }: { postId: string }) {
           <p className="mt-2.5 whitespace-pre-wrap break-words text-[17px] leading-[1.42]" style={{ color: t.text }}>
             {post.content}
           </p>
+          {/* AI 译文（点「翻译」后展示；收起后再点重新展开） */}
+          {tr.text && tr.shown && (
+            <div className="mt-2.5 rounded-2xl p-3" style={{ background: t.hover }}>
+              <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.42]" style={{ color: t.text }}>
+                {tr.text}
+              </p>
+              <p className="mt-1 text-[12px]" style={{ color: t.secondary }}>
+                由 AI 翻译
+              </p>
+            </div>
+          )}
           {/* 主帖附图 / 投票 / 位置（与帖子卡同规格） */}
           {(post.media ?? []).length > 0 && <PostMedia media={post.media!} />}
           {post.poll && <PollBlock post={post} />}
@@ -227,17 +405,29 @@ export function ThreadView({ postId }: { postId: string }) {
               <span style={{ color: t.secondary }}>{XIcons.back(14)}</span>
             </button>
           )}
-          {/* 官方元数据行：H:mm · 年月日 · N 次浏览（日期与浏览加粗） */}
-          <p className="mt-2.5 text-[14px]" style={{ color: t.secondary }}>
-            {dt.getHours()}:{String(dt.getMinutes()).padStart(2, '0')} ·{' '}
-            <b style={{ color: t.text, fontWeight: 700 }}>{dateStr}</b> ·{' '}
-            <b style={{ color: t.text, fontWeight: 700 }}>{countShort(post.views)} 次浏览</b>
+          {/* 官方元数据行：H:mm · 年月日 · N 次浏览 + 蓝色「翻译」按钮 */}
+          <p className="mt-2.5 flex flex-wrap items-center gap-x-1.5 text-[14px]" style={{ color: t.secondary }}>
+            <span>
+              {dt.getHours()}:{String(dt.getMinutes()).padStart(2, '0')} ·{' '}
+              <b style={{ color: t.text, fontWeight: 700 }}>{dateStr}</b> ·{' '}
+              <b style={{ color: t.text, fontWeight: 700 }}>{countShort(post.views)} 次浏览</b>
+            </span>
+            <button
+              type="button"
+              onClick={runTranslate}
+              disabled={tr.loading}
+              className="ml-1 text-[14px] font-bold transition-opacity active:opacity-50 disabled:opacity-60"
+              style={{ color: t.blue }}
+              aria-label={tr.text ? (tr.shown ? '收起译文' : '展开译文') : 'AI 翻译帖子'}
+            >
+              {tr.loading ? '翻译中…' : tr.text ? (tr.shown ? '收起译文' : '查看译文') : '翻译'}
+            </button>
           </p>
           {/* 互动栏（X 官方：回复/转推/点赞/书签/分享，带数字） */}
           <div className="mt-1 flex items-center justify-between border-b py-3" style={{ borderColor: t.border }}>
             <ThreadAction
               icon={XIcons.reply(21)}
-              count={replies.length}
+              count={totalReplies}
               label="回复"
               color={t.secondary}
               hoverColor={t.blue}
@@ -291,52 +481,70 @@ export function ThreadView({ postId }: { postId: string }) {
           </div>
         </div>
 
-        {/* 回复流 */}
+        {/* 评论流（微信式嵌套） */}
         {replies.length === 0 ? (
           <p className="py-10 text-center text-[14px]" style={{ color: t.secondary }}>
             还没有回复，来抢沙发
           </p>
         ) : (
-          replies.map((r) => <PostCard key={r.id} post={r} onOpen={() => f.openThread(r.id)} />)
+          replies.map((r) => <CommentRow key={r.id} comment={r} onReply={startReply} />)
         )}
         <p className="py-6 text-center text-[13px]" style={{ color: t.secondary }}>
           已经到底啦
         </p>
       </div>
 
-      {/* 底部回复输入条（X：头像 + 输入 + 蓝发送钮） */}
-      <div className="flex shrink-0 items-center gap-2 border-t px-3 py-2" style={{ borderColor: t.border, background: t.bg }}>
-        <XAvatar authorKey="user" size={34} />
-        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full px-4 h-[40px]" style={{ background: t.dark ? '#202327' : '#eff3f4' }}>
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value.slice(0, REPLY_MAX))}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                sendReply();
-              }
-            }}
-            placeholder={`回复 ${a.name}…`}
-            className="min-w-0 flex-1 bg-transparent text-[15px] outline-none"
-            style={{ color: t.text, caretColor: t.blue }}
-            aria-label={`回复 ${a.name}`}
-          />
+      {/* 底部回复输入条（X：头像 + 输入 + 蓝发送钮；微信式定向回复提示条） */}
+      <div className="shrink-0 border-t" style={{ borderColor: t.border, background: t.bg }}>
+        {replyTarget && (
+          <div className="flex items-center justify-between px-4 pt-1.5">
+            <span className="truncate text-[12px] font-medium" style={{ color: t.blue }}>
+              回复 @{replyTarget.name}
+            </span>
+            <button
+              type="button"
+              aria-label="取消定向回复"
+              onClick={() => setReplyTarget(null)}
+              className="shrink-0 pl-2 text-[12px] font-medium active:opacity-50"
+              style={{ color: t.secondary }}
+            >
+              取消
+            </button>
+          </div>
+        )}
+        <div className="flex items-center gap-2 px-3 py-2">
+          <XAvatar authorKey="user" size={34} />
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full px-4 h-[40px]" style={{ background: t.dark ? '#202327' : '#eff3f4' }}>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value.slice(0, REPLY_MAX))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  sendReply();
+                }
+              }}
+              placeholder={replyTarget ? `回复 ${replyTarget.name}…` : `回复 ${a.name}…`}
+              className="min-w-0 flex-1 bg-transparent text-[15px] outline-none"
+              style={{ color: t.text, caretColor: t.blue }}
+              aria-label={replyTarget ? `回复 ${replyTarget.name}` : `回复 ${a.name}`}
+            />
+          </div>
+          <button
+            type="button"
+            aria-label="发送回复"
+            disabled={!draft.trim()}
+            onClick={sendReply}
+            className="flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-full text-white transition-opacity disabled:opacity-40 active:opacity-70"
+            style={{ background: t.blue }}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M22 2 11 13" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M22 2 15 22l-4-9-9-4 20-7z" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
         </div>
-        <button
-          type="button"
-          aria-label="发送回复"
-          disabled={!draft.trim()}
-          onClick={sendReply}
-          className="flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-full text-white transition-opacity disabled:opacity-40 active:opacity-70"
-          style={{ background: t.blue }}
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <path d="M22 2 11 13" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M22 2 15 22l-4-9-9-4 20-7z" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
       </div>
     </div>
   );

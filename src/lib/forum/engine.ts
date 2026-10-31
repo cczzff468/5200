@@ -327,7 +327,9 @@ export function queueUserPostInteractions(post: ForumPost): void {
   runPending();
 }
 
-/** 用户回复某帖（thread 页）后调用：若原帖作者是 AI，排一条再回复 */
+/** 用户回复某帖/某条评论（thread 页）后调用：若被回复对象作者是 AI，排一条再回复。
+ *  postId 传主帖 id → AI 的回复挂主帖下（顶层评论）；
+ *  传评论 id → 挂在该评论下（微信式嵌套子回复）。 */
 export function queueAiReplyToUserReply(postId: string, userReplyId: string): void {
   const d = forumData();
   const parent = d.posts.find((p) => p.id === postId);
@@ -402,7 +404,11 @@ async function execJob(job: PendingJob): Promise<void> {
         text = pool[Math.floor(Math.random() * pool.length)];
       }
       const next = { ...forumData() };
-      const replyPost = basePost(authorKey, text.slice(0, REPLY_MAX), target.community, Date.now(), target.id, resolveAuthor(target.authorKey).name);
+      // aiReplyBack：AI 回复的是「用户」的评论，replyToName 用用户名（微信式「A 回复 用户：…」）；
+      // replyToUserPost：NPC 回复用户的新帖，replyToName 取被回帖作者（即用户）。
+      const replyName =
+        job.kind === 'aiReplyBack' ? resolveAuthor('user').name : resolveAuthor(target.authorKey).name;
+      const replyPost = basePost(authorKey, text.slice(0, REPLY_MAX), target.community, Date.now(), target.id, replyName);
       next.posts.push(replyPost);
       next.notifications = [
         {

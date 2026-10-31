@@ -1,19 +1,20 @@
 'use client';
 
 /**
- * X论坛 · 发布弹层（X compose 全屏 sheet，按官方截图 1:1 精修 + 全功能开发）。
+ * X论坛 · 发布弹层（X compose 全屏 sheet，按用户需求精修 + 全功能开发）。
  *
- * 布局（对照官方参考图）：
- * - 顶行：返回箭头 | 「草稿」蓝字（居中）| 「发布」胶囊（空文浅蓝 #a9d4f5、可发亮蓝）；
+ * 布局：
+ * - 顶行：返回箭头 | 「发布」胶囊（空文浅蓝 #a9d4f5、可发亮蓝；草稿按钮已按需求移除）；
  * - 正文区：40px 头像 + 「有什么新鲜事？」20px 大输入；
  * - 媒体预览：2 列网格 + 右上删除角标（相册/GIF，最多 4 张）；
  * - 投票编辑卡：选项 2~4 条，可增删（工具栏投票开关）；
  * - 隐私行：🌍「所有人都可以回复」蓝字 + 右侧「发布到·版块」胶囊；
- * - 工具行（细分隔线上方）：图片 / GIF / 投票 / 表情 / 定时 / 位置 / 旗子(话题)
- *   全部真功能 + 字数圆环；
+ * - 工具行（细分隔线上方）：相册（手机上传/文字搜图二选一）/ 投票 / 表情 / 定时 / 位置 / 旗子(话题)
+ *   未激活灰色线条（用户指定），激活蓝底白图标 + 字数圆环；
  * - 底行：左下灰色圆角「全屏」方块（写作模式）+ 定时/位置状态。
  *
  * 数据出参 ComposePayload：media / poll / location / visibleAt（定时帖）。
+ * 话题面板：支持自定义话题输入 + 热门话题列表。
  */
 
 import { useMemo, useRef, useState } from 'react';
@@ -161,14 +162,17 @@ export function ComposeSheet({
   const [visibleAt, setVisibleAt] = useState<number | null>(null);
   const [full, setFull] = useState(false);
   const [picking, setPicking] = useState(false);
-  const [sheet, setSheet] = useState<null | 'emoji' | 'schedule' | 'geo' | 'gif' | 'topic'>(null);
+  const [sheet, setSheet] = useState<null | 'gallery' | 'emoji' | 'schedule' | 'geo' | 'gif' | 'topic'>(null);
   const [gifQuery, setGifQuery] = useState('');
   const [gifResults, setGifResults] = useState<{ url: string; source?: string }[]>([]);
   const [gifLoading, setGifLoading] = useState(false);
   const [geoInput, setGeoInput] = useState('');
   const [customSchedule, setCustomSchedule] = useState('');
+  /** 自定义话题输入（话题面板顶部） */
+  const [customTopic, setCustomTopic] = useState('');
 
   const textRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const communityLabel = useMemo(
     () => COMMUNITY_DEFS.find((c) => c.id === communityId)?.name ?? '今日热议',
@@ -180,7 +184,7 @@ export function ComposeSheet({
     pollOptions !== null && pollOptions.filter((o) => o.trim()).length >= 2 && pollOptions.length <= 4;
   const canPublish = (text.trim().length > 0 || media.length > 0) && left >= 0 && (!pollOptions || validPoll);
 
-  /** 工具行图标按钮（X 官方 compose 工具条：蓝色线条图标） */
+  /** 工具行图标按钮（功能按钮灰色线条；激活时蓝底白图标显示开关状态） */
   const toolBtn = (label: string, active: boolean, icon: React.ReactNode, onClick: () => void) => (
     <button
       type="button"
@@ -188,7 +192,7 @@ export function ComposeSheet({
       aria-pressed={active}
       onClick={onClick}
       className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-black/5 dark:active:bg-white/10"
-      style={{ color: active ? '#fff' : t.blue, background: active ? t.blue : 'transparent' }}
+      style={{ color: active ? '#fff' : t.secondary, background: active ? t.blue : 'transparent' }}
     >
       {icon}
     </button>
@@ -282,7 +286,7 @@ export function ComposeSheet({
   return (
     <div className="absolute inset-0 z-50" role="dialog" aria-modal="true" aria-label="发布帖子">
       <div className="flex h-full flex-col animate-[forum-sheet_.26s_ease-out]" style={{ background: t.bg, color: t.text }}>
-        {/* 顶行：返回 | 草稿（全屏模式换「有什么新鲜事？」）| 发布胶囊（空文浅蓝、可发亮蓝） */}
+        {/* 顶行：返回 | 发布胶囊（空文浅蓝、可发亮蓝；按用户要求已移除「草稿」） */}
         <div className="flex shrink-0 items-center justify-between px-4 pt-[54px]" style={{ height: 100 }}>
           {full ? (
             <>
@@ -306,14 +310,6 @@ export function ComposeSheet({
                 style={{ color: t.text }}
               >
                 {XIcons.back(22)}
-              </button>
-              <button
-                type="button"
-                onClick={() => f.toast(text.trim() || media.length ? '已存草稿，下次继续写' : '草稿箱是空的')}
-                className="text-[15px] font-medium"
-                style={{ color: t.blue }}
-              >
-                草稿
               </button>
               <button
                 type="button"
@@ -454,44 +450,17 @@ export function ComposeSheet({
           </div>
         )}
 
-        {/* 工具行（官方 7 图标：图片/GIF/投票/表情/定时/位置/旗子）+ 字数圆环 */}
+        {/* 工具行（相册/投票/表情/定时/位置/话题，灰色线条；相册含手机上传与文字搜图两种方式）+ 字数圆环 */}
         <div
           className="forum-hide-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-t px-3 py-1"
           style={{ borderColor: t.border }}
         >
-          {/* 添加图片：label 原生触发文件选择（无需 JS 访问 ref，规避 react-hooks/refs） */}
-          <label
-            className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors active:bg-black/5 dark:active:bg-white/10"
-            style={{ color: t.blue }}
-            aria-label="添加图片"
-          >
-            <ImageIcon width={21} height={21} strokeWidth={SW} aria-hidden="true" />
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                onFiles(e.target.files);
-                e.currentTarget.value = '';
-              }}
-            />
-          </label>
+          {/* 相册：弹层选择「手机相册上传」或「文字搜图」 */}
           {toolBtn(
-            'GIF',
-            false,
-            <span
-              className="flex h-[15px] w-[26px] items-center justify-center rounded-[4px] border text-[10px] font-extrabold leading-none"
-              style={{ borderColor: t.blue, color: t.blue }}
-              aria-hidden="true"
-            >
-              GIF
-            </span>,
-            () => {
-              setSheet('gif');
-              setGifResults([]);
-              setGifQuery('');
-            },
+            media.length > 0 ? `已添加 ${media.length} 张图片` : '添加图片',
+            media.length > 0,
+            <ImageIcon width={21} height={21} strokeWidth={SW} />,
+            () => setSheet('gallery'),
           )}
           {toolBtn('发起投票', pollOptions !== null, <BarChart3 width={21} height={21} strokeWidth={SW} />, () => {
             if (pollOptions === null) setPollOptions(['', '']);
@@ -635,6 +604,63 @@ export function ComposeSheet({
             className="absolute inset-x-0 bottom-0 max-h-[66%] animate-[forum-sheet_.24s_ease-out] overflow-y-auto rounded-t-2xl pb-[24px]"
             style={{ background: t.bg, color: t.text }}
           >
+            {/* --- 相册选择（手机上传 / 文字搜图） --- */}
+            {sheet === 'gallery' && (
+              <div className="px-4 pt-3">
+                <p className="pb-1 text-[15px] font-bold">添加图片</p>
+                <p className="pb-3 text-[12px]" style={{ color: t.secondary }}>
+                  选择从手机相册上传，或输入文字搜索网络动图，最多 {MAX_MEDIA} 张
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSheet(null);
+                    fileRef.current?.click();
+                  }}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors active:opacity-60"
+                  style={{ background: t.hover }}
+                >
+                  <span
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                    style={{ background: 'rgba(29,155,240,0.12)', color: t.blue }}
+                    aria-hidden="true"
+                  >
+                    <ImageIcon width={20} height={20} strokeWidth={SW} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-bold">手机相册上传</span>
+                    <span className="block text-[12px]" style={{ color: t.secondary }}>
+                      从手机相册选择照片上传
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGifResults([]);
+                    setGifQuery('');
+                    setSheet('gif');
+                  }}
+                  className="mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors active:opacity-60"
+                  style={{ background: t.hover }}
+                >
+                  <span
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                    style={{ background: 'rgba(0,186,124,0.12)', color: t.green }}
+                    aria-hidden="true"
+                  >
+                    <span className="text-[12px] font-extrabold">GIF</span>
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-bold">文字搜图（动图）</span>
+                    <span className="block text-[12px]" style={{ color: t.secondary }}>
+                      输入关键词，搜索网络图片/动图
+                    </span>
+                  </span>
+                </button>
+              </div>
+            )}
+
             {/* --- emoji 面板 --- */}
             {sheet === 'emoji' && (
               <div className="px-4 pt-3">
@@ -868,12 +894,44 @@ export function ComposeSheet({
               </div>
             )}
 
-            {/* --- 话题（旗子）--- */}
+            {/* --- 话题（旗子）：自定义输入 + 热门话题 --- */}
             {sheet === 'topic' && (
               <div className="px-4 pt-3">
                 <p className="pb-1 text-[15px] font-bold">插入话题标签</p>
                 <p className="pb-2 text-[12px]" style={{ color: t.secondary }}>
-                  点击追加到正文末尾，正文里的 #话题# 会染成品牌蓝
+                  输入自定义话题或点击热门话题，追加到正文末尾，正文里的 #话题# 会染成品牌蓝
+                </p>
+                {/* 自定义话题输入 */}
+                <div
+                  className="flex items-center gap-2 rounded-full px-3 py-2"
+                  style={{ background: t.dark ? '#202327' : '#eff3f4' }}
+                >
+                  <span className="text-[17px] font-bold" style={{ color: t.blue }} aria-hidden="true">
+                    #
+                  </span>
+                  <input
+                    value={customTopic}
+                    onChange={(e) => setCustomTopic(e.target.value.replace(/#/g, '').replace(/\s+/g, '').slice(0, 12))}
+                    placeholder="自定义话题，如 周末去哪玩"
+                    className="min-w-0 flex-1 bg-transparent text-[15px] outline-none"
+                    style={{ color: t.text, caretColor: t.blue }}
+                    aria-label="自定义话题"
+                  />
+                  <button
+                    type="button"
+                    disabled={!customTopic.trim()}
+                    onClick={() => {
+                      appendTopic(customTopic.trim());
+                      setCustomTopic('');
+                    }}
+                    className="rounded-full px-4 py-1.5 text-[13px] font-bold text-white disabled:opacity-40"
+                    style={{ background: t.blue }}
+                  >
+                    添加
+                  </button>
+                </div>
+                <p className="pb-1 pt-4 text-[13px] font-bold" style={{ color: t.secondary }}>
+                  热门话题
                 </p>
                 {trendingTopics(forumData()).map((tr) => (
                   <button
@@ -896,6 +954,19 @@ export function ComposeSheet({
           </div>
         </div>
       )}
+
+      {/* 手机相册文件选择器（相册弹层「手机相册上传」触发） */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          onFiles(e.target.files);
+          e.currentTarget.value = '';
+        }}
+      />
     </div>
   );
 }
