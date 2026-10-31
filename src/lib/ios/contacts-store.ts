@@ -420,6 +420,7 @@ export async function createContact(payload: ContactPayload): Promise<ContactRec
     weight: normalizeText(payload.weight, 12),
     persona: normalizeText(payload.persona, 5000),
     background: normalizeText(payload.background, 5000),
+    expressStyle: normalizeText(payload.expressStyle, 2000),
     occupation: normalizeText(payload.occupation, 40),
     company: normalizeText(payload.company, 60),
     region: normalizeText(payload.region, 40),
@@ -482,6 +483,7 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   if ('weight' in patch) next.weight = normalizeText(patch.weight, 12);
   if ('persona' in patch) next.persona = normalizeText(patch.persona, 5000);
   if ('background' in patch) next.background = normalizeText(patch.background, 5000);
+  if ('expressStyle' in patch) next.expressStyle = normalizeText(patch.expressStyle, 2000);
   if ('occupation' in patch) next.occupation = normalizeText(patch.occupation, 40);
   if ('company' in patch) next.company = normalizeText(patch.company, 60);
   if ('region' in patch) next.region = normalizeText(patch.region, 40);

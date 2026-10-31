@@ -160,6 +160,7 @@ export default function PeerStatusCard({
             birthday: contact.birthday || null,
             persona: contact.persona || null,
             background: contact.background || null,
+            expressStyle: contact.expressStyle || null,
             nickname: contact.nickname || null,
             realName: contact.realName ?? null,
             ...(npcExtra ?? {}),

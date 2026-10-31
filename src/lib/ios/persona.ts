@@ -29,6 +29,9 @@ export interface PersonaSource {
   persona?: string | null;
   /** 背景故事 → 背景要素 */
   background?: string | null;
+  /** 表达风格（说话的表达方式/风格基调，如「傲娇毒舌」「温柔轻声细语」）→ 独立【表达风格】段
+   *  （背景下方）；与 persona 里混写的性格描述互补，用户单独维护。可选：历史数据无此键 */
+  expressStyle?: string | null;
   /** 与用户（或 NPC 归属者）的关系 */
   relation?: string | null;
   /** 与角色的关系·按账号隔离（多账号关系感知）：键 = 账号 id；配合 ctx.accountId 取分账号关系，
@@ -190,6 +193,9 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
       : [`【名字】${name}`];
   const persona = clean(peer.persona);
   const background = clean(peer.background);
+  // 表达风格（用户单独维护的说话方式/风格基调）：有值时优先级高于【说话风格】默认文案，
+  // 且独立成段注入在【背景】下方——所有决策（聊天/电话/动态/主动消息/小屋…）统一生效
+  const expressStyle = clean(peer.expressStyle);
   // 多账号关系感知：当前聊天账号下与用户的关系（大号 = 旧全局；小号 = 分账号记录优先，见 relationForCtx）
   const relation = relationForCtx(peer, ctx.accountId);
   const relationToUser = clean(peer.relationToUser);
@@ -244,9 +250,11 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     ...(facts.length ? [`【基础资料】${facts.join('；')}`] : []),
     `【性格】${persona || '按资料自然呈现，像一个有血有肉的真实的人'}`,
     `【说话风格】${
-      persona
-        ? '严格贴合「性格」段人设的语气、用词习惯与口头禅；人设里写到的说话方式必须照做'
-        : '自然口语，像真实的人随手打字'
+      expressStyle
+        ? `严格遵循下方【表达风格】段${persona ? '，并与「性格」段人设一致' : ''}`
+        : persona
+          ? '严格贴合「性格」段人设的语气、用词习惯与口头禅；人设里写到的说话方式必须照做'
+          : '自然口语，像真实的人随手打字'
     }`,
     // 拼音缩写解码（第四十一轮：用户反馈 AI 把 wyxn（我也想你）理解成「我爱你想你」）：
     // 对方发的纯字母串基本都是拼音首字母缩写，必须逐字拆解按拼音组词，给出正确含义
@@ -256,6 +264,14 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     '- 对方问「你知道XX是什么意思吗」时，必须先按拆解规则给出正确含义再回应情绪（比如 wyxn 是「我也想你」，绝不能答成「我爱你想你」这类拆错的答案）；拆不准时结合你们的关系和话题挑一个最自然、最贴近对方心意的解释，不要硬编一个明显不对的。',
   ];
   if (background) lines.push(`【背景】${background}`);
+  // 表达风格：背景下方独立成段——用户在联系人资料里单独维护的说话方式/风格基调，
+  // 每次回复的表达（用词、句式、语气、情绪浓度）都必须严格按这一段来
+  if (expressStyle) {
+    lines.push(
+      `【表达风格】${expressStyle}`,
+      '（上面这一段是你说话的表达风格：每句话的用词、句式、语气、情绪浓度都要严格按它来，与其他设定冲突时以这一段为准。）',
+    );
+  }
   if (stranger) {
     // 陌生模式：不注入任何「与用户的关系」（大号关系/分账号关系都不适用于身份未知的人），
     // 改为立「不认识对面」的规矩（防止 AI 顺着聊天装作认识/泄露自己认识的人的身份信息）

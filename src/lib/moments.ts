@@ -1818,6 +1818,7 @@ function personaOf(peer: ContactRecord): Record<string, string | null> {
     region: peer.region ?? null,
     persona: peer.persona ?? null,
     background: peer.background ?? null,
+    expressStyle: peer.expressStyle ?? null,
     relation: peer.relation ?? null,
     relationToUser: peer.relationToUser ?? null,
     kind: peer.kind ?? null,

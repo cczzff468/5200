@@ -25,6 +25,9 @@ export interface ContactRecord {
   weight: string | null;
   persona: string | null;
   background: string | null;
+  /** 表达风格（说话的表达方式/风格基调，如「傲娇毒舌」「温柔轻声细语」；与 persona 里的性格描述互补，
+   *  注入人设时独立成段【表达风格】；可选字段：历史数据无此键，读取处用 ?. 兼容） */
+  expressStyle?: string | null;
   occupation: string | null;
   company: string | null;
   region: string | null;
@@ -97,6 +100,8 @@ export interface ContactPayload {
   weight?: string | null;
   persona?: string | null;
   background?: string | null;
+  /** 表达风格（说话方式/风格基调；注入 AI 决策人设【表达风格】段） */
+  expressStyle?: string | null;
   occupation?: string | null;
   company?: string | null;
   region?: string | null;

@@ -469,6 +469,7 @@ async function recordMissedPhoneCall(
         birthday: contact.birthday || null,
         persona: contact.persona || null,
         background: contact.background || null,
+        expressStyle: contact.expressStyle || null,
         nickname: contact.nickname || null,
         // 真实姓名用 realName 字段（name 在展示层可能已被昵称/备注替换，注入人设必须是真名）
         realName: contact.realName ?? null,

@@ -151,6 +151,7 @@ export async function POST(req: NextRequest) {
     region: inline.region,
     persona: inline.persona,
     background: inline.background,
+    expressStyle: inline.expressStyle,
     relation: inline.relation,
     relationByAcc: inline.relationByAcc ?? null,
     relationToUser: inline.relationToUser,

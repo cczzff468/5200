@@ -253,6 +253,8 @@ function GenBoxField({
  * ……
  * 背景：
  * ……
+ * 表达风格：                                ← 多行块（可选；说话方式/风格基调）
+ * ……
  */
 interface ParsedContact {
   name: string;
@@ -275,6 +277,7 @@ interface ParsedContact {
   qqPassword: string;
   persona: string;
   background: string;
+  expressStyle: string;
 }
 
 /** 单行字段标签 → 字段名（长标签在前，避免「微信号」截胡「微信密码」） */
@@ -321,6 +324,7 @@ function emptyParsed(): ParsedContact {
     qqPassword: '',
     persona: '',
     background: '',
+    expressStyle: '',
   };
 }
 
@@ -329,7 +333,8 @@ function parseContactBlock(blockLines: string[]): ParsedContact | null {
   const c = emptyParsed();
   const personaLines: string[] = [];
   const backgroundLines: string[] = [];
-  let block: 'persona' | 'background' | null = null;
+  const expressStyleLines: string[] = [];
+  let block: 'persona' | 'background' | 'expressStyle' | null = null;
 
   for (const raw of blockLines) {
     const trimmed = raw.trim();
@@ -337,15 +342,20 @@ function parseContactBlock(blockLines: string[]): ParsedContact | null {
       // 多行块内的空行保留换行
       if (block === 'persona') personaLines.push('');
       else if (block === 'background') backgroundLines.push('');
+      else if (block === 'expressStyle') expressStyleLines.push('');
       continue;
     }
-    // 多行块标签：整行恰为「人设：」/「背景：」（半/全角冒号均可）
+    // 多行块标签：整行恰为「人设：」/「背景：」/「表达风格：」（半/全角冒号均可）
     if (/^人设[:：]$/.test(trimmed)) {
       block = 'persona';
       continue;
     }
     if (/^背景[:：]$/.test(trimmed)) {
       block = 'background';
+      continue;
+    }
+    if (/^表达风格[:：]$/.test(trimmed)) {
+      block = 'expressStyle';
       continue;
     }
     // 单行字段
@@ -368,10 +378,12 @@ function parseContactBlock(blockLines: string[]): ParsedContact | null {
     // 其余行归当前多行块（保留行内空白）
     if (block === 'persona') personaLines.push(raw.replace(/\s+$/, ''));
     else if (block === 'background') backgroundLines.push(raw.replace(/\s+$/, ''));
+    else if (block === 'expressStyle') expressStyleLines.push(raw.replace(/\s+$/, ''));
   }
 
   c.persona = personaLines.join('\n').trim();
   c.background = backgroundLines.join('\n').trim();
+  c.expressStyle = expressStyleLines.join('\n').trim();
   return c.name.trim() ? c : null;
 }
 
@@ -778,6 +790,7 @@ function ListView({
           qqPassword: p.qqPassword,
           persona: p.persona,
           background: p.background,
+          expressStyle: p.expressStyle,
           avatar: null,
         }).catch(() => null);
         if (!created) {
@@ -1015,6 +1028,8 @@ interface ContactFormState {
   relationToUser: string;
   persona: string;
   background: string;
+  /** 表达风格（说话方式/风格基调；AI 全部决策注入【表达风格】段） */
+  expressStyle: string;
   phone: string;
   wechatId: string;
   wechatPassword: string;
@@ -1038,6 +1053,7 @@ const EMPTY_FORM: ContactFormState = {
   relationToUser: '',
   persona: '',
   background: '',
+  expressStyle: '',
   phone: '',
   wechatId: '',
   wechatPassword: '',
@@ -1062,6 +1078,7 @@ function formFromRecord(c: ContactRecord): ContactFormState {
     relationToUser: pick(c.relationToUser ?? null),
     persona: pick(c.persona),
     background: pick(c.background),
+    expressStyle: pick(c.expressStyle ?? null),
     phone: pick(c.phone),
     wechatId: pick(c.wechatId),
     wechatPassword: pick(c.wechatPassword),
@@ -1473,24 +1490,26 @@ function ContactFormView({
         <SectionTitle>人设与背景</SectionTitle>
         <div className="flex flex-col gap-3.5">
           <BoxField label="人设">
-            <textarea
-              value={form.persona}
-              onChange={(e) => set('persona')(e.target.value)}
-              placeholder="性格、说话方式、身份设定…"
-              aria-label="人设"
-              rows={4}
-              className={`${boxAreaCls} min-h-[110px]`}
-            />
-            {/* 从手机上传人设文件：毛玻璃按钮，与全 App 按钮风格一致 */}
-            <GlassButton
-              type="button"
-              onClick={() => personaFileRef.current?.click()}
-              aria-label="从手机上传人设文件"
-              className="mt-2 flex h-[44px] w-full items-center justify-center gap-2 rounded-[12px] text-[14px] font-medium text-foreground/80"
-            >
-              <FileUp className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-              从手机上传人设文件
-            </GlassButton>
+            {/* 输入框 + 右上角上传图标按钮（只显示图标；点击从手机上传人设文件） */}
+            <div className="relative">
+              <textarea
+                value={form.persona}
+                onChange={(e) => set('persona')(e.target.value)}
+                placeholder="性格、说话方式、身份设定…"
+                aria-label="人设"
+                rows={4}
+                className={`${boxAreaCls} min-h-[110px] pr-11`}
+              />
+              <button
+                type="button"
+                onClick={() => personaFileRef.current?.click()}
+                aria-label="从手机上传人设文件"
+                title="从手机上传人设文件"
+                className="absolute right-[7px] top-[7px] flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-black/[0.04] text-muted-foreground/80 transition-colors hover:bg-black/[0.08] active:bg-black/[0.12] dark:bg-white/[0.08] dark:text-white/60 dark:hover:bg-white/[0.14] dark:active:bg-white/[0.2]"
+              >
+                <FileUp className="h-[15px] w-[15px]" strokeWidth={2} aria-hidden="true" />
+              </button>
+            </div>
             {personaFileName && (
               <p className="mt-1.5 px-1 text-[12px] text-muted-foreground">
                 已导入「{personaFileName}」，可继续编辑
@@ -1517,6 +1536,18 @@ function ContactFormView({
               aria-label="背景"
               rows={4}
               className={`${boxAreaCls} min-h-[110px]`}
+            />
+          </BoxField>
+          {/* 表达风格（背景下方）：说话的表达方式/风格基调，AI 所有决策（聊天回复/电话/动态/主动消息…）
+              的人设里独立注入【表达风格】段——与「人设」里混写的性格描述互补，单独维护 */}
+          <BoxField label="表达风格">
+            <textarea
+              value={form.expressStyle}
+              onChange={(e) => set('expressStyle')(e.target.value)}
+              placeholder="说话的表达方式，如：傲娇毒舌、轻声细语、爱用叠词、句尾带「嘛」「呀」…"
+              aria-label="表达风格"
+              rows={3}
+              className={`${boxAreaCls} min-h-[76px]`}
             />
           </BoxField>
         </div>
@@ -1625,8 +1656,10 @@ function DetailView({
     }
     const persona = pick(contact.persona);
     const background = pick(contact.background);
+    const expressStyle = pick(contact.expressStyle);
     if (persona) lines.push('人设：', persona);
     if (background) lines.push('背景：', background);
+    if (expressStyle) lines.push('表达风格：', expressStyle);
     const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1770,7 +1803,7 @@ function DetailView({
             )}
         </CardGroup>
 
-        {(contact.persona || contact.background) && (
+        {(contact.persona || contact.background || contact.expressStyle) && (
           <>
             <div className="pb-3 pt-3" />
             <CardGroup
@@ -1779,6 +1812,7 @@ function DetailView({
             >
               {contact.persona && <DetailRow label="人设" value={contact.persona} block />}
               {contact.background && <DetailRow label="背景" value={contact.background} block />}
+              {contact.expressStyle && <DetailRow label="表达风格" value={contact.expressStyle} block />}
             </CardGroup>
           </>
         )}

@@ -255,6 +255,8 @@ export interface InlineContact {
   region: string | null;
   persona: string | null;
   background: string | null;
+  /** 表达风格（说话方式/风格基调；注入人设【表达风格】段，与 PersonaSource 同名同义） */
+  expressStyle: string | null;
   relation: string | null;
   /** 仅 NPC：对机主（USER）的关系 */
   relationToUser: string | null;
@@ -290,6 +292,7 @@ export function parseInlineContact(raw: unknown): InlineContact | null {
     region: typeof c.region === 'string' ? c.region : null,
     persona: typeof c.persona === 'string' ? c.persona : null,
     background: typeof c.background === 'string' ? c.background : null,
+    expressStyle: typeof c.expressStyle === 'string' ? c.expressStyle : null,
     relation: typeof c.relation === 'string' ? c.relation : null,
     relationToUser: typeof c.relationToUser === 'string' ? c.relationToUser : null,
     relationByAcc: parseRelationByAcc(c.relationByAcc),
