@@ -63,6 +63,10 @@ export interface ForumPost {
   /** 回复链：回复某帖时同时是一条帖（X 语义：回复即发帖） */
   replyTo: string | null;
   replyToName: string | null;
+  /** 精确被回复对象的帖子 id（多轮对话定位用）。
+   *  replyTo 是分组锚点（顶层评论/主帖 id，决定显示在哪一层）；
+   *  replyToPost 记录实际回复的那条（子回复/主帖），AI 据此接话（无限多轮）。 */
+  replyToPost?: string;
   /** 帖子附图（dataURL 或 http URL，最多 4 张；发布界面相册/GIF 上传） */
   media?: string[];
   /** 投票（发布界面发起） */

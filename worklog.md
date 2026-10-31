@@ -1775,3 +1775,30 @@ Work Log:
 Stage Summary:
 - 个人主页：顶栏=返回+名字/帖子数+页内搜索；横幅纯净无按钮；@handle 全链路可自定义（含输入清洗）；搜索按钮语义=过滤下方四 tab 内容；转推 tab 展示真实转推
 - 全站帖子操作行 1:1 参考图：回复/转推/点赞/书签/分享均分铺满、灰色线条、hover 浅色圆底同步变色、分享=三节点网络图标；详情页互动栏同步
+
+---
+
+Task ID: 22
+Agent: 主控 Agent（Z.ai Code）
+Task: X论坛 AI 生成体系九项升级（爱心归位 / API+识图模型连接 / 无限下滑生成 / 评论批量 / 多轮对话）
+
+Work Log:
+- [爱心归位] thread-view.tsx 互动栏顺序改回 X 官方：回复/转推/点赞(第三位)/书签/分享（此前爱心被移到最右，用户要求移回原位）
+- [API模型连接] engine.callApi 已带 useSettings.apiConfig → /api/forum/generate → completeWithFallback（用户 API 优先、内置 SDK 兜底）；posts 批量上限 12→24
+- [识图模型连接] engine 新增 describePostMedia()：帖子带 data:image/ 配图时先用 visionConfig（设置›识图模型）转文字描述，再喂给 LLM——评论生成/AI 回复都能「看到」图；未配置→内置识图兜底→失败静默跳过
+- [无限下滑生成] engine.generateMoreFeedPosts()：滑到底触发，一次 7~20 条（LLM 批量），时间戳排在最老主帖之前（新帖在下方、旧帖永不消失）；三轮实测 16→32→39→57
+- [帖子兜底] NPC 池全局去重 + comboPostText 组合式生成（20话题×8开头×10正文×10结尾≈近无限）——LLM 失败也能永远生成
+- [评论批量] engine.ensureThreadComments（打开帖子评论<10 自动补到 10~30）/ generateMoreComments（「显示更多评论」按钮再生成 10~30）；批量子回复（约1/3 评论各 1 条楼中楼，楼主偶尔回评）；实测 29+9=38、更多→51、新帖 17+5=22
+- [评论兜底修复] 原全局去重导致跨帖池子耗尽（第 2 个帖子无评论）；改为帖内去重 + 新增 40 条通用评论池，任何帖子都能补满
+- [多轮对话] queueAiReplyToUserReply(targetPostId, userReplyId, rootId, mainPostId)：ForumPost 新增 replyToPost 字段（replyTo=分组锚点，replyToPost=精确被回复对象）；用户回复谁、谁的作者 AI 就接话；LLM 上下文=主帖内容+被回复评论+用户评论+最近6轮对话链（kind=reply 扩展 postContent/history/mediaDesc）；实测两轮来回均回复（我→小舟→我→小舟→我→小舟）
+- [API路由] 新增 kind 'comments'（批量评论）/'subreplies'（楼中楼）；reply 增加上下文；batchWithRetry 通用重试
+- [UI] thread-view：打开帖子「评论正在赶来…」骨架提示；底部「显示更多评论」蓝字胶囊按钮（loading 转圈态）；forum.tsx：主页滑到底 onScroll 触发（距底 140px）+ FeedList footer（生成中转圈「正在为你生成更多帖子…」/ 平时「上滑加载更多帖子 · X论坛」）
+- [附带] appstore.tsx 补齐 forum TAGLINES/CATEGORY 条目（历史遗留 tsc 错误）
+- [E2E] agent-browser：解锁→X论坛→feed 16帖→滑到底 32帖（首末帖保留）→二轮 39帖；开帖自动补评论 38 条（29顶层+9楼中楼）→更多评论→51；定向回复评论→AI 接话→再回复→再接话（两轮）；回复主帖→顶层评论；侧边栏无「关于X论坛v1.0」段；@qvq12345678 默认账号；互动栏爱心第三位（aria 顺序验证）；无浏览器错误；tsc/eslint 全过（forum 相关 0 错）
+- [已知] 沙箱内置 SDK 间歇 429 限流（moments 同样受影响）→ 论坛自动落池子兜底，功能不受阻；用户配置 API 模型后走用户模型
+
+Stage Summary:
+- 帖子页：爱心归位第三位（X 官方顺序）
+- 生成体系：设置›API 模型（帖子/评论/回复全链路）+ 识图模型（带图帖 AI 可见）已接入；LLM 三级兜底（用户API→SDK→组合池），任何情况下内容无限
+- 主页：滑到最后一个帖子再滑 → 生成 7~20 条追加下方，旧帖永不消失，无限轮
+- 评论区：打开自动补到 10~30 条（含楼中楼）；「显示更多评论」再 +10~30；回复评论 AI 带全上下文接话，无限多轮（我再回复他、他还能再回我）

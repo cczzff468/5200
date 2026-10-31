@@ -363,8 +363,8 @@ export const PostCard = memo(function PostCard({ post, onOpen }: { post: ForumPo
   );
 });
 
-/** 时间线列表（已过滤排序好的 posts）+ 到底提示 */
-export function FeedList({ posts }: { posts: ForumPost[] }) {
+/** 时间线列表（已过滤排序好的 posts）+ 底部提示（可由主页传入无限生成 loading footer） */
+export function FeedList({ posts, footer }: { posts: ForumPost[]; footer?: React.ReactNode }) {
   const t = useXTheme();
   const f = useForum();
   return (
@@ -372,9 +372,11 @@ export function FeedList({ posts }: { posts: ForumPost[] }) {
       {posts.map((p) => (
         <PostCard key={p.id} post={p} onOpen={() => f.openThread(p.id)} />
       ))}
-      <p className="py-6 text-center text-[13px]" style={{ color: t.secondary }}>
-        {posts.length ? '已经到底啦 · X论坛' : ''}
-      </p>
+      {footer ?? (
+        <p className="py-6 text-center text-[13px]" style={{ color: t.secondary }}>
+          {posts.length ? '已经到底啦 · X论坛' : ''}
+        </p>
+      )}
     </div>
   );
 }

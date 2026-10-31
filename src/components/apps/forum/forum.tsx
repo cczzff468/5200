@@ -16,7 +16,7 @@
  * - 顶部 pt-[54px] 让出状态栏；底栏 pb-[16px] 让出 Home 横杠（与微信等 App 同口径）。
  */
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Check, Flag, Sparkles, EyeOff } from 'lucide-react';
 import {
   COMMUNITY_DEFS,
@@ -37,7 +37,7 @@ import {
   type ForumPost,
   POST_MAX,
 } from '@/lib/forum/core';
-import { bootForum, queueUserPostInteractions } from '@/lib/forum/engine';
+import { bootForum, generateMoreFeedPosts, queueUserPostInteractions } from '@/lib/forum/engine';
 import { XAvatar, XIcons, XLogo, useXTheme } from './shared';
 import { FeedList, FeedSkeleton, CommunityIcon } from './feed';
 import { ComposeSheet, type ComposePayload } from './compose-sheet';
@@ -70,6 +70,10 @@ export default function ForumApp() {
   const [tagPicker, setTagPicker] = useState(false);
   const [homeTab, setHomeTab] = useState<string>('foryou');
   const [toastMsg, setToastMsg] = useState<{ id: number; text: string } | null>(null);
+  /** 主页无限生成：滑到底再滑 → 生成 7~20 条新帖（loading 期间不重复触发） */
+  const [moreLoading, setMoreLoading] = useState(false);
+  const homeScrollRef = useRef<HTMLDivElement | null>(null);
+  const moreLoadingRef = useRef(false);
   /** 帖子「···」底部菜单：当前操作的帖子（null = 关闭） */
   const [menuPost, setMenuPost] = useState<ForumPost | null>(null);
   /** 定时发布到期重绘 tick（30s；到点的帖子自动出现在列表顶部） */
@@ -95,6 +99,26 @@ export default function ForumApp() {
   const toast = useCallback((text: string) => {
     setToastMsg({ id: Date.now(), text });
   }, []);
+
+  /** 主页滑到底（最后一个帖子附近）再滑一下 → 无限生成一批帖子（7~20 条）。
+ *  生成中不重复触发；新帖时间戳更早、追加在列表下方，已生成的帖子永不消失。 */
+  const tryGenerateMore = useCallback(() => {
+    if (moreLoadingRef.current) return;
+    const el = homeScrollRef.current;
+    if (!el) return;
+    // 距底 140px 内即触发（滑到最后一个帖子再往下滑必然命中）
+    if (el.scrollTop + el.clientHeight < el.scrollHeight - 140) return;
+    moreLoadingRef.current = true;
+    setMoreLoading(true);
+    void generateMoreFeedPosts()
+      .then((n) => {
+        if (n > 0) toast(`已为你生成 ${n} 条新帖子`);
+      })
+      .finally(() => {
+        moreLoadingRef.current = false;
+        setMoreLoading(false);
+      });
+  }, [toast]);
 
   // toast 自动消隐（1.9s）
   useEffect(() => {
@@ -270,8 +294,13 @@ export default function ForumApp() {
           {/* 主 tab 层（推入页覆盖其上；保持挂载，返回不丢滚动位置） */}
           <div className={views.length ? 'invisible absolute inset-0' : 'absolute inset-0'}>
             {tab === 'home' && (
-              /* 主页整页滚动：顶栏+tab 行+信息流一起滚（用户要求：滑动时顶部跟随滑动） */
-              <div className="forum-hide-scrollbar h-full overflow-y-auto overscroll-contain">
+              /* 主页整页滚动：顶栏+tab 行+信息流一起滚（用户要求：滑动时顶部跟随滑动）；
+                 滑到底再滑 → 无限生成 7~20 条新帖（onScroll 触发，旧帖永不消失） */
+              <div
+                ref={homeScrollRef}
+                onScroll={tryGenerateMore}
+                className="forum-hide-scrollbar h-full overflow-y-auto overscroll-contain"
+              >
                 {/* 顶栏（X：头像 | 𝕏 | 订阅）+ tab 行（为你推荐|关注 + +），随内容滚走，不吸附 */}
                 <div style={{ background: t.bg }}>
                   {/* 主顶栏：头像 / 𝕏 / 订阅胶囊 */}
@@ -325,7 +354,34 @@ export default function ForumApp() {
                     </button>
                   </div>
                 </div>
-                {authorsReady && seeded ? <FeedList posts={feedPosts} /> : <FeedSkeleton rows={7} />}
+                {authorsReady && seeded ? (
+                  <FeedList
+                    posts={feedPosts}
+                    footer={
+                      /* 无限生成 footer：生成中转圈，平时提示上滑加载（滑到底自动触发） */
+                      <div className="flex items-center justify-center gap-2 py-6" aria-live="polite">
+                        {moreLoading ? (
+                          <>
+                            <span
+                              className="h-[16px] w-[16px] animate-spin rounded-full border-2"
+                              style={{ borderColor: t.blue, borderTopColor: 'transparent' }}
+                              aria-hidden="true"
+                            />
+                            <span className="text-[13px]" style={{ color: t.secondary }}>
+                              正在为你生成更多帖子…
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-[13px]" style={{ color: t.secondary }}>
+                            上滑加载更多帖子 · X论坛
+                          </span>
+                        )}
+                      </div>
+                    }
+                  />
+                ) : (
+                  <FeedSkeleton rows={7} />
+                )}
               </div>
             )}
             {tab === 'search' && <SearchView />}

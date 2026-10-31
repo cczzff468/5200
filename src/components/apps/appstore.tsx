@@ -70,6 +70,7 @@ const TAGLINES: Record<AppId, string> = {
   taobao: '淘好货，要淘宝',
   couple: '恋人空间，两个人的小天地',
   cottage: '拾光小屋，把日常装进小家',
+  forum: 'X论坛，大家都在聊什么',
 };
 
 /** 分类（排行榜副标题 & 搜索关键字） */
@@ -100,6 +101,7 @@ const CATEGORY: Record<AppId, string> = {
   taobao: '购物',
   couple: '社交',
   cottage: '生活',
+  forum: '社交',
 };
 
 /** App 标签页分组 */

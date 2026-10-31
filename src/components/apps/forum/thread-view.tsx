@@ -6,15 +6,18 @@
  * 官方元数据行「H:mm · 年月日 · N 次浏览」+ 蓝色「翻译」按钮
  * （X 官方行为：译文原位替换正文展示，下方标注「由 AI 翻译」，
  * 按钮可在 查看原文/查看译文 间切换）；
- * 互动栏（回复/转推/书签/分享/点赞，爱心置最右，带数字）+ 分隔线下接评论流；
+ * 互动栏（回复/转推/点赞/书签/分享，爱心归位第三，带数字）+ 分隔线下接评论流；
+ * 打开帖子自动补评论到 10~30 条（engine.ensureThreadComments，静默浮现）；
+ * 底部「显示更多评论」按钮 → 再生成 10~30 条；
  * 评论流按参考图：头像 + 名字(bold) + @账号 · 时间(灰) + 右侧「···」，
  * 子回复带「回复 @xx」蓝字行，操作行为六个空心线性图标
  * （回复/转推/爱心/浏览/书签/分享，图标+数字）；头像右缘细竖线贯穿到子回复；
  * 底部回复输入条（头像 + input + 蓝色发送圆钮），
- * 点击评论/子回复即定向回复（显示「回复 @xx」提示条，可取消）。
+ * 点击评论/子回复即定向回复（显示「回复 @xx」提示条，可取消）；
+ * 用户回复 AI 评论 → AI 感觉主帖内容+用户评论内容再回一条，无限多轮（engine）。
  */
 
-import { useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Languages } from 'lucide-react';
 import {
   communityName,
@@ -30,7 +33,7 @@ import {
   REPLY_MAX,
   type ForumPost,
 } from '@/lib/forum/core';
-import { queueAiReplyToUserReply } from '@/lib/forum/engine';
+import { ensureThreadComments, generateMoreComments, queueAiReplyToUserReply } from '@/lib/forum/engine';
 import { detectMessageLang, requestTranslation } from '@/lib/chat-translate';
 import { useSettings } from '@/lib/ios/store';
 import { XAvatar, XIcons, VerifiedBadge } from './shared';
@@ -232,13 +235,14 @@ function CommentNameRow({
  *  名行（名字bold + @账号·时间灰 + 右侧···）+ 正文 + 六图标操作行；
  *  子回复嵌套在正文列下方：头像 36px、「回复 @xx」蓝字行，
  *  样式与顶层一致（用户要求子回复也显示头像名字爱心）。
- *  点评论/子回复 → 定向回复（onReply 传顶层评论 id + 被回复者名字）。 */
+ *  点评论/子回复 → 定向回复（onReply 传 rootId=顶层评论 id + postId=精确被回复帖 + 名字，
+ *  支持无限多轮：用户回复谁、谁的作者 AI 就接话）。 */
 function CommentRow({
   comment,
   onReply,
 }: {
   comment: ForumPost;
-  onReply: (commentId: string, name: string) => void;
+  onReply: (rootId: string, postId: string, name: string) => void;
 }) {
   const f = useForum();
   const t = f.t;
@@ -253,7 +257,7 @@ function CommentRow({
       style={{ borderColor: t.border }}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest('button')) return;
-        onReply(comment.id, a.name); // X 行为：点评论即定向回复
+        onReply(comment.id, comment.id, a.name); // X 行为：点评论即定向回复
       }}
     >
       <div className="flex gap-2.5">
@@ -280,7 +284,7 @@ function CommentRow({
           <CommentActions
             post={comment}
             subCount={subReplies.length}
-            onReplyClick={() => onReply(comment.id, a.name)}
+            onReplyClick={() => onReply(comment.id, comment.id, a.name)}
           />
           {/* 子回复：头像+名行+「回复 @xx」蓝字+正文+小操作行（与顶层一致的完整样式） */}
           {subReplies.length > 0 && (
@@ -297,10 +301,10 @@ function CommentRow({
                     aria-label={`回复 ${sa.name} 的评论`}
                     onClick={(e) => {
                       if ((e.target as HTMLElement).closest('button')) return;
-                      onReply(comment.id, sa.name); // 点子回复 → 回复该作者（仍挂顶层评论下）
+                      onReply(comment.id, s.id, sa.name); // 点子回复 → 回复该作者（仍挂顶层评论下，多轮接话定位到 TA）
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') onReply(comment.id, sa.name);
+                      if (e.key === 'Enter' || e.key === ' ') onReply(comment.id, s.id, sa.name);
                     }}
                     className="cursor-pointer rounded-lg py-2 transition-colors active:opacity-60"
                   >
@@ -332,7 +336,7 @@ function CommentRow({
                           post={s}
                           subCount={sSubs.length}
                           compact
-                          onReplyClick={() => onReply(comment.id, sa.name)}
+                          onReplyClick={() => onReply(comment.id, s.id, sa.name)}
                         />
                       </div>
                     </div>
@@ -359,8 +363,14 @@ export function ThreadView({ postId }: { postId: string }) {
   const totalReplies = replies.reduce((n, r) => n + 1 + repliesOf(d, r.id).length, 0);
   const [draft, setDraft] = useState('');
   const [bookmarked, setBookmarked] = useState(false);
-  /** 定向回复目标（null = 回复主帖作者）：commentId = 挂载的顶层评论 id */
-  const [replyTarget, setReplyTarget] = useState<{ commentId: string; name: string } | null>(null);
+  /** 定向回复目标（null = 回复主帖作者）：commentId = 分组锚点（顶层评论 id），
+ *  postId = 精确被回复的帖（多轮接话定位：AI 回应“我评论的那条”），name = 显示名 */
+  const [replyTarget, setReplyTarget] = useState<{ commentId: string; postId: string; name: string } | null>(null);
+  /** 「显示更多评论」生成中（engine 再生成 10~30 条） */
+  const [moreLoading, setMoreLoading] = useState(false);
+  /** 打开帖子自动补评论进行中（0 评论时显示「评论正在赶来」骨架提示；
+ *  挂载时即为 true，effect 完成后置 false——不在 effect 里同步 setState） */
+  const [initGen, setInitGen] = useState(true);
   /** AI 翻译：loading / 译文 / 是否展示 */
   const [tr, setTr] = useState<{ loading: boolean; text: string | null; shown: boolean }>({
     loading: false,
@@ -368,6 +378,18 @@ export function ThreadView({ postId }: { postId: string }) {
     shown: false,
   });
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  /** 打开帖子：评论不足 10 条 → 自动补到 10~30 条（生成好后自动浮现）；
+ *  每次进入只触发一次（engine 内部防并发）。 */
+  useEffect(() => {
+    let alive = true;
+    void ensureThreadComments(postId).finally(() => {
+      if (alive) setInitGen(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [postId]);
 
   if (!post) {
     return (
@@ -385,12 +407,13 @@ export function ThreadView({ postId }: { postId: string }) {
   const communityLabel = post.community && post.community !== 'hot' ? communityName(post.community) : '';
 
   /** 发送回复：挂主帖（无目标）或顶层评论（微信式嵌套）；
-   *  被回复对象作者是 AI 时，排一条 AI 嵌套再回复。 */
+   *  被回复对象作者是 AI 时，排一条 AI 再回复（带主帖+用户评论上下文，无限多轮）。 */
   const sendReply = () => {
     const text = draft.trim();
     if (!text) return;
     const nd = forumData();
-    const targetId = replyTarget?.commentId ?? post.id;
+    const groupId = replyTarget?.commentId ?? post.id;
+    const exactId = replyTarget?.postId ?? post.id;
     const targetName = replyTarget?.name ?? a.name;
     const reply: ForumPost = {
       id: uid('p'),
@@ -401,21 +424,22 @@ export function ThreadView({ postId }: { postId: string }) {
       likes: [],
       reposts: 0,
       views: 0,
-      replyTo: targetId,
+      replyTo: groupId,
       replyToName: targetName,
+      replyToPost: exactId,
       reposted: false,
     };
     nd.posts.push(reply);
     saveForum({ ...nd });
     setDraft('');
-    const targetPost = nd.posts.find((p) => p.id === targetId);
-    if (targetPost && targetPost.authorKey !== 'user') queueAiReplyToUserReply(targetId, reply.id);
+    const targetPost = nd.posts.find((p) => p.id === exactId);
+    if (targetPost && targetPost.authorKey !== 'user') queueAiReplyToUserReply(exactId, reply.id, groupId, post.id);
     setReplyTarget(null);
   };
 
-  /** 点击评论/子回复：定向回复并聚焦输入框 */
-  const startReply = (commentId: string, name: string) => {
-    setReplyTarget({ commentId, name });
+  /** 点击评论/子回复：定向回复并聚焦输入框（rootId 分组 + postId 精确定位） */
+  const startReply = (rootId: string, postId: string, name: string) => {
+    setReplyTarget({ commentId: rootId, postId, name });
     inputRef.current?.focus();
   };
 
@@ -572,7 +596,7 @@ export function ThreadView({ postId }: { postId: string }) {
               {tr.loading ? '翻译中…' : tr.text ? (tr.shown ? '查看原文' : '查看译文') : '翻译'}
             </button>
           </p>
-          {/* 互动栏（X 官方：回复/转推/书签/分享/点赞，爱心置最右在评论区上方，带数字） */}
+          {/* 互动栏（X 官方顺序：回复/转推/点赞/书签/分享，爱心归位第三，在评论区上方，带数字） */}
           <div className="mt-1 flex items-center justify-between border-b py-3" style={{ borderColor: t.border }}>
             <ThreadAction
               icon={XIcons.reply(21)}
@@ -591,6 +615,16 @@ export function ThreadView({ postId }: { postId: string }) {
               hoverColor={t.green}
               hoverBg="rgba(0,186,124,0.12)"
               onClick={() => f.repostToggle(post.id)}
+            />
+            {/* 爱心归位：第三位（用户要求移回原位，与帖子卡操作行一致） */}
+            <ThreadAction
+              icon={XIcons.like(liked, 21)}
+              count={post.likes.length}
+              label={liked ? '取消点赞' : '点赞'}
+              color={liked ? t.pink : t.secondary}
+              hoverColor={t.pink}
+              hoverBg="rgba(249,24,128,0.12)"
+              onClick={() => f.likeToggle(post.id)}
             />
             <ThreadAction
               icon={XIcons.bookmark(bookmarked, 21)}
@@ -618,24 +652,27 @@ export function ThreadView({ postId }: { postId: string }) {
                 f.toast('链接已复制');
               }}
             />
-            {/* 爱心移到最右面（用户要求，位于评论区上方互动栏最右端） */}
-            <ThreadAction
-              icon={XIcons.like(liked, 21)}
-              count={post.likes.length}
-              label={liked ? '取消点赞' : '点赞'}
-              color={liked ? t.pink : t.secondary}
-              hoverColor={t.pink}
-              hoverBg="rgba(249,24,128,0.12)"
-              onClick={() => f.likeToggle(post.id)}
-            />
           </div>
         </div>
 
         {/* 评论流（参考图规格：X 官方回复卡 + 嵌套连接线） */}
         {replies.length === 0 ? (
-          <p className="py-10 text-center text-[14px]" style={{ color: t.secondary }}>
-            还没有回复，来抢沙发
-          </p>
+          initGen || moreLoading ? (
+            <div className="flex items-center justify-center gap-2 py-10" aria-live="polite">
+              <span
+                className="h-[16px] w-[16px] animate-spin rounded-full border-2"
+                style={{ borderColor: t.blue, borderTopColor: 'transparent' }}
+                aria-hidden="true"
+              />
+              <span className="text-[14px]" style={{ color: t.secondary }}>
+                评论正在赶来…
+              </span>
+            </div>
+          ) : (
+            <p className="py-10 text-center text-[14px]" style={{ color: t.secondary }}>
+              还没有回复，来抢沙发
+            </p>
+          )
         ) : (
           <div className="border-t" style={{ borderColor: t.border }}>
             {replies.map((r) => (
@@ -643,9 +680,38 @@ export function ThreadView({ postId }: { postId: string }) {
             ))}
           </div>
         )}
-        <p className="py-6 text-center text-[13px]" style={{ color: t.secondary }}>
-          已经到底啦
-        </p>
+        {/* 「显示更多评论」按钮：点击再生成 10~30 条（含楼中楼）；生成中显示 loading */}
+        <div className="px-4 py-4">
+          <button
+            type="button"
+            disabled={moreLoading}
+            onClick={() => {
+              setMoreLoading(true);
+              void generateMoreComments(post.id)
+                .then((n) => {
+                  if (n > 0) f.toast(`已生成 ${n} 条新评论`);
+                  else f.toast('暂时没有更多评论，稍后再试');
+                })
+                .finally(() => setMoreLoading(false));
+            }}
+            className="flex h-[44px] w-full items-center justify-center gap-2 rounded-full border text-[15px] font-bold transition-opacity active:opacity-60 disabled:opacity-60"
+            style={{ borderColor: t.dark ? '#536471' : '#cfd9de', color: t.blue }}
+            aria-label="显示更多评论"
+          >
+            {moreLoading ? (
+              <>
+                <span
+                  className="h-[16px] w-[16px] animate-spin rounded-full border-2"
+                  style={{ borderColor: t.blue, borderTopColor: 'transparent' }}
+                  aria-hidden="true"
+                />
+                正在生成更多评论…
+              </>
+            ) : (
+              '显示更多评论'
+            )}
+          </button>
+        </div>
       </div>
 
       {/* 底部回复输入条（X：头像 + 输入 + 蓝发送钮；微信式定向回复提示条） */}
